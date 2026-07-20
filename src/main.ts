@@ -1,7 +1,7 @@
 import "./styles.css";
 import { gunzipSync } from "fflate";
 import { analyzeDangerousIntersections } from "./analysis";
-import { readParsedDataCache, writeParsedDataCache } from "./cache";
+import { readAnalysisCache, readParsedDataCache, writeAnalysisCache, writeParsedDataCache } from "./cache";
 import { MapCanvas } from "./mapCanvas";
 import { parseAccidentCsvFiles } from "./parsers/csv";
 import { parseTrafficWorkbook } from "./parsers/traffic";
@@ -40,10 +40,13 @@ declare global {
   var __SICHERE_KNOTEN_DATA__: { version?: string; files: EmbeddedDataFile[] } | undefined;
 }
 
+declare const __SICHERE_KNOTEN_APP_VERSION__: string | undefined;
+
 type ClusterSortKey = "rank" | "state" | "location" | "accidents" | "fatal" | "serious" | "severity" | "dtv" | "risk" | "trafficDistance";
 type SortDirection = "asc" | "desc";
 type LoadingStepKey = "cache" | "parse" | "traffic" | "rank";
 const LOADING_STEP_ORDER: LoadingStepKey[] = ["cache", "parse", "traffic", "rank"];
+const APP_CACHE_VERSION = typeof __SICHERE_KNOTEN_APP_VERSION__ === "string" ? __SICHERE_KNOTEN_APP_VERSION__ : "dev";
 
 interface ClusterTableSort {
   key: ClusterSortKey;
@@ -56,12 +59,18 @@ interface TrendSeriesPoint extends ClusterYearStat {
   trafficY: number | null;
 }
 
+interface AnalysisCacheContext {
+  dataVersion: string;
+  appVersion: string;
+}
+
 let accidents: AccidentRecord[] = [];
 let traffic: TrafficPoint[] = [];
 let result: AnalysisResult | null = null;
 let selectedCluster: IntersectionCluster | null = null;
 let clusterTableSort: ClusterTableSort = { key: "rank", direction: "asc" };
 let analysisSettingsDirty = false;
+let activeDataVersion: string | null = null;
 
 const elements = {
   loadBundledBtn: byId<HTMLButtonElement>("loadBundledBtn"),
@@ -205,10 +214,12 @@ async function loadBundledData(): Promise<void> {
     result = null;
     selectedCluster = null;
     analysisSettingsDirty = false;
+    activeDataVersion = null;
     updateAnalyzeButton();
     populateFilters();
     renderAll();
     const dataVersion = bundledDataVersion();
+    activeDataVersion = dataVersion;
     setStatus("Checking parsed data cache.", 4);
     const cached = await readParsedDataCache(dataVersion, setStatus);
     if (cached) {
@@ -270,6 +281,7 @@ async function loadAccidentCsv(files: File[], replace: boolean, manageBusy = tru
     accidents = replace ? parsed : accidents.concat(parsed);
     populateFilters();
     setStatus(`${accidents.length.toLocaleString()} accident records loaded.`, 100);
+    activeDataVersion = null;
   } catch (error) {
     setStatus(errorMessage(error), 0);
   } finally {
@@ -287,6 +299,7 @@ async function loadTraffic(file: File, manageBusy = true): Promise<void> {
   try {
     traffic = await parseTrafficWorkbook(file, (progress) => setStatus(progress.message ?? `Parsing ${progress.label}`, 55));
     setStatus(`${traffic.length.toLocaleString()} traffic count points loaded.`, 100);
+    activeDataVersion = null;
   } catch (error) {
     setStatus(errorMessage(error), 0);
   } finally {
@@ -306,21 +319,48 @@ function runAnalysis(): void {
   normalizeLinkedNumberRange(elements.clusterRadius, elements.clusterRadiusOut);
   normalizeLinkedNumberRange(elements.matchRadius, elements.matchRadiusOut);
   const options = readOptions();
+  const cacheContext = activeDataVersion ? { dataVersion: activeDataVersion, appVersion: APP_CACHE_VERSION } : null;
   setBusy(true);
-  setStatus("Analyzing intersections.", 75);
-  window.setTimeout(() => {
-    try {
-      result = analyzeDangerousIntersections(accidents, traffic, options);
-      selectedCluster = result.clusters[0] ?? null;
-      analysisSettingsDirty = false;
-      renderAll();
-      setStatus(`${result.clusters.length.toLocaleString()} intersection clusters ranked.`, 100);
-    } catch (error) {
-      setStatus(errorMessage(error), 0);
-    } finally {
-      setBusy(false);
+  void runAnalysisWithCache(options, cacheContext);
+}
+
+async function runAnalysisWithCache(options: AnalysisOptions, cacheContext: AnalysisCacheContext | null): Promise<void> {
+  try {
+    if (cacheContext) {
+      setStatus("Checking analysis cache.", 75);
+      const cached = await readAnalysisCache(cacheContext.dataVersion, cacheContext.appVersion, options);
+      if (cached) {
+        result = cached;
+        selectedCluster = result.clusters[0] ?? null;
+        analysisSettingsDirty = false;
+        renderAll();
+        setStatus(`${result.clusters.length.toLocaleString()} intersection clusters loaded from cache.`, 100);
+        return;
+      }
     }
-  }, 0);
+
+    setStatus("Analyzing intersections.", 75);
+    await yieldToBrowser();
+    result = analyzeDangerousIntersections(accidents, traffic, options);
+    selectedCluster = result.clusters[0] ?? null;
+    analysisSettingsDirty = false;
+    renderAll();
+
+    if (cacheContext) {
+      try {
+        setStatus("Caching analysis result.", 96);
+        await writeAnalysisCache(cacheContext.dataVersion, cacheContext.appVersion, options, result);
+      } catch {
+        // The analysis result is already rendered; cache failures only affect later reload speed.
+      }
+    }
+
+    setStatus(`${result.clusters.length.toLocaleString()} intersection clusters ranked.`, 100);
+  } catch (error) {
+    setStatus(errorMessage(error), 0);
+  } finally {
+    setBusy(false);
+  }
 }
 
 function readOptions(): AnalysisOptions {
@@ -1077,6 +1117,10 @@ function escapeHtml(value: string): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function yieldToBrowser(): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, 0));
 }
 
 function byId<T extends HTMLElement>(id: string): T {

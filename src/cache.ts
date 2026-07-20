@@ -1,4 +1,4 @@
-import { AccidentRecord, TrafficPoint } from "./types";
+import { AccidentRecord, AnalysisOptions, AnalysisResult, TrafficPoint } from "./types";
 
 export interface ParsedDataCache {
   accidents: AccidentRecord[];
@@ -17,10 +17,20 @@ interface CacheMeta {
   createdAt: number;
 }
 
+interface AnalysisCacheRecord {
+  id: string;
+  dataVersion: string;
+  appVersion: string;
+  optionsKey: string;
+  result: AnalysisResult;
+  createdAt: number;
+}
+
 const DB_NAME = "sichere-knoten-cache";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const META_STORE = "meta";
 const CHUNK_STORE = "chunks";
+const ANALYSIS_STORE = "analysis";
 const META_KEY = "active";
 const ACCIDENT_CHUNK_SIZE = 25000;
 const TRAFFIC_CHUNK_SIZE = 5000;
@@ -83,6 +93,7 @@ export async function writeParsedDataCache(
   try {
     await clearStore(db, META_STORE);
     await clearStore(db, CHUNK_STORE);
+    await clearStore(db, ANALYSIS_STORE);
 
     const accidentChunks = Math.ceil(accidents.length / ACCIDENT_CHUNK_SIZE);
     const trafficChunks = Math.ceil(traffic.length / TRAFFIC_CHUNK_SIZE);
@@ -116,6 +127,58 @@ export async function writeParsedDataCache(
   }
 }
 
+export async function readAnalysisCache(
+  dataVersion: string,
+  appVersion: string,
+  options: AnalysisOptions
+): Promise<AnalysisResult | null> {
+  if (!("indexedDB" in window)) {
+    return null;
+  }
+
+  const optionsKey = analysisOptionsKey(options);
+  try {
+    const db = await openCacheDb();
+    const record = await getValue<AnalysisCacheRecord>(db, ANALYSIS_STORE, analysisCacheKey(dataVersion, appVersion, optionsKey));
+    db.close();
+
+    if (!record || record.dataVersion !== dataVersion || record.appVersion !== appVersion || record.optionsKey !== optionsKey) {
+      return null;
+    }
+    return record.result;
+  } catch {
+    return null;
+  }
+}
+
+export async function writeAnalysisCache(
+  dataVersion: string,
+  appVersion: string,
+  options: AnalysisOptions,
+  result: AnalysisResult
+): Promise<void> {
+  if (!("indexedDB" in window)) {
+    return;
+  }
+
+  const optionsKey = analysisOptionsKey(options);
+  const record: AnalysisCacheRecord = {
+    id: analysisCacheKey(dataVersion, appVersion, optionsKey),
+    dataVersion,
+    appVersion,
+    optionsKey,
+    result,
+    createdAt: Date.now()
+  };
+
+  const db = await openCacheDb();
+  try {
+    await putValue(db, ANALYSIS_STORE, record);
+  } finally {
+    db.close();
+  }
+}
+
 function openCacheDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
@@ -126,6 +189,9 @@ function openCacheDb(): Promise<IDBDatabase> {
       }
       if (!db.objectStoreNames.contains(CHUNK_STORE)) {
         db.createObjectStore(CHUNK_STORE, { keyPath: "id" });
+      }
+      if (!db.objectStoreNames.contains(ANALYSIS_STORE)) {
+        db.createObjectStore(ANALYSIS_STORE, { keyPath: "id" });
       }
     };
     request.onsuccess = () => resolve(request.result);
@@ -171,6 +237,22 @@ function clearStore(db: IDBDatabase, storeName: string): Promise<void> {
 
 function chunkKey(version: string, type: "accidents" | "traffic", index: number): string {
   return `${version}:${type}:${index}`;
+}
+
+function analysisCacheKey(dataVersion: string, appVersion: string, optionsKey: string): string {
+  return `${dataVersion}:${appVersion}:${optionsKey}`;
+}
+
+function analysisOptionsKey(options: AnalysisOptions): string {
+  const years = Array.from(options.years).sort((a, b) => a - b).join(",");
+  return [
+    `cluster=${options.clusterRadiusMeters}`,
+    `match=${options.matchRadiusMeters}`,
+    `min=${options.minAccidents}`,
+    `years=${years || "all"}`,
+    `state=${options.stateCode}`,
+    `score=${options.scoreMode}`
+  ].join("|");
 }
 
 function yieldToBrowser(): Promise<void> {

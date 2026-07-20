@@ -23,7 +23,7 @@ The app automatically loads the bundled CSV and XLSX files from `docs/data`. Raw
 
 For direct `file://` use, the build also writes compressed data scripts in `docs/assets/data-*.js`. Re-run `npm run build` after changing files in `docs/data`.
 
-After the first successful load, parsed records are cached in IndexedDB under the generated data version, so normal refreshes skip CSV/XLSX parsing. The cache invalidates automatically after `npm run build` changes the data version.
+After the first successful load, parsed records are cached in IndexedDB under the generated data version, so normal refreshes skip CSV/XLSX parsing. Ranked analysis results are also cached per data version, app build, and analysis settings, so reloads with the same controls skip the clustering stage. The cache invalidates automatically after `npm run build` changes the data version or app build fingerprint.
 
 ## Data Sources and License
 

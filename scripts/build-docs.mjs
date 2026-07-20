@@ -13,6 +13,7 @@ await mkdir(assetsDir, { recursive: true });
 await rm(assetsDir, { recursive: true, force: true });
 await mkdir(assetsDir, { recursive: true });
 const dataScriptTags = await writeDataBundle();
+const appVersion = await hashAppSources();
 
 await build({
   entryPoints: [path.join(root, "src/main.ts")],
@@ -22,7 +23,10 @@ await build({
   target: "es2022",
   minify: true,
   sourcemap: false,
-  legalComments: "none"
+  legalComments: "none",
+  define: {
+    __SICHERE_KNOTEN_APP_VERSION__: JSON.stringify(appVersion)
+  }
 });
 
 const sourceHtml = await readFile(path.join(root, "index.html"), "utf8");
@@ -82,6 +86,43 @@ async function hashFiles(files) {
     hash.update("\0");
   }
   return hash.digest("hex").slice(0, 16);
+}
+
+async function hashAppSources() {
+  const files = [
+    ...(await sourceFiles(path.join(root, "src"))),
+    path.join(root, "index.html"),
+    path.join(root, "package.json"),
+    path.join(root, "package-lock.json"),
+    path.join(root, "scripts/build-docs.mjs")
+  ].sort();
+  const hash = createHash("sha256");
+
+  for (const file of files) {
+    const bytes = await readFile(file);
+    hash.update(path.relative(root, file).replace(/\\/g, "/"));
+    hash.update("\0");
+    hash.update(bytes);
+    hash.update("\0");
+  }
+
+  return hash.digest("hex").slice(0, 16);
+}
+
+async function sourceFiles(dir) {
+  const entries = await readdir(dir, { withFileTypes: true });
+  const files = [];
+
+  for (const entry of entries) {
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...(await sourceFiles(fullPath)));
+    } else if (entry.isFile()) {
+      files.push(fullPath);
+    }
+  }
+
+  return files;
 }
 
 async function csvFiles() {

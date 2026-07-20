@@ -39,7 +39,7 @@ tsc --noEmit && node scripts/build-docs.mjs
 
 Each data script contains one source file from `docs/data`, compressed with gzip, encoded as base64, and split into 256 KB string chunks. Splitting the bundle one file per script keeps each generated file below GitHub's 100 MB single-file limit.
 
-The build script also computes a SHA-256 based data version from the raw CSV/XLSX file paths and bytes. `docs/assets/data-manifest.js` exposes that version as `globalThis.__SICHERE_KNOTEN_DATA__.version`.
+The build script also computes a SHA-256 based data version from the raw CSV/XLSX file paths and bytes. `docs/assets/data-manifest.js` exposes that version as `globalThis.__SICHERE_KNOTEN_DATA__.version`. It separately computes an app build fingerprint from the source files and injects it into `app.js` for analysis-cache invalidation.
 
 `docs/index.html` loads the data scripts before `app.js`, so direct `file://` usage works in Chrome and Firefox without `fetch()` access to local CSV/XLSX files.
 
@@ -58,14 +58,14 @@ If the embedded bundle is not present, the app falls back to `fetch()`/XHR from 
 
 CSV files are decompressed and parsed sequentially to reduce peak memory use.
 
-## Parsed Data Cache
+## Browser Caches
 
 Implemented in `src/cache.ts`.
 
 After the first successful parse, the app stores parsed `AccidentRecord[]` and `TrafficPoint[]` in IndexedDB:
 
 - database: `sichere-knoten-cache`
-- object stores: `meta` and `chunks`
+- object stores: `meta`, `chunks`, and `analysis`
 - active metadata key: `active`
 - accident chunk size: 25,000 records
 - traffic chunk size: 5,000 records
@@ -80,6 +80,19 @@ The cache metadata stores:
 - creation timestamp
 
 On startup, `loadBundledData()` checks IndexedDB before reading the compressed data scripts. If the cached version matches the current data manifest version, the app loads parsed records from IndexedDB and skips CSV/XLSX parsing. If the version does not match, or if the cache is unavailable/corrupt, the app parses the bundled raw data and writes a new cache.
+
+After analysis succeeds for bundled data, the app also stores the resulting `AnalysisResult` in the `analysis` object store. That cache key includes:
+
+- raw data version
+- app build fingerprint
+- cluster radius
+- traffic match radius
+- minimum accident count
+- selected years
+- selected Bundesland
+- score mode
+
+On later page loads with the same data, app build, and analysis settings, `runAnalysis()` restores that result and skips the expensive clustering/ranking stage. Changing any analysis control creates a different cache key. Changing source data or rebuilding app code invalidates the relevant cached analysis automatically.
 
 The cache is an optimization only. The app still works when IndexedDB is blocked, full, or cleared by the browser.
 
