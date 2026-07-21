@@ -307,6 +307,18 @@ select {
   min-width: 0;
 }
 
+.hotspot-heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: start;
+  min-width: 0;
+}
+
+.hotspot-heading .hotspot-stat {
+  justify-self: end;
+}
+
 .hotspot-title,
 .hotspot-context {
   overflow-wrap: anywhere;

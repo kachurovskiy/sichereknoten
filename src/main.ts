@@ -1,6 +1,6 @@
 import "./styles.css";
 import { gunzipSync } from "fflate";
-import { AnalysisExecutionPlan, analyzeDangerousIntersectionsInBackground } from "./analysisRunner";
+import { analyzeDangerousIntersectionsInBackground } from "./analysisRunner";
 import { readAnalysisCache, readParsedDataCache, writeAnalysisCache, writeParsedDataCache } from "./cache";
 import { GeoGridIndex } from "./geo";
 import { MapCanvas } from "./mapCanvas";
@@ -46,6 +46,7 @@ type LoadingStepKey = "cache" | "parse" | "analyze";
 type SeverityFilterKey = "fatal" | "serious" | "other";
 type ViewKey = "map" | "state" | "table" | "settings";
 type SelectionReason = "auto" | "program" | "user";
+type HotspotMetricPlacement = "header" | "stats";
 const LOADING_STEP_ORDER: LoadingStepKey[] = ["cache", "parse", "analyze"];
 const APP_CACHE_VERSION =
   typeof __SICHERE_KNOTEN_APP_VERSION__ === "string" ? __SICHERE_KNOTEN_APP_VERSION__ : "dev-parallel-analysis";
@@ -513,20 +514,8 @@ async function runAnalysisWithCache(options: AnalysisOptions, cacheContext: Anal
   }
 }
 
-function updateAnalysisPlanStatus(plan: AnalysisExecutionPlan): void {
-  if (!plan.background) {
-    setStatus(plan.fallback ? "Worker analysis unavailable; analyzing intersections on the main thread." : "Analyzing intersections.", 75);
-    return;
-  }
-  if (!plan.parallel) {
-    setStatus("Analyzing intersections in a background task.", 75);
-    return;
-  }
-
-  setStatus(
-    `Analyzing intersections with ${plan.workerCount.toLocaleString()} background workers across ${plan.partitionCount.toLocaleString()} state tasks.`,
-    75
-  );
+function updateAnalysisPlanStatus(): void {
+  setStatus("Analyzing intersections.", 75);
 }
 
 function readOptions(): AnalysisOptions {
@@ -899,7 +888,7 @@ function renderStateHotspotList(): void {
   }
 
   clusters.forEach((cluster) => {
-    elements.stateHotspotList.append(hotspotButton(cluster, cluster.stateName));
+    elements.stateHotspotList.append(hotspotButton(cluster, cluster.stateName, { metricPlacement: "header" }));
   });
 }
 
@@ -909,16 +898,25 @@ function topClusterByState(): IntersectionCluster[] {
     .sort((a, b) => a.stateName.localeCompare(b.stateName, "de", { sensitivity: "base" }));
 }
 
-function hotspotButton(cluster: IntersectionCluster, context: string): HTMLButtonElement {
+function hotspotButton(
+  cluster: IntersectionCluster,
+  context: string,
+  options: { metricPlacement?: HotspotMetricPlacement } = {}
+): HTMLButtonElement {
   const button = document.createElement("button");
   button.type = "button";
   button.className = "hotspot-button";
   button.classList.toggle("selected", selectedCluster?.id === cluster.id);
+  const metricPlacement = options.metricPlacement ?? "stats";
+  const metricStat = `<span class="hotspot-stat hotspot-stat-metric"><strong>${formatFatalPercent(cluster)}</strong> Harm</span>`;
   button.innerHTML = `
     <span class="hotspot-main">
-      <span class="hotspot-title">${escapeHtml(context)}</span>
+      <span class="hotspot-heading">
+        <span class="hotspot-title">${escapeHtml(context)}</span>
+        ${metricPlacement === "header" ? metricStat : ""}
+      </span>
       <span class="hotspot-stats">
-        <span class="hotspot-stat hotspot-stat-metric"><strong>${formatFatalPercent(cluster)}</strong> Fatal %</span>
+        ${metricPlacement === "stats" ? metricStat : ""}
         <span class="hotspot-stat hotspot-stat-total"><strong>${cluster.accidentCount.toLocaleString()}</strong> ${pluralNoun(cluster.accidentCount, "accident")}</span>
         <span class="hotspot-stat"><strong>${cluster.fatalCount.toLocaleString()}</strong> fatal</span>
         <span class="hotspot-stat"><strong>${cluster.seriousCount.toLocaleString()}</strong> serious</span>
@@ -1019,7 +1017,7 @@ function renderSelection(cluster: IntersectionCluster | null): void {
       <div><dt>Years</dt><dd>${cluster.years.join(", ")}</dd></div>
       <div><dt>Accidents</dt><dd>${cluster.accidentCount.toLocaleString()}</dd></div>
       <div><dt>Fatal / serious</dt><dd>${cluster.fatalCount} / ${cluster.seriousCount}</dd></div>
-      <div><dt>Fatal %</dt><dd>${formatFatalPercent(cluster)}</dd></div>
+      <div><dt>Harm %</dt><dd>${formatFatalPercent(cluster)}</dd></div>
       <div><dt>Vulnerable users</dt><dd>${cluster.vulnerableCount.toLocaleString()}</dd></div>
     </dl>
     ${trendPanel}
@@ -1745,7 +1743,7 @@ function formatFatalPercent(source: FatalPercentSource): string {
 }
 
 function fatalPercentValue(source: FatalPercentSource): number {
-  return round(source.fatalPercent * 100, 1);
+  return Math.round(source.fatalPercent * 100);
 }
 
 function formatDistance(valueMeters: number): string {

@@ -106,7 +106,7 @@
                   <th>Bundesland</th>
                   <th>Accidents</th>
                   <th>Clusters</th>
-                  <th>Fatal %</th>
+                  <th>Harm %</th>
                   <th>Top cluster</th>
                 </tr>
               </thead>
@@ -125,7 +125,7 @@
                   <th aria-sort="none"><button class="sort-button" type="button" data-cluster-sort="accidents"><span>Accidents</span><span class="sort-indicator" aria-hidden="true"></span></button></th>
                   <th aria-sort="none"><button class="sort-button" type="button" data-cluster-sort="fatal"><span>Fatal</span><span class="sort-indicator" aria-hidden="true"></span></button></th>
                   <th aria-sort="none"><button class="sort-button" type="button" data-cluster-sort="serious"><span>Serious</span><span class="sort-indicator" aria-hidden="true"></span></button></th>
-                  <th aria-sort="descending"><button class="sort-button" type="button" data-cluster-sort="fatalPercent"><span>Fatal %</span><span class="sort-indicator" aria-hidden="true"></span></button></th>
+                  <th aria-sort="descending"><button class="sort-button" type="button" data-cluster-sort="fatalPercent"><span>Harm %</span><span class="sort-indicator" aria-hidden="true"></span></button></th>
                 </tr>
               </thead>
               <tbody id="clusterTableBody"></tbody>
@@ -160,7 +160,7 @@
             </section>
 
             <section class="settings-section" data-settings-section="metric">
-              <h2>Fatal % metric</h2>
+              <h2>Harm % metric</h2>
 
               <label class="field-label" for="fatalWeight">Fatal accident weight</label>
               <input id="fatalWeight" class="number-input" type="number" min="0" max="3" step="0.05" value="1" autocomplete="off" />
@@ -211,12 +211,12 @@
             </section>
 
             <section class="settings-section settings-explainer-section" data-settings-section="about">
-              <h2>About Fatal %</h2>
+              <h2>About Harm %</h2>
               <div class="settings-explainer">
                 <div>
                   <h3>What it measures</h3>
                   <p class="source-note">
-                    Fatal % is a weighted share of severe outcomes at an inferred intersection. By default: <code>(fatal + serious / 2) / total</code>.
+                    Harm % is a weighted share of severe outcomes at an inferred intersection. By default: <code>(fatal + serious / 2) / total</code>.
                     Fatal accidents count once, serious-injury accidents count as half, and all accidents at the intersection form the denominator.
                   </p>
                   <p class="source-note">
