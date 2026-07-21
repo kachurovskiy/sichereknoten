@@ -166,12 +166,49 @@ select {
   color: #172126;
 }
 
-.button-row,
-.toolbar-actions {
+.button-row {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
+}
+
+.toolbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.toolbar-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: 42px;
+  padding: 4px 5px 4px 10px;
+  border: 1px solid #d4dad4;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.toolbar-group-label {
+  flex: 0 0 auto;
+  color: #53636d;
+  font-size: 0.72rem;
+  font-weight: 750;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.toolbar-group-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  align-items: center;
+  min-width: 0;
 }
 
 .primary-button,
@@ -418,6 +455,11 @@ select {
   min-height: 38px;
   padding: 0 8px;
   color: #38454b;
+}
+
+.toolbar-group .toggle-control {
+  min-height: 30px;
+  padding: 0 7px;
 }
 
 .view {
@@ -1164,6 +1206,14 @@ tbody tr:focus {
     flex-wrap: nowrap;
     overflow-x: auto;
     padding-bottom: 2px;
+  }
+
+  .toolbar-group {
+    flex: 0 0 auto;
+  }
+
+  .toolbar-group-controls {
+    flex-wrap: nowrap;
   }
 
   .tab-button {

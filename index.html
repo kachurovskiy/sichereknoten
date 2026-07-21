@@ -48,31 +48,37 @@
             <button id="tableTab" class="tab-button" role="tab" type="button" aria-selected="false">Intersections</button>
             <button id="settingsTab" class="tab-button" role="tab" type="button" aria-selected="false">Settings</button>
           </div>
-          <div class="toolbar-actions">
-            <label class="toggle-control">
-              <input id="showBasemap" type="checkbox" checked />
-              <span>OSM</span>
-            </label>
-            <label class="toggle-control">
-              <input id="showTraffic" type="checkbox" checked />
-              <span>Traffic</span>
-            </label>
-            <label class="toggle-control">
-              <input id="showFatalPoints" type="checkbox" checked />
-              <span>Fatal</span>
-            </label>
-            <label class="toggle-control">
-              <input id="showSeriousPoints" type="checkbox" checked />
-              <span>Serious</span>
-            </label>
-            <label class="toggle-control">
-              <input id="showOtherPoints" type="checkbox" />
-              <span>Other</span>
-            </label>
-            <button id="zoomInBtn" class="icon-button" type="button" title="Zoom in">+</button>
-            <button id="zoomOutBtn" class="icon-button" type="button" title="Zoom out">-</button>
-            <button id="resetMapBtn" class="icon-button" type="button" title="Reset map">Reset</button>
-            <button id="exportBtn" class="secondary-button" type="button">Export CSV</button>
+          <div class="toolbar-actions" aria-label="Map display controls">
+            <div class="toolbar-group" role="group" aria-labelledby="mapLayerControls">
+              <span id="mapLayerControls" class="toolbar-group-label">Map layers</span>
+              <div class="toolbar-group-controls">
+                <label class="toggle-control">
+                  <input id="showBasemap" type="checkbox" checked />
+                  <span>OSM</span>
+                </label>
+                <label class="toggle-control">
+                  <input id="showTraffic" type="checkbox" checked />
+                  <span>Traffic</span>
+                </label>
+              </div>
+            </div>
+            <div class="toolbar-group" role="group" aria-labelledby="severityControls">
+              <span id="severityControls" class="toolbar-group-label">Accident severity</span>
+              <div class="toolbar-group-controls">
+                <label class="toggle-control">
+                  <input id="showFatalPoints" type="checkbox" checked />
+                  <span>Fatal</span>
+                </label>
+                <label class="toggle-control">
+                  <input id="showSeriousPoints" type="checkbox" checked />
+                  <span>Serious</span>
+                </label>
+                <label class="toggle-control">
+                  <input id="showOtherPoints" type="checkbox" />
+                  <span>Other</span>
+                </label>
+              </div>
+            </div>
           </div>
         </section>
 
@@ -173,6 +179,14 @@
             <div class="button-row">
               <button id="loadBundledBtn" class="secondary-button" type="button">Reload data</button>
               <button id="clearBtn" class="secondary-button" type="button">Clear</button>
+            </div>
+          </section>
+
+          <section class="settings-section">
+            <h2>Actions</h2>
+            <div class="button-row">
+              <button id="resetMapBtn" class="secondary-button" type="button">Reset map</button>
+              <button id="exportBtn" class="secondary-button" type="button">Export CSV</button>
             </div>
           </section>
 

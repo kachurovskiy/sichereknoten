@@ -142,8 +142,6 @@ const elements = {
   showSeriousPoints: byId<HTMLInputElement>("showSeriousPoints"),
   showOtherPoints: byId<HTMLInputElement>("showOtherPoints"),
   locateMeBtn: byId<HTMLButtonElement>("locateMeBtn"),
-  zoomInBtn: byId<HTMLButtonElement>("zoomInBtn"),
-  zoomOutBtn: byId<HTMLButtonElement>("zoomOutBtn"),
   resetMapBtn: byId<HTMLButtonElement>("resetMapBtn"),
   exportBtn: byId<HTMLButtonElement>("exportBtn")
 };
@@ -186,8 +184,6 @@ function wireEvents(): void {
   elements.showBasemap.addEventListener("change", () => {
     applyBasemapSetting(true);
   });
-  elements.zoomInBtn.addEventListener("click", () => map.zoom(1.6));
-  elements.zoomOutBtn.addEventListener("click", () => map.zoom(0.625));
   elements.resetMapBtn.addEventListener("click", () => map.reset());
   elements.locateMeBtn.addEventListener("click", () => locateUser({ selectNearest: false }));
   elements.findNearbyBtn.addEventListener("click", () => locateUser({ selectNearest: true }));
