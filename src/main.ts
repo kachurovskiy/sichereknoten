@@ -111,6 +111,9 @@ const elements = {
   tableView: byId<HTMLElement>("tableView"),
   showTraffic: byId<HTMLInputElement>("showTraffic"),
   showBasemap: byId<HTMLInputElement>("showBasemap"),
+  showFatalPoints: byId<HTMLInputElement>("showFatalPoints"),
+  showSeriousPoints: byId<HTMLInputElement>("showSeriousPoints"),
+  showOtherPoints: byId<HTMLInputElement>("showOtherPoints"),
   locateMeBtn: byId<HTMLButtonElement>("locateMeBtn"),
   zoomInBtn: byId<HTMLButtonElement>("zoomInBtn"),
   zoomOutBtn: byId<HTMLButtonElement>("zoomOutBtn"),
@@ -153,6 +156,9 @@ function wireEvents(): void {
   });
 
   elements.showTraffic.addEventListener("change", () => map.setShowTraffic(elements.showTraffic.checked));
+  [elements.showFatalPoints, elements.showSeriousPoints, elements.showOtherPoints].forEach((input) => {
+    input.addEventListener("change", applySeverityFilter);
+  });
   elements.showBasemap.addEventListener("change", () => {
     applyBasemapSetting(true);
   });
@@ -427,6 +433,7 @@ function renderAll(): void {
   renderTables();
   applyBasemapSetting(false);
   map.setShowTraffic(elements.showTraffic.checked);
+  applySeverityFilter();
   if (result) {
     map.setData(result.clusters, traffic);
     elements.mapEmpty.hidden = result.clusters.length > 0;
@@ -434,6 +441,14 @@ function renderAll(): void {
     elements.mapEmpty.hidden = false;
     renderSelection(null);
   }
+}
+
+function applySeverityFilter(): void {
+  map.setSeverityFilters({
+    fatal: elements.showFatalPoints.checked,
+    serious: elements.showSeriousPoints.checked,
+    other: elements.showOtherPoints.checked
+  });
 }
 
 function locateUser(): void {

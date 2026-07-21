@@ -22,6 +22,14 @@ interface UserLocation {
   accuracyMeters: number | null;
 }
 
+interface SeverityFilters {
+  fatal: boolean;
+  serious: boolean;
+  other: boolean;
+}
+
+type ClusterSeverity = keyof SeverityFilters;
+
 type SelectionCallback = (cluster: IntersectionCluster | null) => void;
 
 const MIN_SCALE = 250;
@@ -55,6 +63,7 @@ export class MapCanvas {
   private maxDangerScore = 1;
   private showTraffic = true;
   private showBasemap = false;
+  private severityFilters: SeverityFilters = { fatal: true, serious: true, other: false };
   private tileCache = new Map<string, TileRecord>();
   private tileUseCounter = 0;
   private scale = 1;
@@ -88,7 +97,7 @@ export class MapCanvas {
       .map((cluster) => ({ cluster, projected: project(cluster.lon, cluster.lat) }))
       .sort((a, b) => drawPriority(a.cluster, this.maxDangerScore) - drawPriority(b.cluster, this.maxDangerScore));
     this.traffic = traffic;
-    this.selected = clusters[0] ?? null;
+    this.selected = this.firstVisibleCluster();
     this.fit();
     this.draw();
     this.onSelect(this.selected);
@@ -101,6 +110,15 @@ export class MapCanvas {
 
   setShowBasemap(showBasemap: boolean): void {
     this.showBasemap = showBasemap;
+    this.draw();
+  }
+
+  setSeverityFilters(filters: SeverityFilters): void {
+    this.severityFilters = filters;
+    if (!this.selected || !this.shouldShowCluster(this.selected)) {
+      this.selected = this.firstVisibleCluster();
+      this.onSelect(this.selected);
+    }
     this.draw();
   }
 
@@ -181,7 +199,10 @@ export class MapCanvas {
   }
 
   private fit(): void {
-    if (this.projectedClusters.length === 0 && this.traffic.length === 0) {
+    const visibleProjectedClusters = this.projectedClusters.filter((point) => this.shouldShowCluster(point.cluster)).map((point) => point.projected);
+    const projected = visibleProjectedClusters.length > 0 ? visibleProjectedClusters : this.traffic.map((point) => project(point.lon, point.lat));
+
+    if (projected.length === 0) {
       this.bounds = null;
       if (this.userLocation) {
         this.scale = 4_000_000;
@@ -194,8 +215,6 @@ export class MapCanvas {
       return;
     }
 
-    const projected =
-      this.projectedClusters.length > 0 ? this.projectedClusters.map((point) => point.projected) : this.traffic.map((point) => project(point.lon, point.lat));
     const minX = Math.min(...projected.map((point) => point.x));
     const maxX = Math.max(...projected.map((point) => point.x));
     const minY = Math.min(...projected.map((point) => point.y));
@@ -346,7 +365,7 @@ export class MapCanvas {
   }
 
   private drawSelectedCluster(zoomLevel: number): void {
-    if (this.selected) {
+    if (this.selected && this.shouldShowCluster(this.selected)) {
       const selected = this.screenPoint(this.selected);
       const ctx = this.context;
       ctx.fillStyle = "rgba(16, 36, 46, 0.18)";
@@ -383,6 +402,9 @@ export class MapCanvas {
     const candidates: Array<{ cluster: IntersectionCluster; distance: number }> = [];
 
     for (const cluster of this.projectedClusters) {
+      if (!this.shouldShowCluster(cluster.cluster)) {
+        continue;
+      }
       const point = this.screenFromProjected(cluster.projected);
       const distance = Math.hypot(point.x - screenX, point.y - screenY);
       if (distance <= hitRadius) {
@@ -474,6 +496,9 @@ export class MapCanvas {
     const visible: VisibleClusterPoint[] = [];
 
     for (const cluster of this.projectedClusters) {
+      if (!this.shouldShowCluster(cluster.cluster)) {
+        continue;
+      }
       const point = this.screenFromProjected(cluster.projected);
       if (this.isVisible(point)) {
         visible.push({ cluster: cluster.cluster, projected: cluster.projected, point });
@@ -481,6 +506,14 @@ export class MapCanvas {
     }
 
     return visible;
+  }
+
+  private firstVisibleCluster(): IntersectionCluster | null {
+    return this.clusters.find((cluster) => this.shouldShowCluster(cluster)) ?? null;
+  }
+
+  private shouldShowCluster(cluster: IntersectionCluster): boolean {
+    return this.severityFilters[clusterSeverity(cluster)];
   }
 
   private visualScale(visibleClusters: VisibleClusterPoint[], zoomLevel: number): VisualScale {
@@ -556,6 +589,16 @@ function severityColorIntensity(cluster: IntersectionCluster): number {
   const fatalIntensity = cluster.fatalCount > 0 ? 0.72 + 0.22 * (1 - Math.exp(-cluster.fatalCount / 2)) : 0;
 
   return clamp(Math.max(severityIntensity, seriousShareIntensity, fatalIntensity), 0, 1);
+}
+
+function clusterSeverity(cluster: IntersectionCluster): ClusterSeverity {
+  if (cluster.fatalCount > 0) {
+    return "fatal";
+  }
+  if (cluster.seriousCount > 0) {
+    return "serious";
+  }
+  return "other";
 }
 
 function colorForIntensity(intensity: number, alpha: number): string {
