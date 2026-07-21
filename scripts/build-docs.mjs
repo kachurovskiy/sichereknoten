@@ -1,7 +1,7 @@
 import { build } from "esbuild";
 import { createHash } from "node:crypto";
 import { gzipSync } from "node:zlib";
-import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 const root = process.cwd();
@@ -38,6 +38,7 @@ const docsHtml = sourceHtml
   );
 
 await writeFile(path.join(docsDir, "index.html"), docsHtml);
+await copyFile(path.join(root, "favicon.svg"), path.join(docsDir, "favicon.svg"));
 
 async function writeDataBundle() {
   const files = [
