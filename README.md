@@ -1,6 +1,6 @@
 # Sichere Knoten
 
-Static TypeScript UI for ranking dangerous intersections from German accident and Bundesstrassen traffic data.
+Visit https://kachurovskiy.com/sichereknoten/ to explore dangerous intersections - from German accident and Bundesstrassen traffic data.
 
 ## Use
 
