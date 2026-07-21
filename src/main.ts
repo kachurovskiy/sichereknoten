@@ -44,7 +44,7 @@ type ClusterSortKey = "state" | "location" | "accidents" | "fatal" | "serious" |
 type SortDirection = "asc" | "desc";
 type LoadingStepKey = "cache" | "parse" | "analyze";
 type SeverityFilterKey = "fatal" | "serious" | "other";
-type ViewKey = "map" | "state" | "table" | "about" | "settings";
+type ViewKey = "map" | "state" | "table" | "settings";
 type SelectionReason = "auto" | "program" | "user";
 const LOADING_STEP_ORDER: LoadingStepKey[] = ["cache", "parse", "analyze"];
 const APP_CACHE_VERSION =
@@ -170,12 +170,10 @@ const elements = {
   mapTab: byId<HTMLButtonElement>("mapTab"),
   stateTab: byId<HTMLButtonElement>("stateTab"),
   tableTab: byId<HTMLButtonElement>("tableTab"),
-  aboutTab: byId<HTMLButtonElement>("aboutTab"),
   settingsTab: byId<HTMLButtonElement>("settingsTab"),
   mapView: byId<HTMLElement>("mapView"),
   stateView: byId<HTMLElement>("stateView"),
   tableView: byId<HTMLElement>("tableView"),
-  aboutView: byId<HTMLElement>("aboutView"),
   settingsView: byId<HTMLElement>("settingsView"),
   showFatalPoints: byId<HTMLInputElement>("showFatalPoints"),
   showSeriousPoints: byId<HTMLInputElement>("showSeriousPoints"),
@@ -228,7 +226,6 @@ function wireEvents(): void {
   elements.mapTab.addEventListener("click", () => setView("map"));
   elements.stateTab.addEventListener("click", () => setView("state"));
   elements.tableTab.addEventListener("click", () => setView("table"));
-  elements.aboutTab.addEventListener("click", () => setView("about"));
   elements.settingsTab.addEventListener("click", () => setView("settings"));
 
   for (const button of clusterSortButtons()) {
@@ -1441,7 +1438,6 @@ function setView(view: ViewKey): void {
     { key: "map", tab: elements.mapTab, panel: elements.mapView },
     { key: "state", tab: elements.stateTab, panel: elements.stateView },
     { key: "table", tab: elements.tableTab, panel: elements.tableView },
-    { key: "about", tab: elements.aboutTab, panel: elements.aboutView },
     { key: "settings", tab: elements.settingsTab, panel: elements.settingsView }
   ] as const;
 
