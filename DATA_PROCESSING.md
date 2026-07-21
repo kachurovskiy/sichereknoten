@@ -188,7 +188,7 @@ If no traffic point is found, the cluster can still be ranked by absolute severi
 
 ## Map Rendering
 
-The static app does not download online map tiles, so it remains usable from `docs/index.html` and GitHub Pages without a map server.
+The static app does not require online map tiles, so it remains usable from `docs/index.html` and GitHub Pages without a map server. The `OSM` toggle is enabled by default and the map draws visible grayscale OpenStreetMap raster tiles from `https://tile.openstreetmap.org/{z}/{x}/{y}.png` behind the cluster points while showing OpenStreetMap attribution in the map corner. Direct `file://` use cannot send the browser `Referer` header required by the OSM tile usage policy, so tiles may be partial or blocked in that mode; use `npm run serve:docs` or GitHub Pages for complete tiles. Tiles are requested only for the current viewport and retained in a small in-memory browser cache; the app does not prefetch offline tile packs.
 
 Accident clusters are drawn as map-projected points. All visible clusters are rendered; the map renderer does not drop low-scoring clusters as a display optimization. Marker color emphasizes crash severity concentration: severity points per accident, serious-injury share, and especially fatal crashes. Marker size and transparency still use total harm/volume, with a continuously blended national-to-visible score scale as the user zooms. This keeps city-level hotspots readable without a hard visual-mode switch while separating severe clusters from merely large intersections. Higher-priority clusters are drawn later so stronger points remain visible when dots overlap. For responsiveness, projected cluster coordinates are cached and pan/zoom redraws are throttled to animation frames.
 

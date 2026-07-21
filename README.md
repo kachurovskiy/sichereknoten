@@ -7,19 +7,22 @@ Static TypeScript UI for ranking dangerous intersections from German accident an
 ```powershell
 npm install
 npm run build
+npm run serve:docs
 ```
 
-Open `docs/index.html` from the build output, or publish the `docs/` folder with GitHub Pages. No Vite server is needed for the built app.
+Open `docs/index.html` from the build output, serve the built app locally with `npm run serve:docs`, or publish the `docs/` folder with GitHub Pages. No Vite server is needed for the built app unless you use the OpenStreetMap basemap locally.
 
 The app supports:
 
 - accident CSV files from `docs/data/csv`
 - `docs/data/Bundesstrassen-2021.xlsx`
-- map view with local canvas rendering
+- map view with local canvas rendering and an optional OpenStreetMap basemap
 - Bundesland summaries and top intersection tables
 - CSV export of ranked clusters
 
 The app automatically loads the bundled CSV and XLSX files from `docs/data`. Raw SHP/DBF Unfallatlas downloads are not required in the repository because the bundled CSV files already contain the accident coordinates and attributes used by the browser analysis.
+
+The `OSM` basemap is enabled by default, draws grayscale OpenStreetMap tiles behind the accident markers, and loads only the visible tiles for the current viewport. OpenStreetMap tiles require a browser `Referer` header, so direct `file://` use may show partial or blocked tiles; use `npm run serve:docs` or GitHub Pages for complete tiles. Turn off `OSM` to keep the map fully offline.
 
 For direct `file://` use, the build also writes compressed data scripts in `docs/assets/data-*.js`. Re-run `npm run build` after changing files in `docs/data`.
 

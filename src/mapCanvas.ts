@@ -21,10 +21,22 @@ type SelectionCallback = (cluster: IntersectionCluster | null) => void;
 const MIN_SCALE = 250;
 const MAX_SCALE = 80_000_000;
 const CLICK_TOLERANCE_PX = 4;
+const OSM_TILE_SIZE = 256;
+const OSM_MIN_ZOOM = 0;
+const OSM_MAX_ZOOM = 19;
+const OSM_MAX_CACHED_TILES = 512;
+const OSM_TILE_FILTER = "grayscale(1) saturate(0) contrast(0.62) brightness(1.18)";
+const OSM_TILE_ALPHA = 0.58;
 
 interface VisualScale {
   harmScale: number;
   zoomLevel: number;
+}
+
+interface TileRecord {
+  image: HTMLImageElement;
+  state: "loading" | "loaded" | "error";
+  lastUsed: number;
 }
 
 export class MapCanvas {
@@ -35,6 +47,9 @@ export class MapCanvas {
   private selected: IntersectionCluster | null = null;
   private maxDangerScore = 1;
   private showTraffic = true;
+  private showBasemap = false;
+  private tileCache = new Map<string, TileRecord>();
+  private tileUseCounter = 0;
   private scale = 1;
   private offsetX = 0;
   private offsetY = 0;
@@ -74,6 +89,11 @@ export class MapCanvas {
 
   setShowTraffic(showTraffic: boolean): void {
     this.showTraffic = showTraffic;
+    this.draw();
+  }
+
+  setShowBasemap(showBasemap: boolean): void {
+    this.showBasemap = showBasemap;
     this.draw();
   }
 
@@ -176,6 +196,10 @@ export class MapCanvas {
     ctx.fillStyle = "#f4f1e8";
     ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
+    if (this.showBasemap && this.bounds) {
+      this.drawBasemap();
+    }
+
     if (!this.bounds || this.clusters.length === 0) {
       return;
     }
@@ -184,6 +208,82 @@ export class MapCanvas {
       this.drawTrafficStations();
     }
     this.drawClusters();
+  }
+
+  private drawBasemap(): void {
+    const zoom = this.tileZoom();
+    const tileCount = 2 ** zoom;
+    const tileSize = this.scale / tileCount;
+    if (!Number.isFinite(tileSize) || tileSize <= 0) {
+      return;
+    }
+
+    const startX = Math.floor(-this.offsetX / tileSize) - 1;
+    const endX = Math.ceil((this.canvas.width - this.offsetX) / tileSize) + 1;
+    const startY = Math.max(0, Math.floor(-this.offsetY / tileSize) - 1);
+    const endY = Math.min(tileCount - 1, Math.ceil((this.canvas.height - this.offsetY) / tileSize) + 1);
+
+    const ctx = this.context;
+    ctx.save();
+    ctx.filter = OSM_TILE_FILTER;
+    ctx.globalAlpha = OSM_TILE_ALPHA;
+
+    for (let y = startY; y <= endY; y += 1) {
+      for (let x = startX; x <= endX; x += 1) {
+        const tile = this.tileRecord(zoom, wrapTileX(x, tileCount), y);
+        tile.lastUsed = ++this.tileUseCounter;
+        if (tile.state !== "loaded") {
+          continue;
+        }
+
+        const screenX = Math.round(x * tileSize + this.offsetX);
+        const screenY = Math.round(y * tileSize + this.offsetY);
+        const drawSize = Math.ceil(tileSize) + 1;
+        ctx.drawImage(tile.image, screenX, screenY, drawSize, drawSize);
+      }
+    }
+
+    ctx.restore();
+    this.pruneTileCache();
+  }
+
+  private tileZoom(): number {
+    return Math.round(clamp(Math.log2(this.scale / OSM_TILE_SIZE), OSM_MIN_ZOOM, OSM_MAX_ZOOM));
+  }
+
+  private tileRecord(zoom: number, x: number, y: number): TileRecord {
+    const key = `${zoom}/${x}/${y}`;
+    const cached = this.tileCache.get(key);
+    if (cached) {
+      return cached;
+    }
+
+    const image = new Image();
+    const record: TileRecord = { image, state: "loading", lastUsed: ++this.tileUseCounter };
+    image.decoding = "async";
+    image.referrerPolicy = "strict-origin-when-cross-origin";
+    image.onload = () => {
+      record.state = "loaded";
+      this.requestDraw();
+    };
+    image.onerror = () => {
+      record.state = "error";
+    };
+    image.src = `https://tile.openstreetmap.org/${zoom}/${x}/${y}.png`;
+    this.tileCache.set(key, record);
+    return record;
+  }
+
+  private pruneTileCache(): void {
+    if (this.tileCache.size <= OSM_MAX_CACHED_TILES) {
+      return;
+    }
+
+    const entries = Array.from(this.tileCache.entries()).sort((a, b) => a[1].lastUsed - b[1].lastUsed);
+    const deleteCount = this.tileCache.size - OSM_MAX_CACHED_TILES;
+    for (const [key] of entries.slice(0, deleteCount)) {
+      this.tileCache.delete(key);
+    }
   }
 
   private drawTrafficStations(): void {
@@ -412,6 +512,10 @@ function colorForIntensity(intensity: number, alpha: number): string {
     return `rgba(210, 133, 40, ${alpha})`;
   }
   return `rgba(34, 134, 141, ${alpha})`;
+}
+
+function wrapTileX(x: number, tileCount: number): number {
+  return ((x % tileCount) + tileCount) % tileCount;
 }
 
 function lerp(a: number, b: number, weight: number): number {

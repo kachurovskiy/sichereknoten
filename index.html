@@ -87,6 +87,10 @@
           </div>
           <div class="toolbar-actions">
             <label class="toggle-control">
+              <input id="showBasemap" type="checkbox" checked />
+              <span>OSM</span>
+            </label>
+            <label class="toggle-control">
               <input id="showTraffic" type="checkbox" checked />
               <span>Traffic</span>
             </label>
@@ -119,6 +123,9 @@
         <section id="mapView" class="view active">
           <div class="map-wrap">
             <canvas id="mapCanvas" width="1200" height="760" aria-label="Dangerous intersections map"></canvas>
+            <a id="osmAttribution" class="osm-attribution" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer" hidden>
+              &copy; OpenStreetMap contributors
+            </a>
             <div id="mapEmpty" class="empty-state">
               <div class="loading-panel" aria-live="polite">
                 <p class="loading-eyebrow">Automatic offline bundle</p>

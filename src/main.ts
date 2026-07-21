@@ -47,6 +47,8 @@ type SortDirection = "asc" | "desc";
 type LoadingStepKey = "cache" | "parse" | "traffic" | "rank";
 const LOADING_STEP_ORDER: LoadingStepKey[] = ["cache", "parse", "traffic", "rank"];
 const APP_CACHE_VERSION = typeof __SICHERE_KNOTEN_APP_VERSION__ === "string" ? __SICHERE_KNOTEN_APP_VERSION__ : "dev";
+const OSM_FILE_PROTOCOL_MESSAGE =
+  "Direct file use may show partial OSM tiles because OpenStreetMap requires a Referer header. Use npm run serve:docs or GitHub Pages for complete tiles.";
 
 interface ClusterTableSort {
   key: ClusterSortKey;
@@ -97,6 +99,7 @@ const elements = {
   mapLoadingStatus: byId<HTMLParagraphElement>("mapLoadingStatus"),
   mapLoadingBar: byId<HTMLDivElement>("mapLoadingBar"),
   mapLoadingSteps: Array.from(document.querySelectorAll<HTMLElement>("[data-loading-step]")),
+  osmAttribution: byId<HTMLAnchorElement>("osmAttribution"),
   selectionDetails: byId<HTMLDivElement>("selectionDetails"),
   stateTableBody: byId<HTMLTableSectionElement>("stateTableBody"),
   clusterTableBody: byId<HTMLTableSectionElement>("clusterTableBody"),
@@ -107,6 +110,7 @@ const elements = {
   stateView: byId<HTMLElement>("stateView"),
   tableView: byId<HTMLElement>("tableView"),
   showTraffic: byId<HTMLInputElement>("showTraffic"),
+  showBasemap: byId<HTMLInputElement>("showBasemap"),
   zoomInBtn: byId<HTMLButtonElement>("zoomInBtn"),
   zoomOutBtn: byId<HTMLButtonElement>("zoomOutBtn"),
   resetMapBtn: byId<HTMLButtonElement>("resetMapBtn"),
@@ -123,6 +127,11 @@ renderAll();
 void loadBundledData();
 
 function wireEvents(): void {
+  if (isDirectFilePage()) {
+    elements.showBasemap.title = OSM_FILE_PROTOCOL_MESSAGE;
+    elements.showBasemap.closest("label")?.setAttribute("title", OSM_FILE_PROTOCOL_MESSAGE);
+  }
+
   elements.loadBundledBtn.addEventListener("click", () => void loadBundledData());
   elements.clearBtn.addEventListener("click", clearData);
   elements.analyzeBtn.addEventListener("click", () => runAnalysis());
@@ -143,6 +152,9 @@ function wireEvents(): void {
   });
 
   elements.showTraffic.addEventListener("change", () => map.setShowTraffic(elements.showTraffic.checked));
+  elements.showBasemap.addEventListener("change", () => {
+    applyBasemapSetting(true);
+  });
   elements.zoomInBtn.addEventListener("click", () => map.zoom(1.6));
   elements.zoomOutBtn.addEventListener("click", () => map.zoom(0.625));
   elements.resetMapBtn.addEventListener("click", () => map.reset());
@@ -411,6 +423,7 @@ function renderAll(): void {
   updateRangeOutputs();
   renderMetrics();
   renderTables();
+  applyBasemapSetting(false);
   map.setShowTraffic(elements.showTraffic.checked);
   if (result) {
     map.setData(result.clusters, traffic);
@@ -419,6 +432,22 @@ function renderAll(): void {
     elements.mapEmpty.hidden = false;
     renderSelection(null);
   }
+}
+
+function applyBasemapSetting(notify: boolean): void {
+  if (notify && elements.showBasemap.checked && isDirectFilePage()) {
+    setStatus(OSM_FILE_PROTOCOL_MESSAGE, 100);
+  }
+  map.setShowBasemap(elements.showBasemap.checked);
+  updateOsmAttribution();
+}
+
+function updateOsmAttribution(): void {
+  elements.osmAttribution.hidden = !elements.showBasemap.checked;
+}
+
+function isDirectFilePage(): boolean {
+  return window.location.protocol === "file:";
 }
 
 function renderMetrics(): void {
