@@ -141,6 +141,10 @@ export class MapCanvas {
     this.draw();
   }
 
+  refresh(): void {
+    this.draw();
+  }
+
   private attachEvents(): void {
     this.canvas.addEventListener("wheel", (event) => {
       event.preventDefault();

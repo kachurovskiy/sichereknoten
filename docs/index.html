@@ -62,33 +62,53 @@
         </section>
 
         <section id="mapView" class="view active">
-          <div class="map-wrap">
-            <canvas id="mapCanvas" width="1200" height="760" aria-label="Dangerous intersections map"></canvas>
-            <a id="osmAttribution" class="osm-attribution" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">
-              &copy; OpenStreetMap contributors
-            </a>
-            <button id="locateMeBtn" class="map-locate-button" type="button" title="Center map on your location" aria-label="Center map on your location">
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M12 3v3m0 12v3m9-9h-3M6 12H3"></path>
-                <circle cx="12" cy="12" r="5"></circle>
-                <circle cx="12" cy="12" r="1.6"></circle>
-              </svg>
-            </button>
-            <div id="mapEmpty" class="empty-state">
-              <div class="loading-panel" aria-live="polite">
-                <p class="loading-eyebrow">Automatic offline bundle</p>
-                <h2 id="mapLoadingTitle">Preparing data</h2>
-                <p id="mapLoadingStatus" class="loading-status">Checking bundled accident data.</p>
-                <div class="loading-progress" aria-hidden="true">
-                  <div id="mapLoadingBar" class="loading-progress-bar"></div>
-                </div>
-                <div class="loading-steps" aria-label="Loading steps">
-                  <span class="loading-step active" data-loading-step="cache">Cache</span>
-                  <span class="loading-step" data-loading-step="parse">Parse</span>
-                  <span class="loading-step" data-loading-step="analyze">Analyze</span>
+          <div id="mapColumn" class="map-column">
+            <div class="map-wrap">
+              <canvas id="mapCanvas" width="1200" height="760" aria-label="Dangerous intersections map"></canvas>
+              <a id="osmAttribution" class="osm-attribution" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">
+                &copy; OpenStreetMap contributors
+              </a>
+              <button id="locateMeBtn" class="map-locate-button" type="button" title="Center map on your location" aria-label="Center map on your location">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 3v3m0 12v3m9-9h-3M6 12H3"></path>
+                  <circle cx="12" cy="12" r="5"></circle>
+                  <circle cx="12" cy="12" r="1.6"></circle>
+                </svg>
+              </button>
+              <div id="mapEmpty" class="empty-state">
+                <div class="loading-panel" aria-live="polite">
+                  <p class="loading-eyebrow">Automatic offline bundle</p>
+                  <h2 id="mapLoadingTitle">Preparing data</h2>
+                  <p id="mapLoadingStatus" class="loading-status">Checking bundled accident data.</p>
+                  <div class="loading-progress" aria-hidden="true">
+                    <div id="mapLoadingBar" class="loading-progress-bar"></div>
+                  </div>
+                  <div class="loading-steps" aria-label="Loading steps">
+                    <span class="loading-step active" data-loading-step="cache">Cache</span>
+                    <span class="loading-step" data-loading-step="parse">Parse</span>
+                    <span class="loading-step" data-loading-step="analyze">Analyze</span>
+                  </div>
                 </div>
               </div>
             </div>
+            <section id="streetViewPanel" class="street-view-panel" aria-label="Google Street View">
+              <button id="streetViewToggle" class="street-view-toggle" type="button" aria-expanded="false" aria-controls="streetViewBody">
+                <span>Google Street View</span>
+                <span id="streetViewToggleText">Show</span>
+              </button>
+              <div id="streetViewBody" class="street-view-body" hidden>
+                <iframe
+                  id="streetViewFrame"
+                  class="street-view-frame"
+                  title="Google Street View"
+                  loading="lazy"
+                  referrerpolicy="no-referrer-when-downgrade"
+                  allowfullscreen
+                  hidden
+                ></iframe>
+                <p id="streetViewEmpty" class="street-view-empty">Select an intersection to show Street View.</p>
+              </div>
+            </section>
           </div>
           <aside id="selectedAside" class="detail-panel selected-aside" aria-label="Selected intersection details" hidden>
             <div class="selected-aside-header">

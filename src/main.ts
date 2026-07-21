@@ -50,6 +50,7 @@ type HotspotMetricPlacement = "header" | "stats";
 const LOADING_STEP_ORDER: LoadingStepKey[] = ["cache", "parse", "analyze"];
 const APP_CACHE_VERSION =
   typeof __SICHERE_KNOTEN_APP_VERSION__ === "string" ? __SICHERE_KNOTEN_APP_VERSION__ : "dev-parallel-analysis";
+const STREET_VIEW_OPEN_STORAGE_KEY = "sichere-knoten:street-view-open";
 const ACCIDENT_CATEGORY_LABELS: Record<number, string> = {
   1: "Accident with persons killed",
   2: "Accident with seriously injured",
@@ -135,6 +136,7 @@ let userLocation: { lat: number; lon: number; accuracyMeters: number | null } | 
 let activeAnalysisOptions: AnalysisOptions | null = null;
 let crossingAccidentIndexCache: AccidentIndexCache | null = null;
 let accidentKeyLookupCache: AccidentKeyLookupCache | null = null;
+let isStreetViewOpen = readStoredStreetViewOpen();
 
 const elements = {
   loadBundledBtn: byId<HTMLButtonElement>("loadBundledBtn"),
@@ -153,6 +155,7 @@ const elements = {
   fatalMaxPercent: byId<HTMLInputElement>("fatalMaxPercent"),
   stateFilter: byId<HTMLSelectElement>("stateFilter"),
   yearFilter: byId<HTMLDivElement>("yearFilter"),
+  mapColumn: byId<HTMLDivElement>("mapColumn"),
   mapCanvas: byId<HTMLCanvasElement>("mapCanvas"),
   mapEmpty: byId<HTMLDivElement>("mapEmpty"),
   mapLoadingTitle: byId<HTMLHeadingElement>("mapLoadingTitle"),
@@ -180,6 +183,12 @@ const elements = {
   showSeriousPoints: byId<HTMLInputElement>("showSeriousPoints"),
   showOtherPoints: byId<HTMLInputElement>("showOtherPoints"),
   locateMeBtn: byId<HTMLButtonElement>("locateMeBtn"),
+  streetViewPanel: byId<HTMLElement>("streetViewPanel"),
+  streetViewToggle: byId<HTMLButtonElement>("streetViewToggle"),
+  streetViewToggleText: byId<HTMLSpanElement>("streetViewToggleText"),
+  streetViewBody: byId<HTMLDivElement>("streetViewBody"),
+  streetViewFrame: byId<HTMLIFrameElement>("streetViewFrame"),
+  streetViewEmpty: byId<HTMLParagraphElement>("streetViewEmpty"),
   exportBtn: byId<HTMLButtonElement>("exportBtn")
 };
 
@@ -187,6 +196,7 @@ const map = new MapCanvas(elements.mapCanvas, handleClusterSelection);
 
 resetAnalysisControlsToDefaults();
 wireEvents();
+updateStreetViewPanel();
 renderAll();
 void loadBundledData();
 
@@ -222,6 +232,7 @@ function wireEvents(): void {
   });
   elements.locateMeBtn.addEventListener("click", () => locateUser({ selectNearest: false }));
   elements.findNearbyBtn.addEventListener("click", () => locateUser({ selectNearest: true }));
+  elements.streetViewToggle.addEventListener("click", toggleStreetViewPanel);
   elements.browseState.addEventListener("change", renderExplore);
 
   elements.mapTab.addEventListener("click", () => setView("map"));
@@ -996,6 +1007,7 @@ function renderSelection(cluster: IntersectionCluster | null): void {
     elements.selectedMapActions.innerHTML = "";
     elements.mapView.classList.remove("has-selection");
     elements.selectionDetails.textContent = "No intersection selected.";
+    updateStreetViewPanel();
     return;
   }
 
@@ -1023,6 +1035,57 @@ function renderSelection(cluster: IntersectionCluster | null): void {
     ${trendPanel}
     ${recordPanel}
   `;
+  updateStreetViewPanel();
+}
+
+function toggleStreetViewPanel(): void {
+  isStreetViewOpen = !isStreetViewOpen;
+  writeStoredStreetViewOpen(isStreetViewOpen);
+  updateStreetViewPanel();
+}
+
+function updateStreetViewPanel(): void {
+  const cluster = selectedCluster;
+  const hasSelection = cluster !== null;
+  const isExpanded = hasSelection && isStreetViewOpen;
+
+  elements.streetViewPanel.hidden = !hasSelection;
+  elements.mapColumn.classList.toggle("street-view-open", isExpanded);
+  elements.streetViewToggle.setAttribute("aria-expanded", String(isExpanded));
+  elements.streetViewToggleText.textContent = isExpanded ? "Hide" : "Show";
+  elements.streetViewBody.hidden = !isExpanded;
+
+  if (!hasSelection || !isExpanded) {
+    clearStreetViewFrame();
+    scheduleMapRefresh();
+    return;
+  }
+
+  const streetViewUrl = googleStreetViewEmbedUrl(cluster);
+  if (elements.streetViewFrame.dataset.src !== streetViewUrl) {
+    elements.streetViewFrame.src = streetViewUrl;
+    elements.streetViewFrame.dataset.src = streetViewUrl;
+  }
+  elements.streetViewFrame.title = `Google Street View near ${cluster.lat.toFixed(5)}, ${cluster.lon.toFixed(5)}`;
+  elements.streetViewFrame.hidden = false;
+  elements.streetViewEmpty.hidden = true;
+  scheduleMapRefresh();
+}
+
+function clearStreetViewFrame(): void {
+  elements.streetViewFrame.hidden = true;
+  elements.streetViewFrame.removeAttribute("src");
+  delete elements.streetViewFrame.dataset.src;
+}
+
+function googleStreetViewEmbedUrl(cluster: IntersectionCluster): string {
+  const lat = cluster.lat.toFixed(6);
+  const lon = cluster.lon.toFixed(6);
+  return `https://www.google.com/maps?layer=c&cbll=${lat},${lon}&cbp=11,0,0,0,0&output=svembed`;
+}
+
+function scheduleMapRefresh(): void {
+  window.requestAnimationFrame(() => map.refresh());
 }
 
 function renderMapServiceActions(openStreetMapUrl: string, googleMapsUrl: string): string {
@@ -1808,6 +1871,22 @@ function escapeHtml(value: string): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function readStoredStreetViewOpen(): boolean {
+  try {
+    return window.localStorage.getItem(STREET_VIEW_OPEN_STORAGE_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function writeStoredStreetViewOpen(value: boolean): void {
+  try {
+    window.localStorage.setItem(STREET_VIEW_OPEN_STORAGE_KEY, String(value));
+  } catch {
+    // Storage can be blocked in private or embedded contexts; the toggle still works for this session.
+  }
 }
 
 function yieldToBrowser(): Promise<void> {

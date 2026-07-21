@@ -502,10 +502,26 @@ select {
   margin-top: 8px;
 }
 
-.map-wrap {
-  position: relative;
+.map-column {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 10px;
   height: calc(100dvh - 106px);
   min-height: 620px;
+  min-width: 0;
+}
+
+.map-column.street-view-open {
+  grid-template-rows: minmax(260px, 1fr) minmax(260px, 1fr);
+}
+
+.map-column.street-view-open .street-view-panel {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.map-wrap {
+  position: relative;
+  min-height: 0;
   border: 1px solid #d7ddd7;
   border-radius: 8px;
   overflow: hidden;
@@ -593,6 +609,87 @@ select {
 
 .map-locate-button.locating svg {
   animation: locating-pulse 900ms ease-in-out infinite;
+}
+
+.street-view-panel {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid #d7ddd7;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.street-view-panel[hidden] {
+  display: none;
+}
+
+.street-view-toggle {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  width: 100%;
+  min-height: 42px;
+  padding: 0 12px;
+  border: 0;
+  background: #ffffff;
+  color: #172126;
+  font-weight: 600;
+  text-align: left;
+}
+
+.street-view-toggle span:last-child {
+  color: #166b6d;
+  font-size: 0.84rem;
+}
+
+.street-view-toggle:hover,
+.street-view-toggle:focus-visible {
+  background: #eef6f4;
+  outline: none;
+}
+
+.street-view-toggle:focus-visible {
+  box-shadow: inset 0 0 0 2px #166b6d;
+}
+
+.street-view-body {
+  position: relative;
+  min-height: 0;
+  border-top: 1px solid #e1e5df;
+  background: #f8faf7;
+}
+
+.street-view-body[hidden] {
+  display: none;
+}
+
+.street-view-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  border: 0;
+}
+
+.street-view-frame[hidden],
+.street-view-empty[hidden] {
+  display: none;
+}
+
+.street-view-empty {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  min-height: 180px;
+  margin: 0;
+  padding: 16px;
+  color: #53636d;
+  font-size: 0.9rem;
+  line-height: 1.35;
+  text-align: center;
 }
 
 @keyframes locating-pulse {
@@ -1222,9 +1319,13 @@ tbody tr:focus {
     flex: 0 0 auto;
   }
 
-  .map-wrap {
+  .map-column {
     height: 58dvh;
     min-height: 390px;
+  }
+
+  .map-column.street-view-open {
+    grid-template-rows: minmax(170px, 1fr) minmax(170px, 1fr);
   }
 
   .selected-aside {
