@@ -478,7 +478,7 @@ select {
 }
 
 #mapView.active.has-selection {
-  grid-template-columns: minmax(0, 1fr) minmax(320px, 380px);
+  grid-template-columns: minmax(0, 1fr) minmax(360px, 460px);
 }
 
 .settings-view.active {
@@ -877,7 +877,7 @@ select {
 
 .accident-record-fields div {
   display: grid;
-  grid-template-columns: 82px minmax(0, 1fr);
+  grid-template-columns: 104px minmax(0, 1fr);
   gap: 8px;
 }
 

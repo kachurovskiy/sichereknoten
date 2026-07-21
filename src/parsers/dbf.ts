@@ -1,5 +1,5 @@
 import { AccidentRecord, ParseProgress } from "../types";
-import { accidentFromRecord } from "./common";
+import { accidentFromRecord, normalizeFieldName } from "./common";
 
 type ProgressCallback = (progress: ParseProgress) => void;
 
@@ -11,9 +11,14 @@ interface DbfField {
 }
 
 const WANTED_FIELDS = new Set([
+  "ID",
+  "OID_",
   "UIDENTSTLA",
   "UIDENTSTLAE",
   "ULAND",
+  "UREGBEZ",
+  "UKREIS",
+  "UGEMEINDE",
   "UJAHR",
   "UMONAT",
   "USTUNDE",
@@ -21,14 +26,25 @@ const WANTED_FIELDS = new Set([
   "UKATEGORIE",
   "UART",
   "UTYP1",
+  "ULICHTVERH",
+  "USTRZUSTAND",
+  "IstStrassenzustand",
+  "istStrasse",
+  "IstStrasse",
   "IstRad",
   "IstPKW",
   "IstFuss",
   "IstKrad",
   "IstGkfz",
+  "IstSonstige",
+  "LINREFX",
+  "LINREFY",
   "XGCSWGS84",
-  "YGCSWGS84"
+  "YGCSWGS84",
+  "PLST"
 ]);
+
+const WANTED_FIELD_KEYS = new Set(Array.from(WANTED_FIELDS, normalizeFieldName));
 
 export async function parseAccidentDbfFiles(files: File[], onProgress: ProgressCallback): Promise<AccidentRecord[]> {
   const dbfFiles = files.filter((file) => file.name.toLowerCase().endsWith(".dbf"));
@@ -52,9 +68,12 @@ async function parseDbfAccidents(file: File, onProgress: ProgressCallback): Prom
   const headerBytes =
     headerLength <= headerProbe.byteLength ? headerProbe : new Uint8Array(await file.slice(0, headerLength).arrayBuffer());
   const fields = readDbfFields(headerBytes);
-  const selectedFields = fields.filter((field) => WANTED_FIELDS.has(field.name));
+  const selectedFields = fields.filter((field) => WANTED_FIELD_KEYS.has(normalizeFieldName(field.name)));
 
-  if (!selectedFields.some((field) => field.name === "XGCSWGS84") || !selectedFields.some((field) => field.name === "YGCSWGS84")) {
+  if (
+    !selectedFields.some((field) => normalizeFieldName(field.name) === normalizeFieldName("XGCSWGS84")) ||
+    !selectedFields.some((field) => normalizeFieldName(field.name) === normalizeFieldName("YGCSWGS84"))
+  ) {
     throw new Error(`${file.name} does not include XGCSWGS84/YGCSWGS84 fields.`);
   }
 

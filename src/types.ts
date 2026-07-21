@@ -10,24 +10,35 @@ export interface ParseProgress {
 
 export interface AccidentRecord {
   id: string;
+  serialNumber: string | null;
   source: string;
   sourceType: "csv" | "dbf";
   stateCode: string;
   stateName: string;
+  administrativeRegionCode: string | null;
+  districtCode: string | null;
+  municipalityCode: string | null;
   year: number;
   month: number | null;
   hour: number | null;
   weekday: number | null;
   category: number | null;
+  accidentKind: number | null;
   accidentType: number | null;
+  lightCondition: number | null;
+  roadSurface: number | null;
+  plausibilityLevel: number | null;
   severityWeight: number;
+  linRefX: number | null;
+  linRefY: number | null;
   lon: number;
   lat: number;
-  involvesBike: boolean;
-  involvesPedestrian: boolean;
-  involvesMotorcycle: boolean;
-  involvesCar: boolean;
-  involvesTruck: boolean;
+  involvesBike: boolean | null;
+  involvesPedestrian: boolean | null;
+  involvesMotorcycle: boolean | null;
+  involvesCar: boolean | null;
+  involvesTruck: boolean | null;
+  involvesOther: boolean | null;
 }
 
 export interface TrafficPoint {

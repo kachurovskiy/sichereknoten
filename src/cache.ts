@@ -10,6 +10,7 @@ export type CacheProgress = (message: string, progress: number) => void;
 interface CacheMeta {
   key: "active";
   version: string;
+  schemaVersion?: number;
   accidentChunks: number;
   trafficChunks: number;
   accidentCount: number;
@@ -34,6 +35,7 @@ const ANALYSIS_STORE = "analysis";
 const META_KEY = "active";
 const ACCIDENT_CHUNK_SIZE = 25000;
 const TRAFFIC_CHUNK_SIZE = 5000;
+const PARSED_DATA_SCHEMA_VERSION = 2;
 
 export async function readParsedDataCache(version: string, onProgress: CacheProgress): Promise<ParsedDataCache | null> {
   if (!("indexedDB" in window)) {
@@ -43,7 +45,7 @@ export async function readParsedDataCache(version: string, onProgress: CacheProg
   try {
     const db = await openCacheDb();
     const meta = await getValue<CacheMeta>(db, META_STORE, META_KEY);
-    if (!meta || meta.version !== version) {
+    if (!meta || meta.version !== version || meta.schemaVersion !== PARSED_DATA_SCHEMA_VERSION) {
       db.close();
       return null;
     }
@@ -115,6 +117,7 @@ export async function writeParsedDataCache(
     const meta: CacheMeta = {
       key: META_KEY,
       version,
+      schemaVersion: PARSED_DATA_SCHEMA_VERSION,
       accidentChunks,
       trafficChunks,
       accidentCount: accidents.length,

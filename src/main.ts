@@ -53,6 +53,46 @@ const LOADING_STEP_ORDER: LoadingStepKey[] = ["cache", "parse", "traffic", "rank
 const APP_CACHE_VERSION = typeof __SICHERE_KNOTEN_APP_VERSION__ === "string" ? __SICHERE_KNOTEN_APP_VERSION__ : "dev";
 const OSM_FILE_PROTOCOL_MESSAGE =
   "Direct file use may show partial OSM tiles because OpenStreetMap requires a Referer header. Use npm run serve:docs or GitHub Pages for complete tiles.";
+const ACCIDENT_CATEGORY_LABELS: Record<number, string> = {
+  1: "Accident with persons killed",
+  2: "Accident with seriously injured",
+  3: "Accident with slightly injured"
+};
+const ACCIDENT_KIND_LABELS: Record<number, string> = {
+  0: "Accident of another kind",
+  1: "Collision with another vehicle which starts, stops, or is stationary",
+  2: "Collision with another vehicle moving ahead or waiting",
+  3: "Collision with another vehicle moving laterally in the same direction",
+  4: "Collision with another oncoming vehicle",
+  5: "Collision with another vehicle which turns into or crosses a road",
+  6: "Collision between vehicle and pedestrian",
+  7: "Collision with an obstacle in the carriageway",
+  8: "Leaving the carriageway to the right",
+  9: "Leaving the carriageway to the left"
+};
+const ACCIDENT_TYPE_LABELS: Record<number, string> = {
+  1: "Driving accident",
+  2: "Accident caused by turning off the road",
+  3: "Accident caused by turning into a road or by crossing it",
+  4: "Accident caused by crossing the road",
+  5: "Accident involving stationary traffic",
+  6: "Accident between vehicles moving along in carriageway",
+  7: "Other accident"
+};
+const LIGHT_CONDITION_LABELS: Record<number, string> = {
+  0: "Daylight",
+  1: "Twilight",
+  2: "Darkness"
+};
+const ROAD_SURFACE_LABELS: Record<number, string> = {
+  0: "Dry",
+  1: "Wet, damp, or slippery",
+  2: "Slippery, winter conditions"
+};
+const PLAUSIBILITY_LEVEL_LABELS: Record<number, string> = {
+  1: "Successful location check, regular proceedings",
+  2: "Successful location check, advanced bicycle proceedings"
+};
 
 interface ClusterTableSort {
   key: ClusterSortKey;
@@ -997,19 +1037,16 @@ function renderSidebarAccidentRecords(records: CrossingAccident[], totalCount: n
   const items = records
     .map(({ accident, distanceMeters }) => {
       const severity = accidentSeverity(accident);
+      const rows = accidentRecordRows(accident, distanceMeters)
+        .map((row) => `<div><dt>${escapeHtml(row.label)}</dt><dd>${escapeHtml(row.value)}</dd></div>`)
+        .join("");
       return `
         <li class="accident-record-item">
           <div class="accident-record-topline">
             <span class="severity-pill severity-${severity}">${accidentSeverityLabel(accident)}</span>
             <strong>${escapeHtml(accidentTimeLabel(accident))}</strong>
           </div>
-          <dl class="accident-record-fields">
-            <div><dt>Type</dt><dd>${escapeHtml(accidentTypeLabel(accident))}</dd></div>
-            <div><dt>Road users</dt><dd>${escapeHtml(roadUsersLabel(accident))}</dd></div>
-            <div><dt>Coordinates</dt><dd>${accident.lat.toFixed(5)}, ${accident.lon.toFixed(5)}</dd></div>
-            <div><dt>Distance</dt><dd>${Math.round(distanceMeters)} m</dd></div>
-            <div><dt>Source</dt><dd>${escapeHtml(accident.source)}<br /><span>${escapeHtml(accident.id)}</span></dd></div>
-          </dl>
+          <dl class="accident-record-fields">${rows}</dl>
         </li>
       `;
     })
@@ -1024,6 +1061,30 @@ function renderSidebarAccidentRecords(records: CrossingAccident[], totalCount: n
       <ol class="accident-record-list">${items}</ol>
     </section>
   `;
+}
+
+function accidentRecordRows(accident: AccidentRecord, distanceMeters: number): Array<{ label: string; value: string }> {
+  const rows: Array<{ label: string; value: string }> = [];
+  addRecordRow(rows, "Category", codeLabel(accident.category, ACCIDENT_CATEGORY_LABELS));
+  addRecordRow(rows, "Kind", codeLabel(accident.accidentKind, ACCIDENT_KIND_LABELS));
+  addRecordRow(rows, "Type", codeLabel(accident.accidentType, ACCIDENT_TYPE_LABELS));
+  addRecordRow(rows, "Light", codeLabel(accident.lightCondition, LIGHT_CONDITION_LABELS));
+  addRecordRow(rows, "Surface", codeLabel(accident.roadSurface, ROAD_SURFACE_LABELS));
+  addRecordRow(rows, "Road users", roadUsersLabel(accident));
+  addRecordRow(rows, "Area", administrativeAreaLabel(accident));
+  addRecordRow(rows, "Coordinates", `${accident.lat.toFixed(6)}, ${accident.lon.toFixed(6)}`);
+  addRecordRow(rows, "LINREF", linRefLabel(accident));
+  addRecordRow(rows, "Location check", codeLabel(accident.plausibilityLevel, PLAUSIBILITY_LEVEL_LABELS));
+  addRecordRow(rows, "Distance", `${Math.round(distanceMeters)} m`);
+  addRecordRow(rows, "Record ID", recordIdLabel(accident));
+  addRecordRow(rows, "Source", accident.source);
+  return rows;
+}
+
+function addRecordRow(rows: Array<{ label: string; value: string }>, label: string, value: string | null): void {
+  if (value) {
+    rows.push({ label, value });
+  }
 }
 
 function clusterAccidentRecords(cluster: IntersectionCluster): CrossingAccident[] {
@@ -1205,23 +1266,60 @@ function monthLabel(month: number): string {
 }
 
 function weekdayLabel(weekday: number): string {
-  const labels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const labels = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
   return labels[weekday - 1] ?? `Weekday ${weekday}`;
 }
 
-function accidentTypeLabel(accident: AccidentRecord): string {
-  return accident.accidentType === null ? "Unknown type" : `Type ${accident.accidentType}`;
+function codeLabel(value: number | null | undefined, labels: Record<number, string>): string | null {
+  if (typeof value !== "number") {
+    return null;
+  }
+  return `${value} - ${labels[value] ?? "Unknown code"}`;
 }
 
 function roadUsersLabel(accident: AccidentRecord): string {
-  const users = [
-    accident.involvesPedestrian ? "Pedestrian" : "",
-    accident.involvesBike ? "Bike" : "",
-    accident.involvesMotorcycle ? "Motorcycle" : "",
-    accident.involvesCar ? "Car" : "",
-    accident.involvesTruck ? "Truck" : ""
-  ].filter(Boolean);
-  return users.length > 0 ? users.join(", ") : "No road-user flags";
+  const flags: Array<[string, boolean | null]> = [
+    ["Pedestrian", accident.involvesPedestrian],
+    ["Bicycle", accident.involvesBike],
+    ["Motorcycle", accident.involvesMotorcycle],
+    ["Passenger car", accident.involvesCar],
+    ["Goods road vehicle", accident.involvesTruck],
+    ["Other means of transport", accident.involvesOther]
+  ];
+  const knownFlags = flags.filter((entry): entry is [string, boolean] => entry[1] !== null);
+  if (knownFlags.length === 0) {
+    return "No road-user fields";
+  }
+  return knownFlags.map(([label, value]) => `${label}: ${value ? "yes" : "no"}`).join("; ");
+}
+
+function administrativeAreaLabel(accident: AccidentRecord): string {
+  const parts = [`${accident.stateName} (${accident.stateCode})`];
+  if (accident.administrativeRegionCode) {
+    parts.push(`administrative region ${accident.administrativeRegionCode}`);
+  }
+  if (accident.districtCode) {
+    parts.push(`district ${accident.districtCode}`);
+  }
+  if (accident.municipalityCode) {
+    parts.push(`municipality ${accident.municipalityCode}`);
+  }
+  return parts.join(", ");
+}
+
+function linRefLabel(accident: AccidentRecord): string | null {
+  if (typeof accident.linRefX !== "number" || typeof accident.linRefY !== "number") {
+    return null;
+  }
+  return `${formatNumber(accident.linRefX)}, ${formatNumber(accident.linRefY)} (EPSG:25832)`;
+}
+
+function recordIdLabel(accident: AccidentRecord): string {
+  const parts = [accident.id];
+  if (accident.serialNumber && accident.serialNumber !== accident.id) {
+    parts.push(`serial ${accident.serialNumber}`);
+  }
+  return parts.join(", ");
 }
 
 function accidentKey(accident: AccidentRecord): string {
