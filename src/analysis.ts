@@ -1,13 +1,12 @@
-import { GeoGridIndex, haversineMeters, lonLatToMeterPoint } from "./geo";
+import { lonLatToMeterPoint } from "./geo";
 import {
   AccidentRecord,
+  AccidentTrend,
   AnalysisOptions,
   AnalysisResult,
   ClusterYearStat,
   IntersectionCluster,
-  RateTrend,
-  StateSummary,
-  TrafficPoint
+  StateSummary
 } from "./types";
 
 interface ClusterYearAccumulator {
@@ -39,11 +38,7 @@ interface ClusterAccumulator {
   stateCounts: Map<string, number>;
 }
 
-export function analyzeDangerousIntersections(
-  accidents: AccidentRecord[],
-  traffic: TrafficPoint[],
-  options: AnalysisOptions
-): AnalysisResult {
+export function analyzeDangerousIntersections(accidents: AccidentRecord[], options: AnalysisOptions): AnalysisResult {
   const filtered = accidents.filter((accident) => {
     if (options.years.size > 0 && !options.years.has(accident.year)) {
       return false;
@@ -58,7 +53,7 @@ export function analyzeDangerousIntersections(
 
   const clusters = buildClusters(filtered, options.clusterRadiusMeters)
     .filter((cluster) => cluster.accidentCount >= options.minAccidents)
-    .map((cluster) => finalizeCluster(cluster, traffic, options.matchRadiusMeters, options.scoreMode, analysisYears))
+    .map((cluster) => finalizeCluster(cluster, analysisYears))
     .sort((a, b) => b.dangerScore - a.dangerScore)
     .map((cluster, index) => ({ ...cluster, rank: index + 1 }));
 
@@ -66,7 +61,6 @@ export function analyzeDangerousIntersections(
     clusters,
     stateSummaries: summarizeStates(clusters),
     filteredAccidentCount: filtered.length,
-    scoreMode: options.scoreMode,
     years: analysisYears
   };
 }
@@ -220,22 +214,13 @@ function updateClusterBucket(
   cluster.bucketKey = nextKey;
 }
 
-function finalizeCluster(
-  cluster: ClusterAccumulator,
-  traffic: TrafficPoint[],
-  matchRadiusMeters: number,
-  scoreMode: AnalysisOptions["scoreMode"],
-  analysisYears: number[]
-): IntersectionCluster {
-  const trafficMatch = findTrafficMatch(cluster, traffic, matchRadiusMeters);
-  const trafficDtv = trafficMatch?.point.dtv && trafficMatch.point.dtv > 0 ? trafficMatch.point.dtv : null;
+function finalizeCluster(cluster: ClusterAccumulator, analysisYears: number[]): IntersectionCluster {
   const vulnerableBoost = cluster.vulnerableCount * 0.25;
   const absoluteScore = cluster.severityPoints + cluster.accidentCount * 0.35 + vulnerableBoost;
-  const exposureScore = trafficDtv ? (cluster.severityPoints * 10000) / trafficDtv : null;
   const stateCode = topMapEntry(cluster.stateCounts) ?? "00";
   const yearlyStats = Array.from(cluster.yearStats.values())
     .sort((a, b) => a.year - b.year)
-    .map((stats) => toClusterYearStat(stats, trafficDtv));
+    .map(toClusterYearStat);
 
   return {
     id: cluster.id,
@@ -243,7 +228,7 @@ function finalizeCluster(
     lon: cluster.lon,
     lat: cluster.lat,
     stateCode,
-    stateName: trafficMatch?.point.stateCode === stateCode ? trafficMatch.point.stateName : stateNameFromCode(stateCode),
+    stateName: stateNameFromCode(stateCode),
     accidentCount: cluster.accidentCount,
     fatalCount: cluster.fatalCount,
     seriousCount: cluster.seriousCount,
@@ -251,12 +236,10 @@ function finalizeCluster(
     vulnerableCount: cluster.vulnerableCount,
     severityPoints: round(cluster.severityPoints, 2),
     absoluteScore: round(absoluteScore, 2),
-    exposureScore: exposureScore === null ? null : round(exposureScore, 2),
-    dangerScore: scoreMode === "exposure" && exposureScore !== null ? round(exposureScore, 2) : round(absoluteScore, 2),
+    dangerScore: round(absoluteScore, 2),
     years: Array.from(cluster.yearSet).sort((a, b) => a - b),
     yearlyStats,
-    accidentsPerVehicleTrend: calculateAccidentsPerVehicleTrend(cluster.yearStats, analysisYears, trafficDtv),
-    trafficMatch,
+    accidentTrend: calculateAccidentTrend(cluster.yearStats, analysisYears),
     accidentKeys: cluster.accidentKeys
   };
 }
@@ -265,102 +248,62 @@ function accidentKey(accident: AccidentRecord): string {
   return `${accident.source}\0${accident.id}`;
 }
 
-function toClusterYearStat(stats: ClusterYearAccumulator, trafficDtv: number | null): ClusterYearStat {
+function toClusterYearStat(stats: ClusterYearAccumulator): ClusterYearStat {
   return {
     year: stats.year,
     accidentCount: stats.accidentCount,
-    severityPoints: round(stats.severityPoints, 2),
-    trafficDtv,
-    estimatedVehicles: trafficDtv ? Math.round(trafficDtv * daysInYear(stats.year)) : null,
-    accidentsPerMillionVehicles: trafficDtv
-      ? round((stats.accidentCount / (trafficDtv * daysInYear(stats.year))) * 1_000_000, 4)
-      : null
+    severityPoints: round(stats.severityPoints, 2)
   };
 }
 
-function calculateAccidentsPerVehicleTrend(
-  yearlyStats: Map<number, ClusterYearAccumulator>,
-  analysisYears: number[],
-  trafficDtv: number | null
-): RateTrend {
-  if (!trafficDtv || analysisYears.length < 2) {
-    return unknownRateTrend(analysisYears.length);
+function calculateAccidentTrend(yearlyStats: Map<number, ClusterYearAccumulator>, analysisYears: number[]): AccidentTrend {
+  if (analysisYears.length < 2) {
+    return unknownAccidentTrend(analysisYears.length);
   }
 
   const points = analysisYears.map((year) => {
     const accidentCount = yearlyStats.get(year)?.accidentCount ?? 0;
     return {
       year,
-      rate: (accidentCount / (trafficDtv * daysInYear(year))) * 1_000_000
+      accidentCount
     };
   });
-  const meanRate = points.reduce((total, point) => total + point.rate, 0) / points.length;
+  const meanAccidents = points.reduce((total, point) => total + point.accidentCount, 0) / points.length;
   const firstYear = points[0].year;
   const meanX = points.reduce((total, point) => total + (point.year - firstYear), 0) / points.length;
-  const numerator = points.reduce((total, point) => total + (point.year - firstYear - meanX) * (point.rate - meanRate), 0);
+  const numerator = points.reduce(
+    (total, point) => total + (point.year - firstYear - meanX) * (point.accidentCount - meanAccidents),
+    0
+  );
   const denominator = points.reduce((total, point) => total + (point.year - firstYear - meanX) ** 2, 0);
 
   if (denominator === 0) {
-    return unknownRateTrend(analysisYears.length);
+    return unknownAccidentTrend(analysisYears.length);
   }
 
   const slopePerYear = numerator / denominator;
-  const relativeSlopePerYear = meanRate > 0 ? slopePerYear / meanRate : 0;
+  const relativeSlopePerYear = meanAccidents > 0 ? slopePerYear / meanAccidents : 0;
   const direction = Math.abs(relativeSlopePerYear) < 0.08 ? "stable" : relativeSlopePerYear > 0 ? "rising" : "falling";
 
   return {
     direction,
     slopePerYear: round(slopePerYear, 4),
     relativeSlopePerYear: round(relativeSlopePerYear, 4),
-    startRate: round(points[0].rate, 4),
-    endRate: round(points[points.length - 1].rate, 4),
+    startAccidents: points[0].accidentCount,
+    endAccidents: points[points.length - 1].accidentCount,
     years: points.length
   };
 }
 
-function unknownRateTrend(years: number): RateTrend {
+function unknownAccidentTrend(years: number): AccidentTrend {
   return {
     direction: "unknown",
     slopePerYear: null,
     relativeSlopePerYear: null,
-    startRate: null,
-    endRate: null,
+    startAccidents: null,
+    endAccidents: null,
     years
   };
-}
-
-function findTrafficMatch(
-  cluster: { lat: number; lon: number },
-  traffic: TrafficPoint[],
-  radiusMeters: number
-): IntersectionCluster["trafficMatch"] {
-  if (traffic.length === 0) {
-    return null;
-  }
-  const index = getTrafficIndex(traffic, radiusMeters);
-  let best: IntersectionCluster["trafficMatch"] = null;
-
-  for (const point of index.nearby(cluster)) {
-    const distanceMeters = haversineMeters(cluster, point);
-    if (distanceMeters <= radiusMeters && (!best || distanceMeters < best.distanceMeters)) {
-      best = { point, distanceMeters };
-    }
-  }
-
-  return best;
-}
-
-let trafficIndexCache: { traffic: TrafficPoint[]; radius: number; index: GeoGridIndex<TrafficPoint> } | null = null;
-
-function getTrafficIndex(traffic: TrafficPoint[], radius: number): GeoGridIndex<TrafficPoint> {
-  if (trafficIndexCache?.traffic === traffic && trafficIndexCache.radius === radius) {
-    return trafficIndexCache.index;
-  }
-
-  const index = new GeoGridIndex<TrafficPoint>(Math.max(radius, 50));
-  traffic.forEach((point) => index.insert(point));
-  trafficIndexCache = { traffic, radius, index };
-  return index;
 }
 
 function summarizeStates(clusters: IntersectionCluster[]): StateSummary[] {
@@ -375,14 +318,12 @@ function summarizeStates(clusters: IntersectionCluster[]): StateSummary[] {
         accidentCount: 0,
         clusterCount: 0,
         severityPoints: 0,
-        matchedClusterCount: 0,
         topCluster: null
       } satisfies StateSummary);
 
     summary.accidentCount += cluster.accidentCount;
     summary.clusterCount += 1;
     summary.severityPoints += cluster.severityPoints;
-    summary.matchedClusterCount += cluster.trafficMatch ? 1 : 0;
     if (!summary.topCluster || cluster.dangerScore > summary.topCluster.dangerScore) {
       summary.topCluster = cluster;
     }
@@ -426,10 +367,6 @@ function stateNameFromCode(code: string): string {
     "16": "Thueringen"
   };
   return names[code] ?? `Bundesland ${code}`;
-}
-
-function daysInYear(year: number): number {
-  return new Date(year, 1, 29).getMonth() === 1 ? 366 : 365;
 }
 
 function key(cx: number, cy: number): string {

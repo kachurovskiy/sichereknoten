@@ -41,14 +41,7 @@ await writeFile(path.join(docsDir, "index.html"), docsHtml);
 await copyFile(path.join(root, "favicon.svg"), path.join(docsDir, "favicon.svg"));
 
 async function writeDataBundle() {
-  const files = [
-    ...(await csvFiles()),
-    {
-      sourcePath: path.join(dataDir, "Bundesstrassen-2021.xlsx"),
-      publicPath: "data/Bundesstrassen-2021.xlsx",
-      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    }
-  ];
+  const files = await csvFiles();
   const scriptFileNames = ["data-manifest.js"];
   const dataVersion = await hashFiles(files);
 

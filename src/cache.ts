@@ -1,8 +1,7 @@
-import { AccidentRecord, AnalysisOptions, AnalysisResult, TrafficPoint } from "./types";
+import { AccidentRecord, AnalysisOptions, AnalysisResult } from "./types";
 
 export interface ParsedDataCache {
   accidents: AccidentRecord[];
-  traffic: TrafficPoint[];
 }
 
 export type CacheProgress = (message: string, progress: number) => void;
@@ -12,9 +11,7 @@ interface CacheMeta {
   version: string;
   schemaVersion?: number;
   accidentChunks: number;
-  trafficChunks: number;
   accidentCount: number;
-  trafficCount: number;
   createdAt: number;
 }
 
@@ -28,14 +25,13 @@ interface AnalysisCacheRecord {
 }
 
 const DB_NAME = "sichere-knoten-cache";
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 const META_STORE = "meta";
 const CHUNK_STORE = "chunks";
 const ANALYSIS_STORE = "analysis";
 const META_KEY = "active";
 const ACCIDENT_CHUNK_SIZE = 25000;
-const TRAFFIC_CHUNK_SIZE = 5000;
-const PARSED_DATA_SCHEMA_VERSION = 2;
+const PARSED_DATA_SCHEMA_VERSION = 3;
 
 export async function readParsedDataCache(version: string, onProgress: CacheProgress): Promise<ParsedDataCache | null> {
   if (!("indexedDB" in window)) {
@@ -51,7 +47,6 @@ export async function readParsedDataCache(version: string, onProgress: CacheProg
     }
 
     const accidents: AccidentRecord[] = [];
-    const traffic: TrafficPoint[] = [];
     for (let index = 0; index < meta.accidentChunks; index += 1) {
       const chunk = await getValue<AccidentRecord[]>(db, CHUNK_STORE, chunkKey(version, "accidents", index));
       if (!chunk) {
@@ -63,19 +58,8 @@ export async function readParsedDataCache(version: string, onProgress: CacheProg
       await yieldToBrowser();
     }
 
-    for (let index = 0; index < meta.trafficChunks; index += 1) {
-      const chunk = await getValue<TrafficPoint[]>(db, CHUNK_STORE, chunkKey(version, "traffic", index));
-      if (!chunk) {
-        db.close();
-        return null;
-      }
-      traffic.push(...chunk);
-      onProgress(`Loading cached traffic ${index + 1}/${meta.trafficChunks}.`, 52);
-      await yieldToBrowser();
-    }
-
     db.close();
-    return accidents.length === meta.accidentCount && traffic.length === meta.trafficCount ? { accidents, traffic } : null;
+    return accidents.length === meta.accidentCount ? { accidents } : null;
   } catch {
     return null;
   }
@@ -84,7 +68,6 @@ export async function readParsedDataCache(version: string, onProgress: CacheProg
 export async function writeParsedDataCache(
   version: string,
   accidents: AccidentRecord[],
-  traffic: TrafficPoint[],
   onProgress: CacheProgress
 ): Promise<void> {
   if (!("indexedDB" in window)) {
@@ -98,7 +81,6 @@ export async function writeParsedDataCache(
     await clearStore(db, ANALYSIS_STORE);
 
     const accidentChunks = Math.ceil(accidents.length / ACCIDENT_CHUNK_SIZE);
-    const trafficChunks = Math.ceil(traffic.length / TRAFFIC_CHUNK_SIZE);
 
     for (let index = 0; index < accidentChunks; index += 1) {
       const chunk = accidents.slice(index * ACCIDENT_CHUNK_SIZE, (index + 1) * ACCIDENT_CHUNK_SIZE);
@@ -107,21 +89,12 @@ export async function writeParsedDataCache(
       await yieldToBrowser();
     }
 
-    for (let index = 0; index < trafficChunks; index += 1) {
-      const chunk = traffic.slice(index * TRAFFIC_CHUNK_SIZE, (index + 1) * TRAFFIC_CHUNK_SIZE);
-      await putValue(db, CHUNK_STORE, { id: chunkKey(version, "traffic", index), value: chunk });
-      onProgress(`Caching parsed traffic ${index + 1}/${trafficChunks}.`, 73);
-      await yieldToBrowser();
-    }
-
     const meta: CacheMeta = {
       key: META_KEY,
       version,
       schemaVersion: PARSED_DATA_SCHEMA_VERSION,
       accidentChunks,
-      trafficChunks,
       accidentCount: accidents.length,
-      trafficCount: traffic.length,
       createdAt: Date.now()
     };
     await putValue(db, META_STORE, meta);
@@ -238,7 +211,7 @@ function clearStore(db: IDBDatabase, storeName: string): Promise<void> {
   });
 }
 
-function chunkKey(version: string, type: "accidents" | "traffic", index: number): string {
+function chunkKey(version: string, type: "accidents", index: number): string {
   return `${version}:${type}:${index}`;
 }
 
@@ -250,11 +223,9 @@ function analysisOptionsKey(options: AnalysisOptions): string {
   const years = Array.from(options.years).sort((a, b) => a - b).join(",");
   return [
     `cluster=${options.clusterRadiusMeters}`,
-    `match=${options.matchRadiusMeters}`,
     `min=${options.minAccidents}`,
     `years=${years || "all"}`,
-    `state=${options.stateCode}`,
-    `score=${options.scoreMode}`
+    `state=${options.stateCode}`
   ].join("|");
 }
 

@@ -11,27 +11,18 @@
       <aside class="control-panel" aria-label="Application sidebar">
         <div class="brand-block">
           <h1>Sichere Knoten</h1>
-          <div class="app-status" aria-live="polite">
-            <div class="progress-track compact-progress" aria-hidden="true">
-              <div id="progressBar" class="progress-bar"></div>
-            </div>
-            <p id="statusText">Loading bundled data.</p>
-          </div>
+          <p class="brand-description">Explore German accident data to identify high-risk intersections by severity, location, and year.</p>
         </div>
 
         <div id="explorePanel" class="explore-panel">
           <section class="panel-section nearby-section">
-            <div class="section-title-row">
-              <h2>Nearby danger</h2>
-              <button id="findNearbyBtn" class="secondary-button compact-action" type="button">Use location</button>
-            </div>
+            <button id="findNearbyBtn" class="primary-button nearby-location-button" type="button">Find nearby intersections</button>
             <div id="nearbyList" class="hotspot-list" aria-live="polite" hidden></div>
           </section>
 
           <section class="panel-section">
             <h2>Browse by state</h2>
-            <label class="field-label" for="browseState">Bundesland</label>
-            <select id="browseState">
+            <select id="browseState" aria-label="Bundesland">
               <option value="all">All Bundeslaender</option>
             </select>
             <div id="stateHotspotList" class="hotspot-list"></div>
@@ -49,19 +40,6 @@
             <button id="settingsTab" class="tab-button" role="tab" type="button" aria-selected="false">Settings</button>
           </div>
           <div class="toolbar-actions" aria-label="Map display controls">
-            <div class="toolbar-group" role="group" aria-labelledby="mapLayerControls">
-              <span id="mapLayerControls" class="toolbar-group-label">Map layers</span>
-              <div class="toolbar-group-controls">
-                <label class="toggle-control">
-                  <input id="showBasemap" type="checkbox" checked />
-                  <span>OSM</span>
-                </label>
-                <label class="toggle-control">
-                  <input id="showTraffic" type="checkbox" checked />
-                  <span>Traffic</span>
-                </label>
-              </div>
-            </div>
             <div class="toolbar-group" role="group" aria-labelledby="severityControls">
               <span id="severityControls" class="toolbar-group-label">Accident severity</span>
               <div class="toolbar-group-controls">
@@ -85,7 +63,7 @@
         <section id="mapView" class="view active">
           <div class="map-wrap">
             <canvas id="mapCanvas" width="1200" height="760" aria-label="Dangerous intersections map"></canvas>
-            <a id="osmAttribution" class="osm-attribution" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer" hidden>
+            <a id="osmAttribution" class="osm-attribution" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">
               &copy; OpenStreetMap contributors
             </a>
             <button id="locateMeBtn" class="map-locate-button" type="button" title="Center map on your location" aria-label="Center map on your location">
@@ -99,14 +77,13 @@
               <div class="loading-panel" aria-live="polite">
                 <p class="loading-eyebrow">Automatic offline bundle</p>
                 <h2 id="mapLoadingTitle">Preparing data</h2>
-                <p id="mapLoadingStatus" class="loading-status">Checking bundled accident and traffic data.</p>
+                <p id="mapLoadingStatus" class="loading-status">Checking bundled accident data.</p>
                 <div class="loading-progress" aria-hidden="true">
                   <div id="mapLoadingBar" class="loading-progress-bar"></div>
                 </div>
                 <div class="loading-steps" aria-label="Loading steps">
                   <span class="loading-step active" data-loading-step="cache">Cache</span>
                   <span class="loading-step" data-loading-step="parse">Parse</span>
-                  <span class="loading-step" data-loading-step="traffic">Traffic</span>
                   <span class="loading-step" data-loading-step="rank">Rank</span>
                 </div>
               </div>
@@ -130,7 +107,6 @@
                   <th>Accidents</th>
                   <th>Clusters</th>
                   <th>Severity</th>
-                  <th>Matched</th>
                   <th>Top cluster</th>
                 </tr>
               </thead>
@@ -151,9 +127,7 @@
                   <th aria-sort="none"><button class="sort-button" type="button" data-cluster-sort="fatal"><span>Fatal</span><span class="sort-indicator" aria-hidden="true"></span></button></th>
                   <th aria-sort="none"><button class="sort-button" type="button" data-cluster-sort="serious"><span>Serious</span><span class="sort-indicator" aria-hidden="true"></span></button></th>
                   <th aria-sort="none"><button class="sort-button" type="button" data-cluster-sort="severity"><span>Severity</span><span class="sort-indicator" aria-hidden="true"></span></button></th>
-                  <th aria-sort="none"><button class="sort-button" type="button" data-cluster-sort="dtv"><span>DTV</span><span class="sort-indicator" aria-hidden="true"></span></button></th>
                   <th aria-sort="none"><button class="sort-button" type="button" data-cluster-sort="risk"><span>Risk</span><span class="sort-indicator" aria-hidden="true"></span></button></th>
-                  <th aria-sort="none"><button class="sort-button" type="button" data-cluster-sort="trafficDistance"><span>Traffic match</span><span class="sort-indicator" aria-hidden="true"></span></button></th>
                 </tr>
               </thead>
               <tbody id="clusterTableBody"></tbody>
@@ -164,28 +138,20 @@
         <section id="settingsView" class="view settings-view">
           <section class="settings-section">
             <h2>Data</h2>
-            <p class="source-note">Bundled CSV accident data and the Bundesstrassen traffic workbook load automatically from the offline data bundle.</p>
+            <p class="source-note">Bundled CSV accident data loads automatically from the offline data bundle.</p>
             <p class="source-note">
               Accident data:
               <a href="https://unfallatlas.statistikportal.de/" target="_blank" rel="noreferrer">Unfallatlas</a>
-              / Statistische Aemter des Bundes und der Laender. Traffic data:
-              <a href="https://www.bast.de/DE/Publikationen/Statistik/Verkehrsdaten/Manuelle-Zaehlung.html" target="_blank" rel="noreferrer">BASt manual traffic counts</a>.
+              / Statistische Aemter des Bundes und der Laender.
             </p>
             <p class="source-note">
               Reused under
               <a href="https://www.govdata.de/dl-de/by-2-0" target="_blank" rel="noreferrer">Datenlizenz Deutschland - Namensnennung - Version 2.0</a>
-              / dl-de/by-2-0. Source data is processed, clustered, matched, and scored by this app.
+              / dl-de/by-2-0. Source data is processed, clustered, and scored by this app.
             </p>
             <div class="button-row">
               <button id="loadBundledBtn" class="secondary-button" type="button">Reload data</button>
               <button id="clearBtn" class="secondary-button" type="button">Clear</button>
-            </div>
-          </section>
-
-          <section class="settings-section">
-            <h2>Actions</h2>
-            <div class="button-row">
-              <button id="resetMapBtn" class="secondary-button" type="button">Reset map</button>
               <button id="exportBtn" class="secondary-button" type="button">Export CSV</button>
             </div>
           </section>
@@ -195,26 +161,14 @@
             <label class="field-label" for="clusterRadius">Cluster radius (m)</label>
             <div class="range-row">
               <input id="clusterRadius" type="range" min="25" max="180" step="5" value="60" />
-              <input id="clusterRadiusOut" class="range-value-input" type="number" min="25" max="180" step="5" value="60" aria-label="Cluster radius in meters" />
-            </div>
-
-            <label class="field-label" for="matchRadius">Traffic match radius (m)</label>
-            <div class="range-row">
-              <input id="matchRadius" type="range" min="50" max="1000" step="25" value="300" />
-              <input id="matchRadiusOut" class="range-value-input" type="number" min="50" max="1000" step="25" value="300" aria-label="Traffic match radius in meters" />
+              <input id="clusterRadiusOut" class="range-value-input" type="number" min="25" max="180" step="5" value="60" autocomplete="off" aria-label="Cluster radius in meters" />
             </div>
 
             <label class="field-label" for="minAccidents">Minimum accidents</label>
-            <input id="minAccidents" class="number-input" type="number" min="1" max="50" value="2" />
+            <input id="minAccidents" class="number-input" type="number" min="1" max="50" value="2" autocomplete="off" />
 
             <label class="field-label" for="topCount">Top rows</label>
-            <input id="topCount" class="number-input" type="number" min="3" max="50" value="10" />
-
-            <label class="field-label" for="scoreMode">Rank by</label>
-            <select id="scoreMode">
-              <option value="absolute">Weighted severity</option>
-              <option value="exposure">Traffic-adjusted risk</option>
-            </select>
+            <input id="topCount" class="number-input" type="number" min="3" max="50" value="10" autocomplete="off" />
 
             <label class="field-label" for="stateFilter">Bundesland</label>
             <select id="stateFilter">

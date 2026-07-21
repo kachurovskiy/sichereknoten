@@ -1,4 +1,4 @@
-import { IntersectionCluster, TrafficPoint } from "./types";
+import { IntersectionCluster } from "./types";
 
 interface ProjectedPoint {
   x: number;
@@ -58,12 +58,9 @@ export class MapCanvas {
   private readonly context: CanvasRenderingContext2D;
   private clusters: IntersectionCluster[] = [];
   private projectedClusters: ProjectedCluster[] = [];
-  private traffic: TrafficPoint[] = [];
   private selected: IntersectionCluster | null = null;
   private userLocation: UserLocation | null = null;
   private maxDangerScore = 1;
-  private showTraffic = true;
-  private showBasemap = false;
   private severityFilters: SeverityFilters = { fatal: true, serious: true, other: false };
   private tileCache = new Map<string, TileRecord>();
   private tileUseCounter = 0;
@@ -95,34 +92,23 @@ export class MapCanvas {
     });
   }
 
-  setData(clusters: IntersectionCluster[], traffic: TrafficPoint[]): void {
+  setData(clusters: IntersectionCluster[]): void {
     this.clusters = clusters;
     this.maxDangerScore = Math.max(1, ...clusters.map((cluster) => cluster.dangerScore));
     this.projectedClusters = clusters
       .map((cluster) => ({ cluster, projected: project(cluster.lon, cluster.lat) }))
       .sort((a, b) => drawPriority(a.cluster, this.maxDangerScore) - drawPriority(b.cluster, this.maxDangerScore));
-    this.traffic = traffic;
-    this.selected = this.firstVisibleCluster();
+    this.selected = null;
     this.fit();
     this.draw();
-    this.onSelect(this.selected, "auto");
-  }
-
-  setShowTraffic(showTraffic: boolean): void {
-    this.showTraffic = showTraffic;
-    this.draw();
-  }
-
-  setShowBasemap(showBasemap: boolean): void {
-    this.showBasemap = showBasemap;
-    this.draw();
+    this.onSelect(null, "auto");
   }
 
   setSeverityFilters(filters: SeverityFilters): void {
     this.severityFilters = filters;
-    if (!this.selected || !this.shouldShowCluster(this.selected)) {
-      this.selected = this.firstVisibleCluster();
-      this.onSelect(this.selected, "auto");
+    if (this.selected && !this.shouldShowCluster(this.selected)) {
+      this.selected = null;
+      this.onSelect(null, "auto");
     }
     this.draw();
   }
@@ -322,8 +308,7 @@ export class MapCanvas {
   }
 
   private fit(): void {
-    const visibleProjectedClusters = this.projectedClusters.filter((point) => this.shouldShowCluster(point.cluster)).map((point) => point.projected);
-    const projected = visibleProjectedClusters.length > 0 ? visibleProjectedClusters : this.traffic.map((point) => project(point.lon, point.lat));
+    const projected = this.projectedClusters.filter((point) => this.shouldShowCluster(point.cluster)).map((point) => point.projected);
 
     if (projected.length === 0) {
       this.bounds = null;
@@ -358,14 +343,11 @@ export class MapCanvas {
     ctx.fillStyle = "#f4f1e8";
     ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
-    if (this.showBasemap && (this.bounds || this.userLocation)) {
+    if (this.bounds || this.userLocation) {
       this.drawBasemap();
     }
 
     if (this.bounds && this.clusters.length > 0) {
-      if (this.showTraffic) {
-        this.drawTrafficStations();
-      }
       this.drawClusters();
     }
 
@@ -445,21 +427,6 @@ export class MapCanvas {
     const deleteCount = this.tileCache.size - OSM_MAX_CACHED_TILES;
     for (const [key] of entries.slice(0, deleteCount)) {
       this.tileCache.delete(key);
-    }
-  }
-
-  private drawTrafficStations(): void {
-    const ctx = this.context;
-    const zoomLevel = this.markerZoomLevel();
-    ctx.fillStyle = `rgba(82, 91, 96, ${0.08 + zoomLevel * 0.18})`;
-    for (const point of this.traffic) {
-      const screen = this.screenPoint(point);
-      if (!this.isVisible(screen)) {
-        continue;
-      }
-      ctx.beginPath();
-      ctx.arc(screen.x, screen.y, (0.8 + zoomLevel * 1.4) * window.devicePixelRatio, 0, Math.PI * 2);
-      ctx.fill();
     }
   }
 
@@ -629,10 +596,6 @@ export class MapCanvas {
     }
 
     return visible;
-  }
-
-  private firstVisibleCluster(): IntersectionCluster | null {
-    return this.clusters.find((cluster) => this.shouldShowCluster(cluster)) ?? null;
   }
 
   private shouldShowCluster(cluster: IntersectionCluster): boolean {

@@ -5,17 +5,14 @@ import { readAnalysisCache, readParsedDataCache, writeAnalysisCache, writeParsed
 import { GeoGridIndex } from "./geo";
 import { MapCanvas } from "./mapCanvas";
 import { parseAccidentCsvFiles } from "./parsers/csv";
-import { parseTrafficWorkbook } from "./parsers/traffic";
 import { STATE_NAMES } from "./states";
 import {
   AccidentRecord,
+  AccidentTrendDirection,
   AnalysisOptions,
   AnalysisResult,
   ClusterYearStat,
-  IntersectionCluster,
-  RateTrendDirection,
-  ScoreMode,
-  TrafficPoint
+  IntersectionCluster
 } from "./types";
 
 const BUNDLED_CSV_FILES = [
@@ -25,7 +22,6 @@ const BUNDLED_CSV_FILES = [
   "data/csv/Unfallorte2024_LinRef.csv",
   "data/csv/Unfallorte_2025_LR_BasisDLM.csv"
 ];
-const BUNDLED_TRAFFIC_FILE = "data/Bundesstrassen-2021.xlsx";
 
 interface EmbeddedDataFile {
   path: string;
@@ -43,16 +39,14 @@ declare global {
 
 declare const __SICHERE_KNOTEN_APP_VERSION__: string | undefined;
 
-type ClusterSortKey = "rank" | "state" | "location" | "accidents" | "fatal" | "serious" | "severity" | "dtv" | "risk" | "trafficDistance";
+type ClusterSortKey = "rank" | "state" | "location" | "accidents" | "fatal" | "serious" | "severity" | "risk";
 type SortDirection = "asc" | "desc";
-type LoadingStepKey = "cache" | "parse" | "traffic" | "rank";
+type LoadingStepKey = "cache" | "parse" | "rank";
 type SeverityFilterKey = "fatal" | "serious" | "other";
 type ViewKey = "map" | "state" | "table" | "settings";
 type SelectionReason = "auto" | "program" | "user";
-const LOADING_STEP_ORDER: LoadingStepKey[] = ["cache", "parse", "traffic", "rank"];
+const LOADING_STEP_ORDER: LoadingStepKey[] = ["cache", "parse", "rank"];
 const APP_CACHE_VERSION = typeof __SICHERE_KNOTEN_APP_VERSION__ === "string" ? __SICHERE_KNOTEN_APP_VERSION__ : "dev";
-const OSM_FILE_PROTOCOL_MESSAGE =
-  "Direct file use may show partial OSM tiles because OpenStreetMap requires a Referer header. Use npm run serve:docs or GitHub Pages for complete tiles.";
 const ACCIDENT_CATEGORY_LABELS: Record<number, string> = {
   1: "Accident with persons killed",
   2: "Accident with seriously injured",
@@ -102,7 +96,6 @@ interface ClusterTableSort {
 interface TrendSeriesPoint extends ClusterYearStat {
   x: number;
   accidentY: number;
-  trafficY: number | null;
 }
 
 interface AnalysisCacheContext {
@@ -126,7 +119,6 @@ interface CrossingAccident {
 }
 
 let accidents: AccidentRecord[] = [];
-let traffic: TrafficPoint[] = [];
 let result: AnalysisResult | null = null;
 let selectedCluster: IntersectionCluster | null = null;
 let clusterTableSort: ClusterTableSort = { key: "rank", direction: "asc" };
@@ -143,22 +135,16 @@ const elements = {
   analyzeBtn: byId<HTMLButtonElement>("analyzeBtn"),
   clusterRadius: byId<HTMLInputElement>("clusterRadius"),
   clusterRadiusOut: byId<HTMLInputElement>("clusterRadiusOut"),
-  matchRadius: byId<HTMLInputElement>("matchRadius"),
-  matchRadiusOut: byId<HTMLInputElement>("matchRadiusOut"),
   minAccidents: byId<HTMLInputElement>("minAccidents"),
   topCount: byId<HTMLInputElement>("topCount"),
-  scoreMode: byId<HTMLSelectElement>("scoreMode"),
   stateFilter: byId<HTMLSelectElement>("stateFilter"),
   yearFilter: byId<HTMLDivElement>("yearFilter"),
-  progressBar: byId<HTMLDivElement>("progressBar"),
-  statusText: byId<HTMLParagraphElement>("statusText"),
   mapCanvas: byId<HTMLCanvasElement>("mapCanvas"),
   mapEmpty: byId<HTMLDivElement>("mapEmpty"),
   mapLoadingTitle: byId<HTMLHeadingElement>("mapLoadingTitle"),
   mapLoadingStatus: byId<HTMLParagraphElement>("mapLoadingStatus"),
   mapLoadingBar: byId<HTMLDivElement>("mapLoadingBar"),
   mapLoadingSteps: Array.from(document.querySelectorAll<HTMLElement>("[data-loading-step]")),
-  osmAttribution: byId<HTMLAnchorElement>("osmAttribution"),
   selectedAside: byId<HTMLElement>("selectedAside"),
   selectedMapActions: byId<HTMLDivElement>("selectedMapActions"),
   selectionDetails: byId<HTMLDivElement>("selectionDetails"),
@@ -176,55 +162,48 @@ const elements = {
   stateView: byId<HTMLElement>("stateView"),
   tableView: byId<HTMLElement>("tableView"),
   settingsView: byId<HTMLElement>("settingsView"),
-  showTraffic: byId<HTMLInputElement>("showTraffic"),
-  showBasemap: byId<HTMLInputElement>("showBasemap"),
   showFatalPoints: byId<HTMLInputElement>("showFatalPoints"),
   showSeriousPoints: byId<HTMLInputElement>("showSeriousPoints"),
   showOtherPoints: byId<HTMLInputElement>("showOtherPoints"),
   locateMeBtn: byId<HTMLButtonElement>("locateMeBtn"),
-  resetMapBtn: byId<HTMLButtonElement>("resetMapBtn"),
   exportBtn: byId<HTMLButtonElement>("exportBtn")
 };
 
 const map = new MapCanvas(elements.mapCanvas, handleClusterSelection);
 
+resetAnalysisControlsToDefaults();
 wireEvents();
 renderAll();
 void loadBundledData();
 
 function wireEvents(): void {
-  if (isDirectFilePage()) {
-    elements.showBasemap.title = OSM_FILE_PROTOCOL_MESSAGE;
-    elements.showBasemap.closest("label")?.setAttribute("title", OSM_FILE_PROTOCOL_MESSAGE);
-  }
-
   elements.loadBundledBtn.addEventListener("click", () => void loadBundledData());
   elements.clearBtn.addEventListener("click", clearData);
   elements.analyzeBtn.addEventListener("click", () => runAnalysis());
   elements.exportBtn.addEventListener("click", exportClusters);
 
   wireLinkedNumberRange(elements.clusterRadius, elements.clusterRadiusOut, markAnalysisSettingsDirty);
-  wireLinkedNumberRange(elements.matchRadius, elements.matchRadiusOut, markAnalysisSettingsDirty);
 
-  [elements.minAccidents, elements.scoreMode, elements.stateFilter].forEach((input) => {
-    input.addEventListener("input", markAnalysisSettingsDirty);
-    input.addEventListener("change", markAnalysisSettingsDirty);
-  });
+  wireClampedNumberInput(elements.minAccidents, markAnalysisSettingsDirty);
+
+  elements.stateFilter.addEventListener("input", markAnalysisSettingsDirty);
+  elements.stateFilter.addEventListener("change", markAnalysisSettingsDirty);
 
   elements.topCount.addEventListener("input", () => {
     if (result) {
       renderTables();
     }
   });
+  elements.topCount.addEventListener("change", () => {
+    normalizeNumberInput(elements.topCount);
+    if (result) {
+      renderTables();
+    }
+  });
 
-  elements.showTraffic.addEventListener("change", () => map.setShowTraffic(elements.showTraffic.checked));
   [elements.showFatalPoints, elements.showSeriousPoints, elements.showOtherPoints].forEach((input) => {
     input.addEventListener("change", applySeverityFilter);
   });
-  elements.showBasemap.addEventListener("change", () => {
-    applyBasemapSetting(true);
-  });
-  elements.resetMapBtn.addEventListener("click", () => map.reset());
   elements.locateMeBtn.addEventListener("click", () => locateUser({ selectNearest: false }));
   elements.findNearbyBtn.addEventListener("click", () => locateUser({ selectNearest: true }));
   elements.browseState.addEventListener("change", renderExplore);
@@ -269,12 +248,44 @@ function wireLinkedNumberRange(range: HTMLInputElement, numberInput: HTMLInputEl
   });
 }
 
+function wireClampedNumberInput(input: HTMLInputElement, onDraftChange: () => void): void {
+  input.addEventListener("input", onDraftChange);
+  input.addEventListener("change", () => {
+    normalizeNumberInput(input);
+    onDraftChange();
+  });
+}
+
+function resetAnalysisControlsToDefaults(): void {
+  resetInputToDefault(elements.clusterRadius);
+  resetInputToDefault(elements.clusterRadiusOut);
+  resetInputToDefault(elements.minAccidents);
+  resetInputToDefault(elements.topCount);
+  normalizeLinkedNumberRange(elements.clusterRadius, elements.clusterRadiusOut);
+  normalizeNumberInput(elements.minAccidents);
+  normalizeNumberInput(elements.topCount);
+}
+
+function resetInputToDefault(input: HTMLInputElement): void {
+  if (input.defaultValue !== "") {
+    input.value = input.defaultValue;
+  }
+}
+
 function normalizeLinkedNumberRange(range: HTMLInputElement, numberInput: HTMLInputElement): void {
   const fallback = Number(range.value);
   const value = Number.isFinite(Number(numberInput.value)) ? Number(numberInput.value) : fallback;
   const normalized = clampNumber(value, inputMin(numberInput), inputMax(numberInput));
   numberInput.value = String(normalized);
   range.value = String(normalized);
+}
+
+function normalizeNumberInput(input: HTMLInputElement): number {
+  const fallback = Number.isFinite(Number(input.defaultValue)) ? Number(input.defaultValue) : inputMin(input);
+  const value = Number.isFinite(Number(input.value)) ? Number(input.value) : fallback;
+  const normalized = Math.trunc(clampNumber(value, inputMin(input), inputMax(input)));
+  input.value = String(normalized);
+  return normalized;
 }
 
 function markAnalysisSettingsDirty(): void {
@@ -293,7 +304,6 @@ async function loadBundledData(): Promise<void> {
   let analysisStarted = false;
   try {
     accidents = [];
-    traffic = [];
     result = null;
     selectedCluster = null;
     activeAnalysisOptions = null;
@@ -310,17 +320,16 @@ async function loadBundledData(): Promise<void> {
     const cached = await readParsedDataCache(dataVersion, setStatus);
     if (cached) {
       accidents = cached.accidents;
-      traffic = cached.traffic;
       crossingAccidentIndexCache = null;
       accidentKeyLookupCache = null;
       populateFilters();
-      setStatus(`${accidents.length.toLocaleString()} accidents and ${traffic.length.toLocaleString()} traffic points loaded from cache.`, 66);
+      setStatus(`${accidents.length.toLocaleString()} accidents loaded from cache.`, 66);
       analysisStarted = true;
       runAnalysis();
       return;
     }
 
-    setStatus("Cache miss. Parsing bundled CSV files and workbook.", 10);
+    setStatus("Cache miss. Parsing bundled CSV files.", 10);
     const loadedAccidents: AccidentRecord[] = [];
     for (const [index, path] of BUNDLED_CSV_FILES.entries()) {
       const blob = await readBundledBlob(path);
@@ -337,14 +346,8 @@ async function loadBundledData(): Promise<void> {
     }
     setStatus(`${accidents.length.toLocaleString()} accident records loaded.`, 60);
 
-    const trafficBlob = await readBundledBlob(BUNDLED_TRAFFIC_FILE);
-    const trafficFile = new File([trafficBlob], "Bundesstrassen-2021.xlsx", {
-      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    });
-    traffic = await parseTrafficWorkbook(trafficFile, (progress) => setStatus(progress.message ?? `Parsing ${progress.label}`, 58));
-    setStatus(`${traffic.length.toLocaleString()} traffic count points loaded.`, 61);
     try {
-      await writeParsedDataCache(dataVersion, accidents, traffic, setStatus);
+      await writeParsedDataCache(dataVersion, accidents, setStatus);
       setStatus("Parsed data cached for future refreshes.", 74);
     } catch (error) {
       setStatus(`Parsed data loaded. Cache write skipped: ${errorMessage(error)}`, 74);
@@ -387,27 +390,6 @@ async function loadAccidentCsv(files: File[], replace: boolean, manageBusy = tru
   }
 }
 
-async function loadTraffic(file: File, manageBusy = true): Promise<void> {
-  if (manageBusy) {
-    setBusy(true);
-  }
-  try {
-    traffic = await parseTrafficWorkbook(file, (progress) => setStatus(progress.message ?? `Parsing ${progress.label}`, 55));
-    result = null;
-    selectedCluster = null;
-    activeAnalysisOptions = null;
-    setStatus(`${traffic.length.toLocaleString()} traffic count points loaded.`, 100);
-    activeDataVersion = null;
-  } catch (error) {
-    setStatus(errorMessage(error), 0);
-  } finally {
-    if (manageBusy) {
-      setBusy(false);
-    }
-    renderAll();
-  }
-}
-
 function runAnalysis(): void {
   if (accidents.length === 0) {
     setStatus("Load accident data first.", 0);
@@ -415,7 +397,6 @@ function runAnalysis(): void {
   }
 
   normalizeLinkedNumberRange(elements.clusterRadius, elements.clusterRadiusOut);
-  normalizeLinkedNumberRange(elements.matchRadius, elements.matchRadiusOut);
   const options = readOptions();
   const cacheContext = activeDataVersion ? { dataVersion: activeDataVersion, appVersion: APP_CACHE_VERSION } : null;
   setBusy(true);
@@ -429,7 +410,7 @@ async function runAnalysisWithCache(options: AnalysisOptions, cacheContext: Anal
       const cached = await readAnalysisCache(cacheContext.dataVersion, cacheContext.appVersion, options);
       if (cached) {
         result = cached;
-        selectedCluster = result.clusters[0] ?? null;
+        selectedCluster = null;
         activeAnalysisOptions = cloneAnalysisOptions(options);
         crossingAccidentIndexCache = null;
         accidentKeyLookupCache = null;
@@ -442,8 +423,8 @@ async function runAnalysisWithCache(options: AnalysisOptions, cacheContext: Anal
 
     setStatus("Analyzing intersections.", 75);
     await yieldToBrowser();
-    result = analyzeDangerousIntersections(accidents, traffic, options);
-    selectedCluster = result.clusters[0] ?? null;
+    result = analyzeDangerousIntersections(accidents, options);
+    selectedCluster = null;
     activeAnalysisOptions = cloneAnalysisOptions(options);
     crossingAccidentIndexCache = null;
     accidentKeyLookupCache = null;
@@ -477,11 +458,9 @@ function readOptions(): AnalysisOptions {
 
   return {
     clusterRadiusMeters: Number(elements.clusterRadiusOut.value),
-    matchRadiusMeters: Number(elements.matchRadiusOut.value),
-    minAccidents: Math.max(1, Number(elements.minAccidents.value) || 1),
+    minAccidents: normalizeNumberInput(elements.minAccidents),
     years,
-    stateCode: elements.stateFilter.value as AnalysisOptions["stateCode"],
-    scoreMode: elements.scoreMode.value as ScoreMode
+    stateCode: elements.stateFilter.value as AnalysisOptions["stateCode"]
   };
 }
 
@@ -528,11 +507,9 @@ function renderAll(): void {
   updateRangeOutputs();
   renderTables();
   renderExplore();
-  applyBasemapSetting(false);
-  map.setShowTraffic(elements.showTraffic.checked);
   applySeverityFilter();
   if (result) {
-    map.setData(result.clusters, traffic);
+    map.setData(result.clusters);
     elements.mapEmpty.hidden = result.clusters.length > 0;
   } else {
     elements.mapEmpty.hidden = false;
@@ -605,22 +582,6 @@ function setLocateBusy(isBusy: boolean): void {
   elements.findNearbyBtn.setAttribute("aria-busy", String(isBusy));
 }
 
-function applyBasemapSetting(notify: boolean): void {
-  if (notify && elements.showBasemap.checked && isDirectFilePage()) {
-    setStatus(OSM_FILE_PROTOCOL_MESSAGE, 100);
-  }
-  map.setShowBasemap(elements.showBasemap.checked);
-  updateOsmAttribution();
-}
-
-function updateOsmAttribution(): void {
-  elements.osmAttribution.hidden = !elements.showBasemap.checked;
-}
-
-function isDirectFilePage(): boolean {
-  return window.location.protocol === "file:";
-}
-
 function geolocationErrorMessage(error: GeolocationPositionError): string {
   switch (error.code) {
     case error.PERMISSION_DENIED:
@@ -649,7 +610,6 @@ function renderTables(): void {
       <td>${summary.accidentCount.toLocaleString()}</td>
       <td>${summary.clusterCount.toLocaleString()}</td>
       <td>${formatNumber(summary.severityPoints)}</td>
-      <td>${summary.clusterCount ? Math.round((summary.matchedClusterCount / summary.clusterCount) * 100) : 0}%</td>
       <td>${summary.topCluster ? clusterLocation(summary.topCluster) : ""}</td>
     `;
     if (summary.topCluster) {
@@ -661,7 +621,7 @@ function renderTables(): void {
     elements.stateTableBody.append(row);
   }
 
-  const topCount = Math.max(3, Number(elements.topCount.value) || 10);
+  const topCount = normalizeNumberInput(elements.topCount);
   const clusters = clustersForTable(result.clusters, topCount);
   for (const cluster of clusters) {
     const row = document.createElement("tr");
@@ -674,9 +634,7 @@ function renderTables(): void {
       <td>${cluster.fatalCount.toLocaleString()}</td>
       <td>${cluster.seriousCount.toLocaleString()}</td>
       <td>${formatNumber(cluster.severityPoints)}</td>
-      <td>${cluster.trafficMatch?.point.dtv ? formatNumber(cluster.trafficMatch.point.dtv) : "No match"}</td>
       <td>${formatNumber(cluster.dangerScore)}</td>
-      <td>${cluster.trafficMatch ? `${Math.round(cluster.trafficMatch.distanceMeters)} m` : ""}</td>
     `;
     row.addEventListener("click", () => {
       setView("map");
@@ -761,17 +719,13 @@ function clusterSortValue(cluster: IntersectionCluster, key: ClusterSortKey): nu
       return cluster.seriousCount;
     case "severity":
       return cluster.severityPoints;
-    case "dtv":
-      return cluster.trafficMatch?.point.dtv ?? null;
     case "risk":
       return cluster.dangerScore;
-    case "trafficDistance":
-      return cluster.trafficMatch?.distanceMeters ?? null;
   }
 }
 
 function defaultClusterSortDirection(key: ClusterSortKey): SortDirection {
-  return key === "rank" || key === "state" || key === "location" || key === "trafficDistance" ? "asc" : "desc";
+  return key === "rank" || key === "state" || key === "location" ? "asc" : "desc";
 }
 
 function updateClusterSortHeaders(): void {
@@ -811,7 +765,7 @@ function renderNearbyList(): void {
 
   const nearby = nearbyClusters(6);
   if (nearby.length === 0) {
-    elements.nearbyList.append(emptyHotspotMessage("No visible fatal or serious intersections found near this location."));
+    elements.nearbyList.append(emptyHotspotMessage("No intersections match the active severity filters near this location."));
     return;
   }
 
@@ -828,12 +782,15 @@ function renderStateHotspotList(): void {
   }
 
   const stateCode = elements.browseState.value;
-  const clusters = visibleSeverityClusters()
-    .filter((cluster) => stateCode === "all" || cluster.stateCode === stateCode)
-    .slice(0, 8);
+  const clusters =
+    stateCode === "all"
+      ? topClusterByState()
+      : (result?.clusters ?? [])
+          .filter((cluster) => cluster.stateCode === stateCode)
+          .slice(0, 8);
 
   if (clusters.length === 0) {
-    elements.stateHotspotList.append(emptyHotspotMessage("No intersections match the active severity filters."));
+    elements.stateHotspotList.append(emptyHotspotMessage("No intersections match the active analysis settings."));
     return;
   }
 
@@ -842,18 +799,21 @@ function renderStateHotspotList(): void {
   });
 }
 
+function topClusterByState(): IntersectionCluster[] {
+  return (result?.stateSummaries ?? [])
+    .flatMap((summary) => (summary.topCluster ? [summary.topCluster] : []))
+    .sort((a, b) => a.stateName.localeCompare(b.stateName, "de", { sensitivity: "base" }));
+}
+
 function hotspotButton(cluster: IntersectionCluster, displayRank: number, context: string): HTMLButtonElement {
   const button = document.createElement("button");
-  const title = crossingListTitle(cluster, context);
-  const contextHtml = title === context ? "" : `<span class="hotspot-context">${escapeHtml(context)}</span>`;
   button.type = "button";
   button.className = "hotspot-button";
   button.classList.toggle("selected", selectedCluster?.id === cluster.id);
   button.innerHTML = `
     <span class="hotspot-rank">${displayRank}</span>
     <span class="hotspot-main">
-      <span class="hotspot-title">${escapeHtml(title)}</span>
-      ${contextHtml}
+      <span class="hotspot-title">${escapeHtml(context)}</span>
       <span class="hotspot-stats">
         <span class="hotspot-stat hotspot-stat-total"><strong>${cluster.accidentCount.toLocaleString()}</strong> ${pluralNoun(cluster.accidentCount, "accident")}</span>
         <span class="hotspot-stat"><strong>${cluster.fatalCount.toLocaleString()}</strong> fatal</span>
@@ -866,37 +826,6 @@ function hotspotButton(cluster: IntersectionCluster, displayRank: number, contex
     map.select(cluster, true);
   });
   return button;
-}
-
-function crossingListTitle(cluster: IntersectionCluster, fallbackTitle: string): string {
-  if (cluster.trafficMatch) {
-    const trafficLabel = trafficPointTitle(cluster.trafficMatch.point);
-    if (trafficLabel) {
-      return trafficLabel;
-    }
-  }
-  return fallbackTitle;
-}
-
-function trafficPointTitle(point: TrafficPoint): string {
-  const road = point.road.trim();
-  const from = point.from.trim();
-  const to = point.to.trim();
-  const station = point.stationNo.trim();
-
-  if (road && from && to && from !== to) {
-    return `${road}: ${from} - ${to}`;
-  }
-  if (road && station) {
-    return `${road} station ${station}`;
-  }
-  if (road) {
-    return road;
-  }
-  if (from && to && from !== to) {
-    return `${from} - ${to}`;
-  }
-  return "";
 }
 
 function pluralNoun(count: number, singular: string, plural = `${singular}s`): string {
@@ -971,11 +900,6 @@ function renderSelection(cluster: IntersectionCluster | null): void {
   elements.selectedAside.hidden = false;
   elements.selectedMapActions.hidden = false;
   elements.mapView.classList.add("has-selection");
-  const trafficDetails = cluster.trafficMatch
-    ? `${cluster.trafficMatch.point.road} ${cluster.trafficMatch.point.stationNo}, ${Math.round(
-        cluster.trafficMatch.distanceMeters
-      )} m, DTV ${cluster.trafficMatch.point.dtv ? formatNumber(cluster.trafficMatch.point.dtv) : "unknown"}`
-    : "No traffic match";
   const lat = cluster.lat.toFixed(6);
   const lon = cluster.lon.toFixed(6);
   const openStreetMapUrl = `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lon}#map=18/${lat}/${lon}`;
@@ -995,7 +919,6 @@ function renderSelection(cluster: IntersectionCluster | null): void {
       <div><dt>Vulnerable users</dt><dd>${cluster.vulnerableCount.toLocaleString()}</dd></div>
       <div><dt>Severity</dt><dd>${formatNumber(cluster.severityPoints)}</dd></div>
       <div><dt>Risk score</dt><dd>${formatNumber(cluster.dangerScore)}</dd></div>
-      <div><dt>Traffic</dt><dd>${escapeHtml(trafficDetails)}</dd></div>
     </dl>
     ${trendPanel}
     ${recordPanel}
@@ -1329,79 +1252,57 @@ function accidentKey(accident: AccidentRecord): string {
 function renderTrendPanel(cluster: IntersectionCluster): string {
   const years = result?.years.length ? result.years : cluster.years;
   const series = clusterTrendSeries(cluster, years);
-  const trend = cluster.accidentsPerVehicleTrend;
+  const trend = cluster.accidentTrend;
   const trendLabel = trendDirectionLabel(trend.direction);
   const relativeSlope = trend.relativeSlopePerYear === null ? "" : ` ${formatSignedPercent(trend.relativeSlopePerYear)}/yr`;
-  const latestRate = [...series].reverse().find((point) => point.accidentsPerMillionVehicles !== null)?.accidentsPerMillionVehicles ?? null;
-  const rateText = latestRate === null ? "No traffic rate" : `${formatRate(latestRate)} latest`;
-  const footnote = series.some((point) => point.trafficDtv !== null) ? "Traffic DTV uses the matched 2021 count." : "No matched traffic count.";
+  const latestAccidents = [...series].reverse().find((point) => point.accidentCount > 0)?.accidentCount ?? 0;
 
   return `
     <section class="trend-panel" aria-label="Selected intersection trend">
       <div class="trend-summary">
-        <span>Accidents / 1M vehicles</span>
+        <span>Accident trend</span>
         <strong class="trend-value ${trendClassName(trend.direction)}">${trendLabel}${relativeSlope}</strong>
-        <small>${escapeHtml(rateText)}</small>
+        <small>${latestAccidents.toLocaleString()} latest</small>
       </div>
       ${renderTrendChart(series, trend.direction)}
       <div class="trend-legend">
         <span class="legend-accidents">Accidents</span>
-        ${series.some((point) => point.trafficDtv !== null) ? `<span class="legend-traffic">Traffic DTV</span>` : ""}
       </div>
-      <p class="trend-note">${escapeHtml(footnote)}</p>
+      <p class="trend-note">Selected years with no accidents count as zero.</p>
     </section>
   `;
 }
 
 function clusterTrendSeries(cluster: IntersectionCluster, years: number[]): ClusterYearStat[] {
   const byYear = new Map(cluster.yearlyStats.map((stats) => [stats.year, stats]));
-  const trafficDtv = cluster.trafficMatch?.point.dtv && cluster.trafficMatch.point.dtv > 0 ? cluster.trafficMatch.point.dtv : null;
 
   return years.map((year) => {
     const existing = byYear.get(year);
     if (existing) {
       return existing;
     }
-    const estimatedVehicles = trafficDtv ? Math.round(trafficDtv * daysInYear(year)) : null;
     return {
       year,
       accidentCount: 0,
-      severityPoints: 0,
-      trafficDtv,
-      estimatedVehicles,
-      accidentsPerMillionVehicles: estimatedVehicles ? 0 : null
+      severityPoints: 0
     };
   });
 }
 
-function renderTrendChart(series: ClusterYearStat[], direction: RateTrendDirection): string {
+function renderTrendChart(series: ClusterYearStat[], direction: AccidentTrendDirection): string {
   if (series.length === 0) {
     return "";
   }
 
   const chart = { left: 24, top: 12, width: 232, height: 80, bottom: 92 };
   const maxAccidents = Math.max(1, ...series.map((point) => point.accidentCount));
-  const trafficValues = series.map((point) => point.trafficDtv).filter((value): value is number => value !== null && value > 0);
-  const minTraffic = trafficValues.length ? Math.min(...trafficValues) : 0;
-  const maxTraffic = trafficValues.length ? Math.max(...trafficValues) : 0;
-  const trafficSpan = maxTraffic - minTraffic;
 
   const plotted = series.map((point, index): TrendSeriesPoint => {
     const x = series.length === 1 ? chart.left + chart.width / 2 : chart.left + (index / (series.length - 1)) * chart.width;
     const accidentY = chart.bottom - (point.accidentCount / maxAccidents) * chart.height;
-    const trafficY =
-      point.trafficDtv === null
-        ? null
-        : trafficSpan === 0
-          ? chart.top + chart.height * 0.28
-          : chart.bottom - ((point.trafficDtv - minTraffic) / trafficSpan) * chart.height;
-    return { ...point, x, accidentY, trafficY };
+    return { ...point, x, accidentY };
   });
   const accidentPath = linePath(plotted.map((point) => ({ x: point.x, y: point.accidentY })));
-  const trafficPoints = plotted
-    .filter((point) => point.trafficY !== null)
-    .map((point) => ({ x: point.x, y: point.trafficY ?? chart.top }));
-  const trafficPath = linePath(trafficPoints);
   const yearLabels = plotted
     .map((point) => `<text class="chart-year" x="${round(point.x, 1)}" y="126">${point.year}</text>`)
     .join("");
@@ -1411,22 +1312,13 @@ function renderTrendChart(series: ClusterYearStat[], direction: RateTrendDirecti
         `<circle class="chart-dot chart-dot-accident" cx="${round(point.x, 1)}" cy="${round(point.accidentY, 1)}" r="2.6"><title>${point.year}: ${point.accidentCount} accidents</title></circle>`
     )
     .join("");
-  const trafficDots = plotted
-    .filter((point) => point.trafficY !== null)
-    .map(
-      (point) =>
-        `<circle class="chart-dot chart-dot-traffic" cx="${round(point.x, 1)}" cy="${round(point.trafficY ?? chart.top, 1)}" r="2.3"><title>${point.year}: DTV ${formatNumber(point.trafficDtv ?? 0)}</title></circle>`
-    )
-    .join("");
 
   return `
-    <svg class="trend-chart" viewBox="0 0 280 136" role="img" aria-label="Accident and traffic trend, ${trendDirectionLabel(direction).toLowerCase()}">
+    <svg class="trend-chart" viewBox="0 0 280 136" role="img" aria-label="Accident trend, ${trendDirectionLabel(direction).toLowerCase()}">
       <line class="chart-grid" x1="24" y1="12" x2="256" y2="12"></line>
       <line class="chart-grid" x1="24" y1="52" x2="256" y2="52"></line>
       <line class="chart-axis" x1="24" y1="92" x2="256" y2="92"></line>
-      ${trafficPath ? `<path class="chart-line chart-line-traffic" d="${trafficPath}"></path>` : ""}
       ${accidentPath ? `<path class="chart-line chart-line-accidents" d="${accidentPath}"></path>` : ""}
-      ${trafficDots}
       ${accidentDots}
       ${yearLabels}
     </svg>
@@ -1440,7 +1332,7 @@ function linePath(points: Array<{ x: number; y: number }>): string {
   return points.map((point, index) => `${index === 0 ? "M" : "L"}${round(point.x, 1)} ${round(point.y, 1)}`).join(" ");
 }
 
-function trendDirectionLabel(direction: RateTrendDirection): string {
+function trendDirectionLabel(direction: AccidentTrendDirection): string {
   switch (direction) {
     case "falling":
       return "Falling";
@@ -1449,11 +1341,11 @@ function trendDirectionLabel(direction: RateTrendDirection): string {
     case "stable":
       return "Stable";
     case "unknown":
-      return "No rate";
+      return "No trend";
   }
 }
 
-function trendClassName(direction: RateTrendDirection): string {
+function trendClassName(direction: AccidentTrendDirection): string {
   return `trend-${direction}`;
 }
 
@@ -1475,12 +1367,10 @@ function setView(view: ViewKey): void {
 
 function updateRangeOutputs(): void {
   elements.clusterRadiusOut.value = elements.clusterRadius.value;
-  elements.matchRadiusOut.value = elements.matchRadius.value;
 }
 
 function clearData(): void {
   accidents = [];
-  traffic = [];
   result = null;
   selectedCluster = null;
   userLocation = null;
@@ -1509,11 +1399,7 @@ function exportClusters(): void {
     "fatal",
     "serious",
     "severity_points",
-    "danger_score",
-    "dtv",
-    "traffic_distance_m",
-    "traffic_road",
-    "traffic_station"
+    "danger_score"
   ];
   const rows = result.clusters.map((cluster) =>
     [
@@ -1525,11 +1411,7 @@ function exportClusters(): void {
       cluster.fatalCount,
       cluster.seriousCount,
       cluster.severityPoints,
-      cluster.dangerScore,
-      cluster.trafficMatch?.point.dtv ?? "",
-      cluster.trafficMatch ? Math.round(cluster.trafficMatch.distanceMeters) : "",
-      cluster.trafficMatch?.point.road ?? "",
-      cluster.trafficMatch?.point.stationNo ?? ""
+      cluster.dangerScore
     ]
       .map(csvCell)
       .join(",")
@@ -1549,10 +1431,6 @@ function clusterLocation(cluster: IntersectionCluster): string {
 }
 
 function clusterLocationText(cluster: IntersectionCluster): string {
-  if (cluster.trafficMatch) {
-    const point = cluster.trafficMatch.point;
-    return `${point.road || "Road"} ${point.from ? `${point.from} to ${point.to}` : point.stationNo}`;
-  }
   return `${cluster.lat.toFixed(5)}, ${cluster.lon.toFixed(5)}`;
 }
 
@@ -1567,11 +1445,8 @@ function setAnalysisControlsDisabled(isDisabled: boolean): void {
   const controls: HTMLElement[] = [
     elements.clusterRadius,
     elements.clusterRadiusOut,
-    elements.matchRadius,
-    elements.matchRadiusOut,
     elements.minAccidents,
     elements.topCount,
-    elements.scoreMode,
     elements.stateFilter
   ];
   elements.yearFilter.querySelectorAll<HTMLInputElement>("input").forEach((input) => controls.push(input));
@@ -1590,8 +1465,6 @@ function updateAnalyzeButton(): void {
 
 function setStatus(message: string, progress: number): void {
   const normalizedProgress = Math.max(0, Math.min(100, progress));
-  elements.statusText.textContent = message;
-  elements.progressBar.style.width = `${normalizedProgress}%`;
   updateMapLoadingPanel(message, normalizedProgress);
 }
 
@@ -1622,9 +1495,6 @@ function loadingStepForProgress(progress: number): LoadingStepKey {
   if (progress >= 75) {
     return "rank";
   }
-  if (progress >= 58) {
-    return "traffic";
-  }
   if (progress >= 10) {
     return "parse";
   }
@@ -1649,8 +1519,6 @@ function loadingTitle(step: LoadingStepKey, progress: number, isProblem: boolean
       return "Checking data cache";
     case "parse":
       return "Parsing accident records";
-    case "traffic":
-      return "Loading traffic data";
     case "rank":
       return "Ranking intersections";
   }
@@ -1664,7 +1532,7 @@ function bundledDataVersion(): string {
   if (bundle?.files.length) {
     return `legacy:${bundle.files.map((file) => `${file.path}:${file.size}:${file.compressedSize}`).join("|")}`;
   }
-  return `fetch:${BUNDLED_CSV_FILES.join("|")}:${BUNDLED_TRAFFIC_FILE}`;
+  return `fetch:${BUNDLED_CSV_FILES.join("|")}`;
 }
 
 async function readBundledBlob(path: string): Promise<Blob> {
@@ -1769,10 +1637,6 @@ function formatNumber(value: number): string {
   return new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(value);
 }
 
-function formatRate(value: number): string {
-  return new Intl.NumberFormat("en-US", { maximumFractionDigits: 3 }).format(value);
-}
-
 function formatSignedPercent(value: number): string {
   return `${value > 0 ? "+" : ""}${new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 }).format(value * 100)}%`;
 }
@@ -1800,10 +1664,6 @@ function distanceMeters(a: { lat: number; lon: number }, b: { lat: number; lon: 
 
 function radians(degrees: number): number {
   return (degrees * Math.PI) / 180;
-}
-
-function daysInYear(year: number): number {
-  return new Date(year, 1, 29).getMonth() === 1 ? 366 : 365;
 }
 
 function inputMin(input: HTMLInputElement): number {
