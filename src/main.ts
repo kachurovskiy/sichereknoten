@@ -2,6 +2,7 @@ import "./styles.css";
 import { gunzipSync } from "fflate";
 import { analyzeDangerousIntersections } from "./analysis";
 import { readAnalysisCache, readParsedDataCache, writeAnalysisCache, writeParsedDataCache } from "./cache";
+import { GeoGridIndex } from "./geo";
 import { MapCanvas } from "./mapCanvas";
 import { parseAccidentCsvFiles } from "./parsers/csv";
 import { parseTrafficWorkbook } from "./parsers/traffic";
@@ -45,6 +46,9 @@ declare const __SICHERE_KNOTEN_APP_VERSION__: string | undefined;
 type ClusterSortKey = "rank" | "state" | "location" | "accidents" | "fatal" | "serious" | "severity" | "dtv" | "risk" | "trafficDistance";
 type SortDirection = "asc" | "desc";
 type LoadingStepKey = "cache" | "parse" | "traffic" | "rank";
+type SeverityFilterKey = "fatal" | "serious" | "other";
+type ViewKey = "map" | "state" | "table" | "settings";
+type SelectionReason = "auto" | "program" | "user";
 const LOADING_STEP_ORDER: LoadingStepKey[] = ["cache", "parse", "traffic", "rank"];
 const APP_CACHE_VERSION = typeof __SICHERE_KNOTEN_APP_VERSION__ === "string" ? __SICHERE_KNOTEN_APP_VERSION__ : "dev";
 const OSM_FILE_PROTOCOL_MESSAGE =
@@ -66,6 +70,21 @@ interface AnalysisCacheContext {
   appVersion: string;
 }
 
+interface AccidentIndexCache {
+  key: string;
+  index: GeoGridIndex<AccidentRecord>;
+}
+
+interface AccidentKeyLookupCache {
+  source: AccidentRecord[];
+  map: Map<string, AccidentRecord>;
+}
+
+interface CrossingAccident {
+  accident: AccidentRecord;
+  distanceMeters: number;
+}
+
 let accidents: AccidentRecord[] = [];
 let traffic: TrafficPoint[] = [];
 let result: AnalysisResult | null = null;
@@ -73,6 +92,10 @@ let selectedCluster: IntersectionCluster | null = null;
 let clusterTableSort: ClusterTableSort = { key: "rank", direction: "asc" };
 let analysisSettingsDirty = false;
 let activeDataVersion: string | null = null;
+let userLocation: { lat: number; lon: number; accuracyMeters: number | null } | null = null;
+let activeAnalysisOptions: AnalysisOptions | null = null;
+let crossingAccidentIndexCache: AccidentIndexCache | null = null;
+let accidentKeyLookupCache: AccidentKeyLookupCache | null = null;
 
 const elements = {
   loadBundledBtn: byId<HTMLButtonElement>("loadBundledBtn"),
@@ -89,10 +112,6 @@ const elements = {
   yearFilter: byId<HTMLDivElement>("yearFilter"),
   progressBar: byId<HTMLDivElement>("progressBar"),
   statusText: byId<HTMLParagraphElement>("statusText"),
-  metricAccidents: byId<HTMLElement>("metricAccidents"),
-  metricClusters: byId<HTMLElement>("metricClusters"),
-  metricMatched: byId<HTMLElement>("metricMatched"),
-  metricTopScore: byId<HTMLElement>("metricTopScore"),
   mapCanvas: byId<HTMLCanvasElement>("mapCanvas"),
   mapEmpty: byId<HTMLDivElement>("mapEmpty"),
   mapLoadingTitle: byId<HTMLHeadingElement>("mapLoadingTitle"),
@@ -100,15 +119,23 @@ const elements = {
   mapLoadingBar: byId<HTMLDivElement>("mapLoadingBar"),
   mapLoadingSteps: Array.from(document.querySelectorAll<HTMLElement>("[data-loading-step]")),
   osmAttribution: byId<HTMLAnchorElement>("osmAttribution"),
+  selectedAside: byId<HTMLElement>("selectedAside"),
+  selectedMapActions: byId<HTMLDivElement>("selectedMapActions"),
   selectionDetails: byId<HTMLDivElement>("selectionDetails"),
+  findNearbyBtn: byId<HTMLButtonElement>("findNearbyBtn"),
+  nearbyList: byId<HTMLDivElement>("nearbyList"),
+  browseState: byId<HTMLSelectElement>("browseState"),
+  stateHotspotList: byId<HTMLDivElement>("stateHotspotList"),
   stateTableBody: byId<HTMLTableSectionElement>("stateTableBody"),
   clusterTableBody: byId<HTMLTableSectionElement>("clusterTableBody"),
   mapTab: byId<HTMLButtonElement>("mapTab"),
   stateTab: byId<HTMLButtonElement>("stateTab"),
   tableTab: byId<HTMLButtonElement>("tableTab"),
+  settingsTab: byId<HTMLButtonElement>("settingsTab"),
   mapView: byId<HTMLElement>("mapView"),
   stateView: byId<HTMLElement>("stateView"),
   tableView: byId<HTMLElement>("tableView"),
+  settingsView: byId<HTMLElement>("settingsView"),
   showTraffic: byId<HTMLInputElement>("showTraffic"),
   showBasemap: byId<HTMLInputElement>("showBasemap"),
   showFatalPoints: byId<HTMLInputElement>("showFatalPoints"),
@@ -121,10 +148,7 @@ const elements = {
   exportBtn: byId<HTMLButtonElement>("exportBtn")
 };
 
-const map = new MapCanvas(elements.mapCanvas, (cluster) => {
-  selectedCluster = cluster;
-  renderSelection(cluster);
-});
+const map = new MapCanvas(elements.mapCanvas, handleClusterSelection);
 
 wireEvents();
 renderAll();
@@ -165,11 +189,14 @@ function wireEvents(): void {
   elements.zoomInBtn.addEventListener("click", () => map.zoom(1.6));
   elements.zoomOutBtn.addEventListener("click", () => map.zoom(0.625));
   elements.resetMapBtn.addEventListener("click", () => map.reset());
-  elements.locateMeBtn.addEventListener("click", locateUser);
+  elements.locateMeBtn.addEventListener("click", () => locateUser({ selectNearest: false }));
+  elements.findNearbyBtn.addEventListener("click", () => locateUser({ selectNearest: true }));
+  elements.browseState.addEventListener("change", renderExplore);
 
   elements.mapTab.addEventListener("click", () => setView("map"));
   elements.stateTab.addEventListener("click", () => setView("state"));
   elements.tableTab.addEventListener("click", () => setView("table"));
+  elements.settingsTab.addEventListener("click", () => setView("settings"));
 
   for (const button of clusterSortButtons()) {
     button.addEventListener("click", () => {
@@ -233,6 +260,9 @@ async function loadBundledData(): Promise<void> {
     traffic = [];
     result = null;
     selectedCluster = null;
+    activeAnalysisOptions = null;
+    crossingAccidentIndexCache = null;
+    accidentKeyLookupCache = null;
     analysisSettingsDirty = false;
     activeDataVersion = null;
     updateAnalyzeButton();
@@ -245,6 +275,8 @@ async function loadBundledData(): Promise<void> {
     if (cached) {
       accidents = cached.accidents;
       traffic = cached.traffic;
+      crossingAccidentIndexCache = null;
+      accidentKeyLookupCache = null;
       populateFilters();
       setStatus(`${accidents.length.toLocaleString()} accidents and ${traffic.length.toLocaleString()} traffic points loaded from cache.`, 66);
       analysisStarted = true;
@@ -263,6 +295,8 @@ async function loadBundledData(): Promise<void> {
       });
       loadedAccidents.push(...parsed);
       accidents = loadedAccidents;
+      crossingAccidentIndexCache = null;
+      accidentKeyLookupCache = null;
       populateFilters();
     }
     setStatus(`${accidents.length.toLocaleString()} accident records loaded.`, 60);
@@ -299,6 +333,11 @@ async function loadAccidentCsv(files: File[], replace: boolean, manageBusy = tru
       setStatus(progress.message ?? `Parsing ${progress.label}`, progress.total ? progressValue(progress.loaded, progress.total) : 45);
     });
     accidents = replace ? parsed : accidents.concat(parsed);
+    result = null;
+    selectedCluster = null;
+    activeAnalysisOptions = null;
+    crossingAccidentIndexCache = null;
+    accidentKeyLookupCache = null;
     populateFilters();
     setStatus(`${accidents.length.toLocaleString()} accident records loaded.`, 100);
     activeDataVersion = null;
@@ -318,6 +357,9 @@ async function loadTraffic(file: File, manageBusy = true): Promise<void> {
   }
   try {
     traffic = await parseTrafficWorkbook(file, (progress) => setStatus(progress.message ?? `Parsing ${progress.label}`, 55));
+    result = null;
+    selectedCluster = null;
+    activeAnalysisOptions = null;
     setStatus(`${traffic.length.toLocaleString()} traffic count points loaded.`, 100);
     activeDataVersion = null;
   } catch (error) {
@@ -352,6 +394,9 @@ async function runAnalysisWithCache(options: AnalysisOptions, cacheContext: Anal
       if (cached) {
         result = cached;
         selectedCluster = result.clusters[0] ?? null;
+        activeAnalysisOptions = cloneAnalysisOptions(options);
+        crossingAccidentIndexCache = null;
+        accidentKeyLookupCache = null;
         analysisSettingsDirty = false;
         renderAll();
         setStatus(`${result.clusters.length.toLocaleString()} intersection clusters loaded from cache.`, 100);
@@ -363,6 +408,9 @@ async function runAnalysisWithCache(options: AnalysisOptions, cacheContext: Anal
     await yieldToBrowser();
     result = analyzeDangerousIntersections(accidents, traffic, options);
     selectedCluster = result.clusters[0] ?? null;
+    activeAnalysisOptions = cloneAnalysisOptions(options);
+    crossingAccidentIndexCache = null;
+    accidentKeyLookupCache = null;
     analysisSettingsDirty = false;
     renderAll();
 
@@ -401,15 +449,28 @@ function readOptions(): AnalysisOptions {
   };
 }
 
+function cloneAnalysisOptions(options: AnalysisOptions): AnalysisOptions {
+  return {
+    ...options,
+    years: new Set(options.years)
+  };
+}
+
 function populateFilters(): void {
   const selectedState = elements.stateFilter.value;
+  const selectedBrowseState = elements.browseState.value;
   elements.stateFilter.innerHTML = `<option value="all">All Bundeslaender</option>`;
+  elements.browseState.innerHTML = `<option value="all">All Bundeslaender</option>`;
   for (const [code, name] of Object.entries(STATE_NAMES)) {
     if (accidents.some((accident) => accident.stateCode === code)) {
       elements.stateFilter.append(new Option(name, code));
+      elements.browseState.append(new Option(name, code));
     }
   }
   elements.stateFilter.value = [...elements.stateFilter.options].some((option) => option.value === selectedState) ? selectedState : "all";
+  elements.browseState.value = [...elements.browseState.options].some((option) => option.value === selectedBrowseState)
+    ? selectedBrowseState
+    : "all";
 
   const years = Array.from(new Set(accidents.map((accident) => accident.year).filter(Boolean))).sort((a, b) => a - b);
   elements.yearFilter.innerHTML = "";
@@ -429,8 +490,8 @@ function populateFilters(): void {
 
 function renderAll(): void {
   updateRangeOutputs();
-  renderMetrics();
   renderTables();
+  renderExplore();
   applyBasemapSetting(false);
   map.setShowTraffic(elements.showTraffic.checked);
   applySeverityFilter();
@@ -443,15 +504,27 @@ function renderAll(): void {
   }
 }
 
+function handleClusterSelection(cluster: IntersectionCluster | null, _reason: SelectionReason): void {
+  selectedCluster = cluster;
+  renderSelection(cluster);
+  renderExplore();
+
+  if (!cluster) {
+    return;
+  }
+
+}
+
 function applySeverityFilter(): void {
   map.setSeverityFilters({
     fatal: elements.showFatalPoints.checked,
     serious: elements.showSeriousPoints.checked,
     other: elements.showOtherPoints.checked
   });
+  renderExplore();
 }
 
-function locateUser(): void {
+function locateUser(options: { selectNearest: boolean }): void {
   if (!navigator.geolocation) {
     setStatus("Browser geolocation is not available on this page.", 100);
     return;
@@ -462,10 +535,22 @@ function locateUser(): void {
   navigator.geolocation.getCurrentPosition(
     (position) => {
       const { latitude, longitude, accuracy } = position.coords;
-      map.setUserLocation({ lat: latitude, lon: longitude, accuracyMeters: accuracy }, true);
+      userLocation = { lat: latitude, lon: longitude, accuracyMeters: accuracy };
+      map.setUserLocation(userLocation, !options.selectNearest);
       elements.locateMeBtn.classList.add("located");
       setLocateBusy(false);
-      setStatus(`Centered map on your location (${Math.round(accuracy)} m accuracy).`, 100);
+      renderExplore();
+      const selectedNearest = options.selectNearest ? selectNearestCluster() : null;
+      if (options.selectNearest) {
+        setStatus(
+          selectedNearest
+            ? `Showing nearest visible dangerous intersection (${formatDistance(selectedNearest.distanceMeters)} away, ${Math.round(accuracy)} m location accuracy).`
+            : `Centered map on your location (${Math.round(accuracy)} m accuracy). No visible dangerous intersection matched the active filters.`,
+          100
+        );
+      } else {
+        setStatus(`Centered map on your location (${Math.round(accuracy)} m accuracy).`, 100);
+      }
     },
     (error) => {
       elements.locateMeBtn.classList.remove("located");
@@ -478,8 +563,10 @@ function locateUser(): void {
 
 function setLocateBusy(isBusy: boolean): void {
   elements.locateMeBtn.disabled = isBusy;
+  elements.findNearbyBtn.disabled = isBusy;
   elements.locateMeBtn.classList.toggle("locating", isBusy);
   elements.locateMeBtn.setAttribute("aria-busy", String(isBusy));
+  elements.findNearbyBtn.setAttribute("aria-busy", String(isBusy));
 }
 
 function applyBasemapSetting(notify: boolean): void {
@@ -509,15 +596,6 @@ function geolocationErrorMessage(error: GeolocationPositionError): string {
     default:
       return "Could not get your location.";
   }
-}
-
-function renderMetrics(): void {
-  const clusters = result?.clusters ?? [];
-  const matched = clusters.filter((cluster) => cluster.trafficMatch).length;
-  elements.metricAccidents.textContent = (result?.filteredAccidentCount ?? accidents.length).toLocaleString();
-  elements.metricClusters.textContent = clusters.length.toLocaleString();
-  elements.metricMatched.textContent = clusters.length ? `${Math.round((matched / clusters.length) * 100)}%` : "0%";
-  elements.metricTopScore.textContent = clusters[0] ? formatNumber(clusters[0].dangerScore) : "0";
 }
 
 function renderTables(): void {
@@ -682,12 +760,181 @@ function clusterSortButtons(): HTMLButtonElement[] {
   return Array.from(document.querySelectorAll<HTMLButtonElement>("[data-cluster-sort]"));
 }
 
+function renderExplore(): void {
+  renderNearbyList();
+  renderStateHotspotList();
+}
+
+function renderNearbyList(): void {
+  elements.nearbyList.innerHTML = "";
+  elements.nearbyList.hidden = false;
+  if (!result || !userLocation) {
+    elements.nearbyList.hidden = true;
+    return;
+  }
+
+  const nearby = nearbyClusters(6);
+  if (nearby.length === 0) {
+    elements.nearbyList.append(emptyHotspotMessage("No visible fatal or serious intersections found near this location."));
+    return;
+  }
+
+  nearby.forEach((entry, index) => {
+    elements.nearbyList.append(hotspotButton(entry.cluster, index + 1, `${formatDistance(entry.distanceMeters)} away`));
+  });
+}
+
+function renderStateHotspotList(): void {
+  elements.stateHotspotList.innerHTML = "";
+  if (!result) {
+    elements.stateHotspotList.append(emptyHotspotMessage("State hotspots will appear after the data loads."));
+    return;
+  }
+
+  const stateCode = elements.browseState.value;
+  const clusters = visibleSeverityClusters()
+    .filter((cluster) => stateCode === "all" || cluster.stateCode === stateCode)
+    .slice(0, 8);
+
+  if (clusters.length === 0) {
+    elements.stateHotspotList.append(emptyHotspotMessage("No intersections match the active severity filters."));
+    return;
+  }
+
+  clusters.forEach((cluster, index) => {
+    elements.stateHotspotList.append(hotspotButton(cluster, index + 1, cluster.stateName));
+  });
+}
+
+function hotspotButton(cluster: IntersectionCluster, displayRank: number, context: string): HTMLButtonElement {
+  const button = document.createElement("button");
+  const title = crossingListTitle(cluster, context);
+  const contextHtml = title === context ? "" : `<span class="hotspot-context">${escapeHtml(context)}</span>`;
+  button.type = "button";
+  button.className = "hotspot-button";
+  button.classList.toggle("selected", selectedCluster?.id === cluster.id);
+  button.innerHTML = `
+    <span class="hotspot-rank">${displayRank}</span>
+    <span class="hotspot-main">
+      <span class="hotspot-title">${escapeHtml(title)}</span>
+      ${contextHtml}
+      <span class="hotspot-stats">
+        <span class="hotspot-stat hotspot-stat-total"><strong>${cluster.accidentCount.toLocaleString()}</strong> ${pluralNoun(cluster.accidentCount, "accident")}</span>
+        <span class="hotspot-stat"><strong>${cluster.fatalCount.toLocaleString()}</strong> fatal</span>
+        <span class="hotspot-stat"><strong>${cluster.seriousCount.toLocaleString()}</strong> serious</span>
+      </span>
+    </span>
+  `;
+  button.addEventListener("click", () => {
+    setView("map");
+    map.select(cluster, true);
+  });
+  return button;
+}
+
+function crossingListTitle(cluster: IntersectionCluster, fallbackTitle: string): string {
+  if (cluster.trafficMatch) {
+    const trafficLabel = trafficPointTitle(cluster.trafficMatch.point);
+    if (trafficLabel) {
+      return trafficLabel;
+    }
+  }
+  return fallbackTitle;
+}
+
+function trafficPointTitle(point: TrafficPoint): string {
+  const road = point.road.trim();
+  const from = point.from.trim();
+  const to = point.to.trim();
+  const station = point.stationNo.trim();
+
+  if (road && from && to && from !== to) {
+    return `${road}: ${from} - ${to}`;
+  }
+  if (road && station) {
+    return `${road} station ${station}`;
+  }
+  if (road) {
+    return road;
+  }
+  if (from && to && from !== to) {
+    return `${from} - ${to}`;
+  }
+  return "";
+}
+
+function pluralNoun(count: number, singular: string, plural = `${singular}s`): string {
+  return count === 1 ? singular : plural;
+}
+
+function emptyHotspotMessage(message: string): HTMLParagraphElement {
+  const element = document.createElement("p");
+  element.className = "hotspot-empty";
+  element.textContent = message;
+  return element;
+}
+
+function nearbyClusters(limit: number): Array<{ cluster: IntersectionCluster; distanceMeters: number }> {
+  const location = userLocation;
+  if (!location) {
+    return [];
+  }
+
+  return visibleSeverityClusters()
+    .map((cluster) => ({ cluster, distanceMeters: distanceMeters(location, cluster) }))
+    .sort((a, b) => a.distanceMeters - b.distanceMeters || a.cluster.rank - b.cluster.rank)
+    .slice(0, limit);
+}
+
+function selectNearestCluster(): { cluster: IntersectionCluster; distanceMeters: number } | null {
+  const nearest = nearbyClusters(1)[0];
+  if (!nearest) {
+    setView("map");
+    return null;
+  }
+  setView("map");
+  map.select(nearest.cluster, true);
+  return nearest;
+}
+
+function visibleSeverityClusters(): IntersectionCluster[] {
+  return (result?.clusters ?? []).filter(clusterMatchesSeverityFilter);
+}
+
+function clusterMatchesSeverityFilter(cluster: IntersectionCluster): boolean {
+  switch (clusterSeverity(cluster)) {
+    case "fatal":
+      return elements.showFatalPoints.checked;
+    case "serious":
+      return elements.showSeriousPoints.checked;
+    case "other":
+      return elements.showOtherPoints.checked;
+  }
+}
+
+function clusterSeverity(cluster: IntersectionCluster): SeverityFilterKey {
+  if (cluster.fatalCount > 0) {
+    return "fatal";
+  }
+  if (cluster.seriousCount > 0) {
+    return "serious";
+  }
+  return "other";
+}
+
 function renderSelection(cluster: IntersectionCluster | null): void {
   if (!cluster) {
+    elements.selectedAside.hidden = true;
+    elements.selectedMapActions.hidden = true;
+    elements.selectedMapActions.innerHTML = "";
+    elements.mapView.classList.remove("has-selection");
     elements.selectionDetails.textContent = "No intersection selected.";
     return;
   }
 
+  elements.selectedAside.hidden = false;
+  elements.selectedMapActions.hidden = false;
+  elements.mapView.classList.add("has-selection");
   const trafficDetails = cluster.trafficMatch
     ? `${cluster.trafficMatch.point.road} ${cluster.trafficMatch.point.stationNo}, ${Math.round(
         cluster.trafficMatch.distanceMeters
@@ -698,7 +945,9 @@ function renderSelection(cluster: IntersectionCluster | null): void {
   const openStreetMapUrl = `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lon}#map=18/${lat}/${lon}`;
   const googleMapsUrl = `https://www.google.com/maps/search/?api=1&query=${lat},${lon}`;
   const trendPanel = renderTrendPanel(cluster);
+  const recordPanel = renderSidebarAccidentRecords(clusterAccidentRecords(cluster), cluster.accidentCount);
 
+  elements.selectedMapActions.innerHTML = renderMapServiceActions(openStreetMapUrl, googleMapsUrl);
   elements.selectionDetails.innerHTML = `
     <dl>
       <div><dt>Rank</dt><dd>${cluster.rank}</dd></div>
@@ -713,11 +962,274 @@ function renderSelection(cluster: IntersectionCluster | null): void {
       <div><dt>Traffic</dt><dd>${escapeHtml(trafficDetails)}</dd></div>
     </dl>
     ${trendPanel}
-    <div class="external-map-actions" aria-label="Open selected intersection in map services">
-      <a class="map-service-link" href="${openStreetMapUrl}" target="_blank" rel="noopener noreferrer">OpenStreetMap</a>
-      <a class="map-service-link" href="${googleMapsUrl}" target="_blank" rel="noopener noreferrer">Google Maps</a>
-    </div>
+    ${recordPanel}
   `;
+}
+
+function renderMapServiceActions(openStreetMapUrl: string, googleMapsUrl: string): string {
+  return `
+    <a class="map-service-icon" href="${openStreetMapUrl}" target="_blank" rel="noopener noreferrer" aria-label="Open in OpenStreetMap" title="Open in OpenStreetMap">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M3 6.5 9 4l6 2.5 6-2.5v13.5L15 20l-6-2.5L3 20V6.5z" />
+        <path d="M9 4v13.5" />
+        <path d="M15 6.5V20" />
+      </svg>
+    </a>
+    <a class="map-service-icon" href="${googleMapsUrl}" target="_blank" rel="noopener noreferrer" aria-label="Open in Google Maps" title="Open in Google Maps">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 21s6-5.4 6-11a6 6 0 0 0-12 0c0 5.6 6 11 6 11z" />
+        <path d="M12 12.2a2.2 2.2 0 1 0 0-4.4 2.2 2.2 0 0 0 0 4.4z" />
+      </svg>
+    </a>
+  `;
+}
+
+function renderSidebarAccidentRecords(records: CrossingAccident[], totalCount: number): string {
+  const countText = `${records.length.toLocaleString()} of ${totalCount.toLocaleString()}`;
+  if (records.length === 0) {
+    return `
+      <section class="sidebar-accident-records">
+        <div class="section-heading-row">
+          <h3>Known accident records</h3>
+          <span>${countText}</span>
+        </div>
+        <p class="hotspot-empty">No matching source accident records were found near this intersection.</p>
+      </section>
+    `;
+  }
+
+  const items = records
+    .map(({ accident, distanceMeters }) => {
+      const severity = accidentSeverity(accident);
+      return `
+        <li class="accident-record-item">
+          <div class="accident-record-topline">
+            <span class="severity-pill severity-${severity}">${accidentSeverityLabel(accident)}</span>
+            <strong>${escapeHtml(accidentTimeLabel(accident))}</strong>
+          </div>
+          <dl class="accident-record-fields">
+            <div><dt>Type</dt><dd>${escapeHtml(accidentTypeLabel(accident))}</dd></div>
+            <div><dt>Road users</dt><dd>${escapeHtml(roadUsersLabel(accident))}</dd></div>
+            <div><dt>Coordinates</dt><dd>${accident.lat.toFixed(5)}, ${accident.lon.toFixed(5)}</dd></div>
+            <div><dt>Distance</dt><dd>${Math.round(distanceMeters)} m</dd></div>
+            <div><dt>Source</dt><dd>${escapeHtml(accident.source)}<br /><span>${escapeHtml(accident.id)}</span></dd></div>
+          </dl>
+        </li>
+      `;
+    })
+    .join("");
+
+  return `
+    <section class="sidebar-accident-records">
+      <div class="section-heading-row">
+        <h3>Known accident records</h3>
+        <span>${countText}</span>
+      </div>
+      <ol class="accident-record-list">${items}</ol>
+    </section>
+  `;
+}
+
+function clusterAccidentRecords(cluster: IntersectionCluster): CrossingAccident[] {
+  const exactRecords = exactClusterAccidentRecords(cluster);
+  if (exactRecords.length > 0) {
+    return exactRecords.sort(compareCrossingAccidents);
+  }
+
+  const options = activeAnalysisOptions ?? readOptions();
+  const searchRadiusMeters = clusterAccidentSearchRadius(options);
+  const index = accidentIndexForCrossings(options, searchRadiusMeters);
+  const candidates = index
+    .nearby(cluster)
+    .map((accident) => ({ accident, distanceMeters: distanceMeters(cluster, accident) }))
+    .filter((entry) => entry.distanceMeters <= searchRadiusMeters)
+    .sort((a, b) => a.distanceMeters - b.distanceMeters);
+
+  return pickClusterAccidents(candidates, cluster).sort(compareCrossingAccidents);
+}
+
+function exactClusterAccidentRecords(cluster: IntersectionCluster): CrossingAccident[] {
+  if (!cluster.accidentKeys?.length) {
+    return [];
+  }
+
+  const lookup = accidentKeyLookup();
+  return cluster.accidentKeys
+    .map((key) => lookup.get(key))
+    .filter((accident): accident is AccidentRecord => Boolean(accident))
+    .map((accident) => ({ accident, distanceMeters: distanceMeters(cluster, accident) }));
+}
+
+function accidentKeyLookup(): Map<string, AccidentRecord> {
+  if (accidentKeyLookupCache?.source === accidents) {
+    return accidentKeyLookupCache.map;
+  }
+
+  const map = new Map<string, AccidentRecord>();
+  for (const accident of accidents) {
+    map.set(accidentKey(accident), accident);
+  }
+  accidentKeyLookupCache = { source: accidents, map };
+  return map;
+}
+
+function pickClusterAccidents(candidates: CrossingAccident[], cluster: IntersectionCluster): CrossingAccident[] {
+  const selected = new Set<AccidentRecord>();
+  const selectedRecords: CrossingAccident[] = [];
+  const remainingBySeverity = new Map<SeverityFilterKey, number>([
+    ["fatal", cluster.fatalCount],
+    ["serious", cluster.seriousCount],
+    ["other", Math.max(0, cluster.accidentCount - cluster.fatalCount - cluster.seriousCount)]
+  ]);
+
+  for (const candidate of candidates) {
+    const severity = accidentSeverity(candidate.accident);
+    const remaining = remainingBySeverity.get(severity) ?? 0;
+    if (remaining <= 0) {
+      continue;
+    }
+    selected.add(candidate.accident);
+    selectedRecords.push(candidate);
+    remainingBySeverity.set(severity, remaining - 1);
+    if (selectedRecords.length >= cluster.accidentCount) {
+      return selectedRecords;
+    }
+  }
+
+  for (const candidate of candidates) {
+    if (selected.has(candidate.accident)) {
+      continue;
+    }
+    selectedRecords.push(candidate);
+    if (selectedRecords.length >= cluster.accidentCount) {
+      break;
+    }
+  }
+
+  return selectedRecords;
+}
+
+function accidentIndexForCrossings(options: AnalysisOptions, searchRadiusMeters: number): GeoGridIndex<AccidentRecord> {
+  const key = analysisOptionsIndexKey(options, searchRadiusMeters);
+  if (crossingAccidentIndexCache?.key === key) {
+    return crossingAccidentIndexCache.index;
+  }
+
+  const index = new GeoGridIndex<AccidentRecord>(searchRadiusMeters);
+  for (const accident of accidents) {
+    if (accidentMatchesAnalysisOptions(accident, options)) {
+      index.insert(accident);
+    }
+  }
+  crossingAccidentIndexCache = { key, index };
+  return index;
+}
+
+function accidentMatchesAnalysisOptions(accident: AccidentRecord, options: AnalysisOptions): boolean {
+  if (options.years.size > 0 && !options.years.has(accident.year)) {
+    return false;
+  }
+  return options.stateCode === "all" || accident.stateCode === options.stateCode;
+}
+
+function analysisOptionsIndexKey(options: AnalysisOptions, searchRadiusMeters: number): string {
+  return [
+    options.stateCode,
+    options.clusterRadiusMeters,
+    searchRadiusMeters,
+    [...options.years].sort((a, b) => a - b).join(",")
+  ].join("|");
+}
+
+function clusterAccidentSearchRadius(options: AnalysisOptions): number {
+  return Math.max(150, options.clusterRadiusMeters * 3);
+}
+
+function compareCrossingAccidents(a: CrossingAccident, b: CrossingAccident): number {
+  return (
+    b.accident.year - a.accident.year ||
+    (b.accident.month ?? 0) - (a.accident.month ?? 0) ||
+    (b.accident.hour ?? -1) - (a.accident.hour ?? -1) ||
+    severityOrder(a.accident) - severityOrder(b.accident) ||
+    a.distanceMeters - b.distanceMeters
+  );
+}
+
+function severityOrder(accident: AccidentRecord): number {
+  switch (accidentSeverity(accident)) {
+    case "fatal":
+      return 0;
+    case "serious":
+      return 1;
+    case "other":
+      return 2;
+  }
+}
+
+function accidentSeverity(accident: AccidentRecord): SeverityFilterKey {
+  if (accident.category === 1) {
+    return "fatal";
+  }
+  if (accident.category === 2) {
+    return "serious";
+  }
+  return "other";
+}
+
+function accidentSeverityLabel(accident: AccidentRecord): string {
+  if (accident.category === 1) {
+    return "Fatal";
+  }
+  if (accident.category === 2) {
+    return "Serious";
+  }
+  if (accident.category === 3) {
+    return "Light";
+  }
+  return accident.category === null ? "Unknown" : `Category ${accident.category}`;
+}
+
+function accidentTimeLabel(accident: AccidentRecord): string {
+  const parts = [accident.year ? String(accident.year) : "Unknown year"];
+  if (accident.month) {
+    parts.push(monthLabel(accident.month));
+  }
+  if (accident.weekday) {
+    parts.push(weekdayLabel(accident.weekday));
+  }
+  if (accident.hour !== null) {
+    parts.push(`${String(accident.hour).padStart(2, "0")}:00`);
+  }
+  return parts.join(", ");
+}
+
+function monthLabel(month: number): string {
+  const labels = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  return labels[month - 1] ?? `Month ${month}`;
+}
+
+function weekdayLabel(weekday: number): string {
+  const labels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  return labels[weekday - 1] ?? `Weekday ${weekday}`;
+}
+
+function accidentTypeLabel(accident: AccidentRecord): string {
+  return accident.accidentType === null ? "Unknown type" : `Type ${accident.accidentType}`;
+}
+
+function roadUsersLabel(accident: AccidentRecord): string {
+  const users = [
+    accident.involvesPedestrian ? "Pedestrian" : "",
+    accident.involvesBike ? "Bike" : "",
+    accident.involvesMotorcycle ? "Motorcycle" : "",
+    accident.involvesCar ? "Car" : "",
+    accident.involvesTruck ? "Truck" : ""
+  ].filter(Boolean);
+  return users.length > 0 ? users.join(", ") : "No road-user flags";
+}
+
+function accidentKey(accident: AccidentRecord): string {
+  return `${accident.source}\0${accident.id}`;
 }
 
 function renderTrendPanel(cluster: IntersectionCluster): string {
@@ -851,11 +1363,12 @@ function trendClassName(direction: RateTrendDirection): string {
   return `trend-${direction}`;
 }
 
-function setView(view: "map" | "state" | "table"): void {
+function setView(view: ViewKey): void {
   const entries = [
     { key: "map", tab: elements.mapTab, panel: elements.mapView },
     { key: "state", tab: elements.stateTab, panel: elements.stateView },
-    { key: "table", tab: elements.tableTab, panel: elements.tableView }
+    { key: "table", tab: elements.tableTab, panel: elements.tableView },
+    { key: "settings", tab: elements.settingsTab, panel: elements.settingsView }
   ] as const;
 
   for (const entry of entries) {
@@ -876,6 +1389,10 @@ function clearData(): void {
   traffic = [];
   result = null;
   selectedCluster = null;
+  userLocation = null;
+  activeAnalysisOptions = null;
+  crossingAccidentIndexCache = null;
+  accidentKeyLookupCache = null;
   analysisSettingsDirty = false;
   populateFilters();
   renderAll();
@@ -1164,6 +1681,31 @@ function formatRate(value: number): string {
 
 function formatSignedPercent(value: number): string {
   return `${value > 0 ? "+" : ""}${new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 }).format(value * 100)}%`;
+}
+
+function formatDistance(valueMeters: number): string {
+  if (valueMeters >= 10_000) {
+    return `${formatNumber(valueMeters / 1000)} km`;
+  }
+  if (valueMeters >= 1000) {
+    return `${new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 }).format(valueMeters / 1000)} km`;
+  }
+  return `${Math.round(valueMeters)} m`;
+}
+
+function distanceMeters(a: { lat: number; lon: number }, b: { lat: number; lon: number }): number {
+  const earthRadiusMeters = 6_371_000;
+  const deltaLat = radians(b.lat - a.lat);
+  const deltaLon = radians(b.lon - a.lon);
+  const latA = radians(a.lat);
+  const latB = radians(b.lat);
+  const hav =
+    Math.sin(deltaLat / 2) ** 2 + Math.cos(latA) * Math.cos(latB) * Math.sin(deltaLon / 2) ** 2;
+  return 2 * earthRadiusMeters * Math.atan2(Math.sqrt(hav), Math.sqrt(1 - hav));
+}
+
+function radians(degrees: number): number {
+  return (degrees * Math.PI) / 180;
 }
 
 function daysInYear(year: number): number {

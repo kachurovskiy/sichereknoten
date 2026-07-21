@@ -33,6 +33,7 @@ interface ClusterAccumulator {
   lightCount: number;
   vulnerableCount: number;
   severityPoints: number;
+  accidentKeys: string[];
   yearSet: Set<number>;
   yearStats: Map<number, ClusterYearAccumulator>;
   stateCounts: Map<string, number>;
@@ -112,6 +113,7 @@ function buildClusters(accidents: AccidentRecord[], radiusMeters: number): Clust
         lightCount: 0,
         vulnerableCount: 0,
         severityPoints: 0,
+        accidentKeys: [],
         yearSet: new Set(),
         yearStats: new Map(),
         stateCounts: new Map()
@@ -140,6 +142,7 @@ function addAccidentToCluster(cluster: ClusterAccumulator, accident: AccidentRec
   cluster.x = (cluster.x * previousCount + projected.x) / cluster.accidentCount;
   cluster.y = (cluster.y * previousCount + projected.y) / cluster.accidentCount;
   cluster.severityPoints += accident.severityWeight;
+  cluster.accidentKeys.push(accidentKey(accident));
   cluster.yearSet.add(accident.year);
   cluster.stateCounts.set(accident.stateCode, (cluster.stateCounts.get(accident.stateCode) ?? 0) + 1);
   addAccidentToYearStats(cluster, accident);
@@ -253,8 +256,13 @@ function finalizeCluster(
     years: Array.from(cluster.yearSet).sort((a, b) => a - b),
     yearlyStats,
     accidentsPerVehicleTrend: calculateAccidentsPerVehicleTrend(cluster.yearStats, analysisYears, trafficDtv),
-    trafficMatch
+    trafficMatch,
+    accidentKeys: cluster.accidentKeys
   };
+}
+
+function accidentKey(accident: AccidentRecord): string {
+  return `${accident.source}\0${accident.id}`;
 }
 
 function toClusterYearStat(stats: ClusterYearAccumulator, trafficDtv: number | null): ClusterYearStat {

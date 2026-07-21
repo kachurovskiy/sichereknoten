@@ -8,75 +8,36 @@
   </head>
   <body>
     <div id="app" class="app-shell">
-      <aside class="control-panel" aria-label="Data and analysis controls">
+      <aside class="control-panel" aria-label="Application sidebar">
         <div class="brand-block">
-          <p class="eyebrow">Accident and traffic analysis</p>
           <h1>Sichere Knoten</h1>
+          <div class="app-status" aria-live="polite">
+            <div class="progress-track compact-progress" aria-hidden="true">
+              <div id="progressBar" class="progress-bar"></div>
+            </div>
+            <p id="statusText">Loading bundled data.</p>
+          </div>
         </div>
 
-        <section class="panel-section">
-          <h2>Data</h2>
-          <p class="source-note">Bundled CSV accident data and the Bundesstrassen traffic workbook load automatically from the offline data bundle.</p>
-          <p class="source-note">
-            Accident data:
-            <a href="https://unfallatlas.statistikportal.de/" target="_blank" rel="noreferrer">Unfallatlas</a>
-            / Statistische Aemter des Bundes und der Laender. Traffic data:
-            <a href="https://www.bast.de/DE/Publikationen/Statistik/Verkehrsdaten/Manuelle-Zaehlung.html" target="_blank" rel="noreferrer">BASt manual traffic counts</a>.
-          </p>
-          <p class="source-note">
-            Reused under
-            <a href="https://www.govdata.de/dl-de/by-2-0" target="_blank" rel="noreferrer">Datenlizenz Deutschland - Namensnennung - Version 2.0</a>
-            / dl-de/by-2-0. Source data is processed, clustered, matched, and scored by this app.
-          </p>
-          <div class="button-row">
-            <button id="loadBundledBtn" class="secondary-button" type="button">Reload data</button>
-            <button id="clearBtn" class="secondary-button" type="button">Clear</button>
-          </div>
-        </section>
+        <div id="explorePanel" class="explore-panel">
+          <section class="panel-section nearby-section">
+            <div class="section-title-row">
+              <h2>Nearby danger</h2>
+              <button id="findNearbyBtn" class="secondary-button compact-action" type="button">Use location</button>
+            </div>
+            <div id="nearbyList" class="hotspot-list" aria-live="polite" hidden></div>
+          </section>
 
-        <section class="panel-section">
-          <h2>Analysis</h2>
-          <label class="field-label" for="clusterRadius">Cluster radius (m)</label>
-          <div class="range-row">
-            <input id="clusterRadius" type="range" min="25" max="180" step="5" value="60" />
-            <input id="clusterRadiusOut" class="range-value-input" type="number" min="25" max="180" step="5" value="60" aria-label="Cluster radius in meters" />
-          </div>
+          <section class="panel-section">
+            <h2>Browse by state</h2>
+            <label class="field-label" for="browseState">Bundesland</label>
+            <select id="browseState">
+              <option value="all">All Bundeslaender</option>
+            </select>
+            <div id="stateHotspotList" class="hotspot-list"></div>
+          </section>
 
-          <label class="field-label" for="matchRadius">Traffic match radius (m)</label>
-          <div class="range-row">
-            <input id="matchRadius" type="range" min="50" max="1000" step="25" value="300" />
-            <input id="matchRadiusOut" class="range-value-input" type="number" min="50" max="1000" step="25" value="300" aria-label="Traffic match radius in meters" />
-          </div>
-
-          <label class="field-label" for="minAccidents">Minimum accidents</label>
-          <input id="minAccidents" class="number-input" type="number" min="1" max="50" value="2" />
-
-          <label class="field-label" for="topCount">Top rows</label>
-          <input id="topCount" class="number-input" type="number" min="3" max="50" value="10" />
-
-          <label class="field-label" for="scoreMode">Rank by</label>
-          <select id="scoreMode">
-            <option value="absolute">Weighted severity</option>
-            <option value="exposure">Traffic-adjusted risk</option>
-          </select>
-
-          <label class="field-label" for="stateFilter">Bundesland</label>
-          <select id="stateFilter">
-            <option value="all">All Bundeslaender</option>
-          </select>
-
-          <div class="year-filter" id="yearFilter" aria-label="Year filters"></div>
-
-          <button id="analyzeBtn" class="primary-button" type="button">Analyze</button>
-        </section>
-
-        <section class="panel-section status-section">
-          <h2>Status</h2>
-          <div class="progress-track" aria-hidden="true">
-            <div id="progressBar" class="progress-bar"></div>
-          </div>
-          <p id="statusText">Loading bundled data.</p>
-        </section>
+        </div>
       </aside>
 
       <main class="workspace">
@@ -85,6 +46,7 @@
             <button id="mapTab" class="tab-button active" role="tab" type="button" aria-selected="true">Map</button>
             <button id="stateTab" class="tab-button" role="tab" type="button" aria-selected="false">Bundesland</button>
             <button id="tableTab" class="tab-button" role="tab" type="button" aria-selected="false">Intersections</button>
+            <button id="settingsTab" class="tab-button" role="tab" type="button" aria-selected="false">Settings</button>
           </div>
           <div class="toolbar-actions">
             <label class="toggle-control">
@@ -112,25 +74,6 @@
             <button id="resetMapBtn" class="icon-button" type="button" title="Reset map">Reset</button>
             <button id="exportBtn" class="secondary-button" type="button">Export CSV</button>
           </div>
-        </section>
-
-        <section class="metric-grid" aria-label="Summary metrics">
-          <article class="metric">
-            <span>Accidents</span>
-            <strong id="metricAccidents">0</strong>
-          </article>
-          <article class="metric">
-            <span>Clusters</span>
-            <strong id="metricClusters">0</strong>
-          </article>
-          <article class="metric">
-            <span>Traffic matched</span>
-            <strong id="metricMatched">0%</strong>
-          </article>
-          <article class="metric">
-            <span>Top score</span>
-            <strong id="metricTopScore">0</strong>
-          </article>
         </section>
 
         <section id="mapView" class="view active">
@@ -163,8 +106,11 @@
               </div>
             </div>
           </div>
-          <aside class="detail-panel" aria-label="Selected intersection details">
-            <h2>Selected intersection</h2>
+          <aside id="selectedAside" class="detail-panel selected-aside" aria-label="Selected intersection details" hidden>
+            <div class="selected-aside-header">
+              <h2>Selected intersection</h2>
+              <div id="selectedMapActions" class="selected-map-actions" aria-label="Open selected intersection in map services" hidden></div>
+            </div>
             <div id="selectionDetails" class="details">No intersection selected.</div>
           </aside>
         </section>
@@ -208,6 +154,65 @@
             </table>
           </div>
         </section>
+
+        <section id="settingsView" class="view settings-view">
+          <section class="settings-section">
+            <h2>Data</h2>
+            <p class="source-note">Bundled CSV accident data and the Bundesstrassen traffic workbook load automatically from the offline data bundle.</p>
+            <p class="source-note">
+              Accident data:
+              <a href="https://unfallatlas.statistikportal.de/" target="_blank" rel="noreferrer">Unfallatlas</a>
+              / Statistische Aemter des Bundes und der Laender. Traffic data:
+              <a href="https://www.bast.de/DE/Publikationen/Statistik/Verkehrsdaten/Manuelle-Zaehlung.html" target="_blank" rel="noreferrer">BASt manual traffic counts</a>.
+            </p>
+            <p class="source-note">
+              Reused under
+              <a href="https://www.govdata.de/dl-de/by-2-0" target="_blank" rel="noreferrer">Datenlizenz Deutschland - Namensnennung - Version 2.0</a>
+              / dl-de/by-2-0. Source data is processed, clustered, matched, and scored by this app.
+            </p>
+            <div class="button-row">
+              <button id="loadBundledBtn" class="secondary-button" type="button">Reload data</button>
+              <button id="clearBtn" class="secondary-button" type="button">Clear</button>
+            </div>
+          </section>
+
+          <section class="settings-section">
+            <h2>Analysis</h2>
+            <label class="field-label" for="clusterRadius">Cluster radius (m)</label>
+            <div class="range-row">
+              <input id="clusterRadius" type="range" min="25" max="180" step="5" value="60" />
+              <input id="clusterRadiusOut" class="range-value-input" type="number" min="25" max="180" step="5" value="60" aria-label="Cluster radius in meters" />
+            </div>
+
+            <label class="field-label" for="matchRadius">Traffic match radius (m)</label>
+            <div class="range-row">
+              <input id="matchRadius" type="range" min="50" max="1000" step="25" value="300" />
+              <input id="matchRadiusOut" class="range-value-input" type="number" min="50" max="1000" step="25" value="300" aria-label="Traffic match radius in meters" />
+            </div>
+
+            <label class="field-label" for="minAccidents">Minimum accidents</label>
+            <input id="minAccidents" class="number-input" type="number" min="1" max="50" value="2" />
+
+            <label class="field-label" for="topCount">Top rows</label>
+            <input id="topCount" class="number-input" type="number" min="3" max="50" value="10" />
+
+            <label class="field-label" for="scoreMode">Rank by</label>
+            <select id="scoreMode">
+              <option value="absolute">Weighted severity</option>
+              <option value="exposure">Traffic-adjusted risk</option>
+            </select>
+
+            <label class="field-label" for="stateFilter">Bundesland</label>
+            <select id="stateFilter">
+              <option value="all">All Bundeslaender</option>
+            </select>
+
+            <div class="year-filter" id="yearFilter" aria-label="Year filters"></div>
+
+            <button id="analyzeBtn" class="primary-button" type="button">Analyze</button>
+          </section>
+        </section>
+
       </main>
     </div>
     <script type="module" src="/src/main.ts"></script>

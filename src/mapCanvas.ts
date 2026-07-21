@@ -30,11 +30,12 @@ interface SeverityFilters {
 
 type ClusterSeverity = keyof SeverityFilters;
 
-type SelectionCallback = (cluster: IntersectionCluster | null) => void;
+type SelectionReason = "auto" | "program" | "user";
+type SelectionCallback = (cluster: IntersectionCluster | null, reason: SelectionReason) => void;
 
 const MIN_SCALE = 250;
 const MAX_SCALE = 80_000_000;
-const CLICK_TOLERANCE_PX = 4;
+const CLICK_TOLERANCE_PX = 8;
 const OSM_TILE_SIZE = 256;
 const OSM_MIN_ZOOM = 0;
 const OSM_MAX_ZOOM = 19;
@@ -73,6 +74,10 @@ export class MapCanvas {
   private dragging = false;
   private lastPointer: ProjectedPoint | null = null;
   private pointerDown: ProjectedPoint | null = null;
+  private readonly activePointers = new Map<number, ProjectedPoint>();
+  private primaryPointerId: number | null = null;
+  private pinchDistance: number | null = null;
+  private pinchCenter: ProjectedPoint | null = null;
   private clickCycle: { x: number; y: number; index: number; candidates: IntersectionCluster[] } | null = null;
   private drawFrame: number | null = null;
 
@@ -100,7 +105,7 @@ export class MapCanvas {
     this.selected = this.firstVisibleCluster();
     this.fit();
     this.draw();
-    this.onSelect(this.selected);
+    this.onSelect(this.selected, "auto");
   }
 
   setShowTraffic(showTraffic: boolean): void {
@@ -117,18 +122,18 @@ export class MapCanvas {
     this.severityFilters = filters;
     if (!this.selected || !this.shouldShowCluster(this.selected)) {
       this.selected = this.firstVisibleCluster();
-      this.onSelect(this.selected);
+      this.onSelect(this.selected, "auto");
     }
     this.draw();
   }
 
-  select(cluster: IntersectionCluster | null, focus = false): void {
+  select(cluster: IntersectionCluster | null, focus = false, reason: SelectionReason = "program"): void {
     this.selected = cluster;
     if (cluster && focus) {
       this.centerOn(cluster);
     }
     this.draw();
-    this.onSelect(cluster);
+    this.onSelect(cluster, reason);
   }
 
   setUserLocation(location: UserLocation, focus = true): void {
@@ -158,44 +163,162 @@ export class MapCanvas {
     }, { passive: false });
 
     this.canvas.addEventListener("pointerdown", (event) => {
-      this.dragging = true;
-      this.lastPointer = { x: event.clientX, y: event.clientY };
-      this.pointerDown = { x: event.clientX, y: event.clientY };
+      event.preventDefault();
+      const pointer = { x: event.clientX, y: event.clientY };
+      this.activePointers.set(event.pointerId, pointer);
       this.canvas.setPointerCapture(event.pointerId);
+
+      if (this.activePointers.size === 1) {
+        this.dragging = true;
+        this.primaryPointerId = event.pointerId;
+        this.lastPointer = pointer;
+        this.pointerDown = pointer;
+        this.pinchDistance = null;
+        this.pinchCenter = null;
+      } else if (this.activePointers.size === 2) {
+        this.pointerDown = null;
+        this.initializePinch();
+      }
     });
 
     this.canvas.addEventListener("pointermove", (event) => {
-      if (!this.dragging || !this.lastPointer) {
+      if (!this.activePointers.has(event.pointerId)) {
         return;
       }
-      const dx = (event.clientX - this.lastPointer.x) * window.devicePixelRatio;
-      const dy = (event.clientY - this.lastPointer.y) * window.devicePixelRatio;
+      event.preventDefault();
+      const pointer = { x: event.clientX, y: event.clientY };
+      this.activePointers.set(event.pointerId, pointer);
+
+      if (this.activePointers.size >= 2) {
+        this.handlePinch();
+        return;
+      }
+
+      if (!this.dragging || !this.lastPointer || this.primaryPointerId !== event.pointerId) {
+        return;
+      }
+
+      const dx = (pointer.x - this.lastPointer.x) * window.devicePixelRatio;
+      const dy = (pointer.y - this.lastPointer.y) * window.devicePixelRatio;
       this.offsetX += dx;
       this.offsetY += dy;
-      this.lastPointer = { x: event.clientX, y: event.clientY };
+      this.lastPointer = pointer;
       this.requestDraw();
     });
 
     this.canvas.addEventListener("pointerup", (event) => {
-      if (!this.dragging) {
-        return;
-      }
-      this.dragging = false;
-      this.lastPointer = null;
-      this.canvas.releasePointerCapture(event.pointerId);
-      const pointerMoved = this.pointerDown
-        ? Math.hypot(event.clientX - this.pointerDown.x, event.clientY - this.pointerDown.y) > CLICK_TOLERANCE_PX
-        : false;
-      this.pointerDown = null;
-      if (pointerMoved) {
-        return;
-      }
-
-      const cluster = this.findClusterAt(event.offsetX * window.devicePixelRatio, event.offsetY * window.devicePixelRatio);
-      if (cluster) {
-        this.select(cluster);
-      }
+      this.endPointer(event, true);
     });
+
+    this.canvas.addEventListener("pointercancel", (event) => {
+      this.endPointer(event, false);
+    });
+  }
+
+  private endPointer(event: PointerEvent, selectOnTap: boolean): void {
+    if (!this.activePointers.has(event.pointerId)) {
+      return;
+    }
+
+    event.preventDefault();
+    const pointer = { x: event.clientX, y: event.clientY };
+    const wasSinglePointer = this.activePointers.size === 1 && this.primaryPointerId === event.pointerId;
+    const pointerMoved = this.pointerDown ? Math.hypot(pointer.x - this.pointerDown.x, pointer.y - this.pointerDown.y) > CLICK_TOLERANCE_PX : true;
+
+    this.activePointers.delete(event.pointerId);
+    if (this.canvas.hasPointerCapture(event.pointerId)) {
+      this.canvas.releasePointerCapture(event.pointerId);
+    }
+
+    if (selectOnTap && wasSinglePointer && !pointerMoved) {
+      const canvasPoint = this.canvasPointFromClient(pointer);
+      const cluster = this.findClusterAt(canvasPoint.x, canvasPoint.y);
+      if (cluster) {
+        this.select(cluster, false, "user");
+      }
+    }
+
+    if (this.activePointers.size === 0) {
+      this.resetPointerState();
+      return;
+    }
+
+    if (this.activePointers.size === 1) {
+      const remaining = this.activePointers.entries().next().value;
+      if (!remaining) {
+        this.resetPointerState();
+        return;
+      }
+      this.primaryPointerId = remaining[0];
+      this.lastPointer = remaining[1];
+      this.pointerDown = null;
+      this.dragging = true;
+      this.pinchDistance = null;
+      this.pinchCenter = null;
+      return;
+    }
+
+    this.initializePinch();
+  }
+
+  private initializePinch(): void {
+    const points = this.pointerList();
+    if (points.length < 2) {
+      this.pinchDistance = null;
+      this.pinchCenter = null;
+      return;
+    }
+
+    this.dragging = false;
+    this.lastPointer = null;
+    this.pointerDown = null;
+    this.pinchDistance = pointerDistance(points[0], points[1]);
+    this.pinchCenter = pointerCenter(points[0], points[1]);
+  }
+
+  private handlePinch(): void {
+    const points = this.pointerList();
+    if (points.length < 2) {
+      return;
+    }
+
+    const distance = pointerDistance(points[0], points[1]);
+    const center = pointerCenter(points[0], points[1]);
+    if (this.pinchDistance !== null && this.pinchCenter) {
+      const centerCanvas = this.canvasPointFromClient(center);
+      const previousCenterCanvas = this.canvasPointFromClient(this.pinchCenter);
+      this.offsetX += centerCanvas.x - previousCenterCanvas.x;
+      this.offsetY += centerCanvas.y - previousCenterCanvas.y;
+      if (distance > 0 && this.pinchDistance > 0) {
+        this.scaleAt(centerCanvas.x, centerCanvas.y, distance / this.pinchDistance);
+      } else {
+        this.requestDraw();
+      }
+    }
+
+    this.pinchDistance = distance;
+    this.pinchCenter = center;
+  }
+
+  private pointerList(): ProjectedPoint[] {
+    return Array.from(this.activePointers.values());
+  }
+
+  private canvasPointFromClient(point: ProjectedPoint): ProjectedPoint {
+    const rect = this.canvas.getBoundingClientRect();
+    return {
+      x: ((point.x - rect.left) / Math.max(rect.width, 1)) * this.canvas.width,
+      y: ((point.y - rect.top) / Math.max(rect.height, 1)) * this.canvas.height
+    };
+  }
+
+  private resetPointerState(): void {
+    this.dragging = false;
+    this.lastPointer = null;
+    this.pointerDown = null;
+    this.primaryPointerId = null;
+    this.pinchDistance = null;
+    this.pinchCenter = null;
   }
 
   private fit(): void {
@@ -570,6 +693,17 @@ function project(lon: number, lat: number): ProjectedPoint {
   return {
     x: (lon + 180) / 360,
     y: 0.5 - Math.log((1 + sin) / (1 - sin)) / (4 * Math.PI)
+  };
+}
+
+function pointerDistance(a: ProjectedPoint, b: ProjectedPoint): number {
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+function pointerCenter(a: ProjectedPoint, b: ProjectedPoint): ProjectedPoint {
+  return {
+    x: (a.x + b.x) / 2,
+    y: (a.y + b.y) / 2
   };
 }
 

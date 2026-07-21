@@ -100,6 +100,7 @@ export interface IntersectionCluster {
   yearlyStats: ClusterYearStat[];
   accidentsPerVehicleTrend: RateTrend;
   trafficMatch: TrafficMatch | null;
+  accidentKeys?: string[];
 }
 
 export interface StateSummary {
