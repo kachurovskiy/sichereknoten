@@ -16,6 +16,12 @@ interface ProjectedCluster {
   projected: ProjectedPoint;
 }
 
+interface UserLocation {
+  lat: number;
+  lon: number;
+  accuracyMeters: number | null;
+}
+
 type SelectionCallback = (cluster: IntersectionCluster | null) => void;
 
 const MIN_SCALE = 250;
@@ -45,6 +51,7 @@ export class MapCanvas {
   private projectedClusters: ProjectedCluster[] = [];
   private traffic: TrafficPoint[] = [];
   private selected: IntersectionCluster | null = null;
+  private userLocation: UserLocation | null = null;
   private maxDangerScore = 1;
   private showTraffic = true;
   private showBasemap = false;
@@ -104,6 +111,14 @@ export class MapCanvas {
     }
     this.draw();
     this.onSelect(cluster);
+  }
+
+  setUserLocation(location: UserLocation, focus = true): void {
+    this.userLocation = location;
+    if (focus) {
+      this.centerOn(location);
+    }
+    this.draw();
   }
 
   zoom(factor: number): void {
@@ -168,9 +183,14 @@ export class MapCanvas {
   private fit(): void {
     if (this.projectedClusters.length === 0 && this.traffic.length === 0) {
       this.bounds = null;
-      this.scale = 1;
-      this.offsetX = 0;
-      this.offsetY = 0;
+      if (this.userLocation) {
+        this.scale = 4_000_000;
+        this.centerOn(this.userLocation);
+      } else {
+        this.scale = 1;
+        this.offsetX = 0;
+        this.offsetY = 0;
+      }
       return;
     }
 
@@ -196,18 +216,18 @@ export class MapCanvas {
     ctx.fillStyle = "#f4f1e8";
     ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
-    if (this.showBasemap && this.bounds) {
+    if (this.showBasemap && (this.bounds || this.userLocation)) {
       this.drawBasemap();
     }
 
-    if (!this.bounds || this.clusters.length === 0) {
-      return;
+    if (this.bounds && this.clusters.length > 0) {
+      if (this.showTraffic) {
+        this.drawTrafficStations();
+      }
+      this.drawClusters();
     }
 
-    if (this.showTraffic) {
-      this.drawTrafficStations();
-    }
-    this.drawClusters();
+    this.drawUserLocation();
   }
 
   private drawBasemap(): void {
@@ -336,6 +356,28 @@ export class MapCanvas {
     }
   }
 
+  private drawUserLocation(): void {
+    if (!this.userLocation) {
+      return;
+    }
+
+    const point = this.screenPoint(this.userLocation);
+    if (!this.isVisible(point)) {
+      return;
+    }
+
+    const ctx = this.context;
+    const accuracyRadius = this.accuracyRadiusPx(this.userLocation);
+    if (accuracyRadius <= 0) {
+      return;
+    }
+
+    ctx.fillStyle = "rgba(22, 107, 109, 0.12)";
+    ctx.beginPath();
+    ctx.arc(point.x, point.y, accuracyRadius, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
   private findClusterAt(screenX: number, screenY: number): IntersectionCluster | null {
     const hitRadius = Math.max(10, 18 * window.devicePixelRatio);
     const candidates: Array<{ cluster: IntersectionCluster; distance: number }> = [];
@@ -391,6 +433,18 @@ export class MapCanvas {
     this.scale = Math.max(this.scale, 4_000_000);
     this.offsetX = this.canvas.width / 2 - projected.x * this.scale;
     this.offsetY = this.canvas.height / 2 - projected.y * this.scale;
+  }
+
+  private accuracyRadiusPx(location: UserLocation): number {
+    if (!location.accuracyMeters || !Number.isFinite(location.accuracyMeters) || location.accuracyMeters <= 0) {
+      return 0;
+    }
+
+    const latitudeFactor = Math.max(0.08, Math.cos((location.lat * Math.PI) / 180));
+    const deltaLon = (location.accuracyMeters / (40_075_016.686 * latitudeFactor)) * 360;
+    const center = project(location.lon, location.lat);
+    const edge = project(location.lon + deltaLon, location.lat);
+    return Math.abs(edge.x - center.x) * this.scale;
   }
 
   private markerZoomLevel(): number {

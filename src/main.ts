@@ -111,6 +111,7 @@ const elements = {
   tableView: byId<HTMLElement>("tableView"),
   showTraffic: byId<HTMLInputElement>("showTraffic"),
   showBasemap: byId<HTMLInputElement>("showBasemap"),
+  locateMeBtn: byId<HTMLButtonElement>("locateMeBtn"),
   zoomInBtn: byId<HTMLButtonElement>("zoomInBtn"),
   zoomOutBtn: byId<HTMLButtonElement>("zoomOutBtn"),
   resetMapBtn: byId<HTMLButtonElement>("resetMapBtn"),
@@ -158,6 +159,7 @@ function wireEvents(): void {
   elements.zoomInBtn.addEventListener("click", () => map.zoom(1.6));
   elements.zoomOutBtn.addEventListener("click", () => map.zoom(0.625));
   elements.resetMapBtn.addEventListener("click", () => map.reset());
+  elements.locateMeBtn.addEventListener("click", locateUser);
 
   elements.mapTab.addEventListener("click", () => setView("map"));
   elements.stateTab.addEventListener("click", () => setView("state"));
@@ -434,6 +436,37 @@ function renderAll(): void {
   }
 }
 
+function locateUser(): void {
+  if (!navigator.geolocation) {
+    setStatus("Browser geolocation is not available on this page.", 100);
+    return;
+  }
+
+  setLocateBusy(true);
+  setStatus("Requesting your browser location.", 100);
+  navigator.geolocation.getCurrentPosition(
+    (position) => {
+      const { latitude, longitude, accuracy } = position.coords;
+      map.setUserLocation({ lat: latitude, lon: longitude, accuracyMeters: accuracy }, true);
+      elements.locateMeBtn.classList.add("located");
+      setLocateBusy(false);
+      setStatus(`Centered map on your location (${Math.round(accuracy)} m accuracy).`, 100);
+    },
+    (error) => {
+      elements.locateMeBtn.classList.remove("located");
+      setLocateBusy(false);
+      setStatus(geolocationErrorMessage(error), 100);
+    },
+    { enableHighAccuracy: true, timeout: 12_000, maximumAge: 60_000 }
+  );
+}
+
+function setLocateBusy(isBusy: boolean): void {
+  elements.locateMeBtn.disabled = isBusy;
+  elements.locateMeBtn.classList.toggle("locating", isBusy);
+  elements.locateMeBtn.setAttribute("aria-busy", String(isBusy));
+}
+
 function applyBasemapSetting(notify: boolean): void {
   if (notify && elements.showBasemap.checked && isDirectFilePage()) {
     setStatus(OSM_FILE_PROTOCOL_MESSAGE, 100);
@@ -448,6 +481,19 @@ function updateOsmAttribution(): void {
 
 function isDirectFilePage(): boolean {
   return window.location.protocol === "file:";
+}
+
+function geolocationErrorMessage(error: GeolocationPositionError): string {
+  switch (error.code) {
+    case error.PERMISSION_DENIED:
+      return "Location permission was denied.";
+    case error.POSITION_UNAVAILABLE:
+      return "Your location is currently unavailable.";
+    case error.TIMEOUT:
+      return "Location request timed out.";
+    default:
+      return "Could not get your location.";
+  }
 }
 
 function renderMetrics(): void {
