@@ -12,6 +12,7 @@ import {
   AnalysisOptions,
   AnalysisResult,
   ClusterYearStat,
+  FatalPercentOptions,
   IntersectionCluster
 } from "./types";
 
@@ -39,14 +40,15 @@ declare global {
 
 declare const __SICHERE_KNOTEN_APP_VERSION__: string | undefined;
 
-type ClusterSortKey = "rank" | "state" | "location" | "accidents" | "fatal" | "serious" | "severity" | "risk";
+type ClusterSortKey = "state" | "location" | "accidents" | "fatal" | "serious" | "fatalPercent";
 type SortDirection = "asc" | "desc";
-type LoadingStepKey = "cache" | "parse" | "rank";
+type LoadingStepKey = "cache" | "parse" | "analyze";
 type SeverityFilterKey = "fatal" | "serious" | "other";
-type ViewKey = "map" | "state" | "table" | "settings";
+type ViewKey = "map" | "state" | "table" | "about" | "settings";
 type SelectionReason = "auto" | "program" | "user";
-const LOADING_STEP_ORDER: LoadingStepKey[] = ["cache", "parse", "rank"];
-const APP_CACHE_VERSION = typeof __SICHERE_KNOTEN_APP_VERSION__ === "string" ? __SICHERE_KNOTEN_APP_VERSION__ : "dev";
+const LOADING_STEP_ORDER: LoadingStepKey[] = ["cache", "parse", "analyze"];
+const APP_CACHE_VERSION =
+  typeof __SICHERE_KNOTEN_APP_VERSION__ === "string" ? __SICHERE_KNOTEN_APP_VERSION__ : "dev-fatal-percent-dynamic-trend";
 const ACCIDENT_CATEGORY_LABELS: Record<number, string> = {
   1: "Accident with persons killed",
   2: "Accident with seriously injured",
@@ -93,6 +95,10 @@ interface ClusterTableSort {
   direction: SortDirection;
 }
 
+interface FatalPercentSource {
+  fatalPercent: number;
+}
+
 interface TrendSeriesPoint extends ClusterYearStat {
   x: number;
   accidentY: number;
@@ -121,7 +127,7 @@ interface CrossingAccident {
 let accidents: AccidentRecord[] = [];
 let result: AnalysisResult | null = null;
 let selectedCluster: IntersectionCluster | null = null;
-let clusterTableSort: ClusterTableSort = { key: "rank", direction: "asc" };
+let clusterTableSort: ClusterTableSort = { key: "fatalPercent", direction: "desc" };
 let analysisSettingsDirty = false;
 let activeDataVersion: string | null = null;
 let userLocation: { lat: number; lon: number; accuracyMeters: number | null } | null = null;
@@ -137,6 +143,13 @@ const elements = {
   clusterRadiusOut: byId<HTMLInputElement>("clusterRadiusOut"),
   minAccidents: byId<HTMLInputElement>("minAccidents"),
   topCount: byId<HTMLInputElement>("topCount"),
+  fatalWeight: byId<HTMLInputElement>("fatalWeight"),
+  seriousWeight: byId<HTMLInputElement>("seriousWeight"),
+  fatalFullSample: byId<HTMLInputElement>("fatalFullSample"),
+  fatalTrendDeadZone: byId<HTMLInputElement>("fatalTrendDeadZone"),
+  fatalTrendFullSignal: byId<HTMLInputElement>("fatalTrendFullSignal"),
+  fatalMaxTrendAdjustment: byId<HTMLInputElement>("fatalMaxTrendAdjustment"),
+  fatalMaxPercent: byId<HTMLInputElement>("fatalMaxPercent"),
   stateFilter: byId<HTMLSelectElement>("stateFilter"),
   yearFilter: byId<HTMLDivElement>("yearFilter"),
   mapCanvas: byId<HTMLCanvasElement>("mapCanvas"),
@@ -157,10 +170,12 @@ const elements = {
   mapTab: byId<HTMLButtonElement>("mapTab"),
   stateTab: byId<HTMLButtonElement>("stateTab"),
   tableTab: byId<HTMLButtonElement>("tableTab"),
+  aboutTab: byId<HTMLButtonElement>("aboutTab"),
   settingsTab: byId<HTMLButtonElement>("settingsTab"),
   mapView: byId<HTMLElement>("mapView"),
   stateView: byId<HTMLElement>("stateView"),
   tableView: byId<HTMLElement>("tableView"),
+  aboutView: byId<HTMLElement>("aboutView"),
   settingsView: byId<HTMLElement>("settingsView"),
   showFatalPoints: byId<HTMLInputElement>("showFatalPoints"),
   showSeriousPoints: byId<HTMLInputElement>("showSeriousPoints"),
@@ -185,6 +200,8 @@ function wireEvents(): void {
   wireLinkedNumberRange(elements.clusterRadius, elements.clusterRadiusOut, markAnalysisSettingsDirty);
 
   wireClampedNumberInput(elements.minAccidents, markAnalysisSettingsDirty);
+  wireClampedNumberInput(elements.fatalFullSample, markAnalysisSettingsDirty);
+  fatalPercentDecimalInputs().forEach((input) => wireClampedDecimalInput(input, markAnalysisSettingsDirty));
 
   elements.stateFilter.addEventListener("input", markAnalysisSettingsDirty);
   elements.stateFilter.addEventListener("change", markAnalysisSettingsDirty);
@@ -211,6 +228,7 @@ function wireEvents(): void {
   elements.mapTab.addEventListener("click", () => setView("map"));
   elements.stateTab.addEventListener("click", () => setView("state"));
   elements.tableTab.addEventListener("click", () => setView("table"));
+  elements.aboutTab.addEventListener("click", () => setView("about"));
   elements.settingsTab.addEventListener("click", () => setView("settings"));
 
   for (const button of clusterSortButtons()) {
@@ -256,14 +274,24 @@ function wireClampedNumberInput(input: HTMLInputElement, onDraftChange: () => vo
   });
 }
 
+function wireClampedDecimalInput(input: HTMLInputElement, onDraftChange: () => void): void {
+  input.addEventListener("input", onDraftChange);
+  input.addEventListener("change", () => {
+    normalizeDecimalInput(input);
+    onDraftChange();
+  });
+}
+
 function resetAnalysisControlsToDefaults(): void {
   resetInputToDefault(elements.clusterRadius);
   resetInputToDefault(elements.clusterRadiusOut);
   resetInputToDefault(elements.minAccidents);
   resetInputToDefault(elements.topCount);
+  fatalPercentInputs().forEach(resetInputToDefault);
   normalizeLinkedNumberRange(elements.clusterRadius, elements.clusterRadiusOut);
   normalizeNumberInput(elements.minAccidents);
   normalizeNumberInput(elements.topCount);
+  normalizeFatalPercentInputs();
 }
 
 function resetInputToDefault(input: HTMLInputElement): void {
@@ -286,6 +314,46 @@ function normalizeNumberInput(input: HTMLInputElement): number {
   const normalized = Math.trunc(clampNumber(value, inputMin(input), inputMax(input)));
   input.value = String(normalized);
   return normalized;
+}
+
+function normalizeDecimalInput(input: HTMLInputElement): number {
+  const fallback = Number.isFinite(Number(input.defaultValue)) ? Number(input.defaultValue) : inputMin(input);
+  const value = Number.isFinite(Number(input.value)) ? Number(input.value) : fallback;
+  const normalized = clampNumber(value, inputMin(input), inputMax(input));
+  input.value = formatInputNumber(normalized);
+  return normalized;
+}
+
+function normalizeFatalPercentInputs(): void {
+  normalizeNumberInput(elements.fatalFullSample);
+  fatalPercentDecimalInputs().forEach(normalizeDecimalInput);
+}
+
+function fatalPercentInputs(): HTMLInputElement[] {
+  return [
+    elements.fatalWeight,
+    elements.seriousWeight,
+    elements.fatalFullSample,
+    elements.fatalTrendDeadZone,
+    elements.fatalTrendFullSignal,
+    elements.fatalMaxTrendAdjustment,
+    elements.fatalMaxPercent
+  ];
+}
+
+function fatalPercentDecimalInputs(): HTMLInputElement[] {
+  return [
+    elements.fatalWeight,
+    elements.seriousWeight,
+    elements.fatalTrendDeadZone,
+    elements.fatalTrendFullSignal,
+    elements.fatalMaxTrendAdjustment,
+    elements.fatalMaxPercent
+  ];
+}
+
+function formatInputNumber(value: number): string {
+  return Number.isInteger(value) ? String(value) : String(round(value, 4));
 }
 
 function markAnalysisSettingsDirty(): void {
@@ -440,7 +508,7 @@ async function runAnalysisWithCache(options: AnalysisOptions, cacheContext: Anal
       }
     }
 
-    setStatus(`${result.clusters.length.toLocaleString()} intersection clusters ranked.`, 100);
+    setStatus(`${result.clusters.length.toLocaleString()} intersection clusters analyzed.`, 100);
   } catch (error) {
     setStatus(errorMessage(error), 0);
   } finally {
@@ -460,14 +528,32 @@ function readOptions(): AnalysisOptions {
     clusterRadiusMeters: Number(elements.clusterRadiusOut.value),
     minAccidents: normalizeNumberInput(elements.minAccidents),
     years,
-    stateCode: elements.stateFilter.value as AnalysisOptions["stateCode"]
+    stateCode: elements.stateFilter.value as AnalysisOptions["stateCode"],
+    fatalPercent: readFatalPercentOptions()
+  };
+}
+
+function readFatalPercentOptions(): FatalPercentOptions {
+  const trendDeadZonePercent = normalizeDecimalInput(elements.fatalTrendDeadZone);
+  const trendFullSignalPercent = Math.max(trendDeadZonePercent + 0.1, normalizeDecimalInput(elements.fatalTrendFullSignal));
+  elements.fatalTrendFullSignal.value = formatInputNumber(trendFullSignalPercent);
+
+  return {
+    fatalWeight: normalizeDecimalInput(elements.fatalWeight),
+    seriousWeight: normalizeDecimalInput(elements.seriousWeight),
+    fullSampleAccidents: normalizeNumberInput(elements.fatalFullSample),
+    trendDeadZone: trendDeadZonePercent / 100,
+    trendFullSignal: trendFullSignalPercent / 100,
+    maxTrendAdjustment: normalizeDecimalInput(elements.fatalMaxTrendAdjustment) / 100,
+    maxFatalPercent: normalizeDecimalInput(elements.fatalMaxPercent) / 100
   };
 }
 
 function cloneAnalysisOptions(options: AnalysisOptions): AnalysisOptions {
   return {
     ...options,
-    years: new Set(options.years)
+    years: new Set(options.years),
+    fatalPercent: { ...options.fatalPercent }
   };
 }
 
@@ -476,7 +562,8 @@ function populateFilters(): void {
   const selectedBrowseState = elements.browseState.value;
   elements.stateFilter.innerHTML = `<option value="all">All Bundeslaender</option>`;
   elements.browseState.innerHTML = `<option value="all">All Bundeslaender</option>`;
-  for (const [code, name] of Object.entries(STATE_NAMES)) {
+  const stateOptions = Object.entries(STATE_NAMES).sort((a, b) => a[1].localeCompare(b[1], "de", { sensitivity: "base" }));
+  for (const [code, name] of stateOptions) {
     if (accidents.some((accident) => accident.stateCode === code)) {
       elements.stateFilter.append(new Option(name, code));
       elements.browseState.append(new Option(name, code));
@@ -609,7 +696,7 @@ function renderTables(): void {
       <td>${escapeHtml(summary.stateName)}</td>
       <td>${summary.accidentCount.toLocaleString()}</td>
       <td>${summary.clusterCount.toLocaleString()}</td>
-      <td>${formatNumber(summary.severityPoints)}</td>
+      <td>${formatFatalPercent(summary)}</td>
       <td>${summary.topCluster ? clusterLocation(summary.topCluster) : ""}</td>
     `;
     if (summary.topCluster) {
@@ -627,14 +714,12 @@ function renderTables(): void {
     const row = document.createElement("tr");
     row.tabIndex = 0;
     row.innerHTML = `
-      <td>${cluster.rank}</td>
       <td>${escapeHtml(cluster.stateName)}</td>
       <td>${clusterLocation(cluster)}</td>
       <td>${cluster.accidentCount.toLocaleString()}</td>
       <td>${cluster.fatalCount.toLocaleString()}</td>
       <td>${cluster.seriousCount.toLocaleString()}</td>
-      <td>${formatNumber(cluster.severityPoints)}</td>
-      <td>${formatNumber(cluster.dangerScore)}</td>
+      <td>${formatFatalPercent(cluster)}</td>
     `;
     row.addEventListener("click", () => {
       setView("map");
@@ -671,7 +756,7 @@ function clustersForTable(clusters: IntersectionCluster[], topCount: number): In
 function sortClustersForTable(clusters: IntersectionCluster[]): IntersectionCluster[] {
   return clusters.slice().sort((a, b) => {
     const primary = compareClusterSortValue(a, b, clusterTableSort.key, clusterTableSort.direction);
-    return primary || a.rank - b.rank;
+    return primary || compareClusterCoreMetric(a, b);
   });
 }
 
@@ -705,8 +790,6 @@ function compareClusterSortValue(
 
 function clusterSortValue(cluster: IntersectionCluster, key: ClusterSortKey): number | string | null {
   switch (key) {
-    case "rank":
-      return cluster.rank;
     case "state":
       return cluster.stateName;
     case "location":
@@ -717,15 +800,23 @@ function clusterSortValue(cluster: IntersectionCluster, key: ClusterSortKey): nu
       return cluster.fatalCount;
     case "serious":
       return cluster.seriousCount;
-    case "severity":
-      return cluster.severityPoints;
-    case "risk":
-      return cluster.dangerScore;
+    case "fatalPercent":
+      return cluster.fatalPercent;
   }
 }
 
+function compareClusterCoreMetric(a: IntersectionCluster, b: IntersectionCluster): number {
+  return (
+    b.fatalPercent - a.fatalPercent ||
+    b.fatalCount - a.fatalCount ||
+    b.seriousCount - a.seriousCount ||
+    b.accidentCount - a.accidentCount ||
+    clusterLocationText(a).localeCompare(clusterLocationText(b), "de", { sensitivity: "base" })
+  );
+}
+
 function defaultClusterSortDirection(key: ClusterSortKey): SortDirection {
-  return key === "rank" || key === "state" || key === "location" ? "asc" : "desc";
+  return key === "state" || key === "location" ? "asc" : "desc";
 }
 
 function updateClusterSortHeaders(): void {
@@ -769,8 +860,8 @@ function renderNearbyList(): void {
     return;
   }
 
-  nearby.forEach((entry, index) => {
-    elements.nearbyList.append(hotspotButton(entry.cluster, index + 1, `${formatDistance(entry.distanceMeters)} away`));
+  nearby.forEach((entry) => {
+    elements.nearbyList.append(hotspotButton(entry.cluster, `${formatDistance(entry.distanceMeters)} away`));
   });
 }
 
@@ -794,8 +885,8 @@ function renderStateHotspotList(): void {
     return;
   }
 
-  clusters.forEach((cluster, index) => {
-    elements.stateHotspotList.append(hotspotButton(cluster, index + 1, cluster.stateName));
+  clusters.forEach((cluster) => {
+    elements.stateHotspotList.append(hotspotButton(cluster, cluster.stateName));
   });
 }
 
@@ -805,13 +896,12 @@ function topClusterByState(): IntersectionCluster[] {
     .sort((a, b) => a.stateName.localeCompare(b.stateName, "de", { sensitivity: "base" }));
 }
 
-function hotspotButton(cluster: IntersectionCluster, displayRank: number, context: string): HTMLButtonElement {
+function hotspotButton(cluster: IntersectionCluster, context: string): HTMLButtonElement {
   const button = document.createElement("button");
   button.type = "button";
   button.className = "hotspot-button";
   button.classList.toggle("selected", selectedCluster?.id === cluster.id);
   button.innerHTML = `
-    <span class="hotspot-rank">${displayRank}</span>
     <span class="hotspot-main">
       <span class="hotspot-title">${escapeHtml(context)}</span>
       <span class="hotspot-stats">
@@ -847,7 +937,7 @@ function nearbyClusters(limit: number): Array<{ cluster: IntersectionCluster; di
 
   return visibleSeverityClusters()
     .map((cluster) => ({ cluster, distanceMeters: distanceMeters(location, cluster) }))
-    .sort((a, b) => a.distanceMeters - b.distanceMeters || a.cluster.rank - b.cluster.rank)
+    .sort((a, b) => a.distanceMeters - b.distanceMeters || compareClusterCoreMetric(a.cluster, b.cluster))
     .slice(0, limit);
 }
 
@@ -910,15 +1000,13 @@ function renderSelection(cluster: IntersectionCluster | null): void {
   elements.selectedMapActions.innerHTML = renderMapServiceActions(openStreetMapUrl, googleMapsUrl);
   elements.selectionDetails.innerHTML = `
     <dl>
-      <div><dt>Rank</dt><dd>${cluster.rank}</dd></div>
       <div><dt>Bundesland</dt><dd>${escapeHtml(cluster.stateName)}</dd></div>
       <div><dt>Coordinates</dt><dd>${cluster.lat.toFixed(5)}, ${cluster.lon.toFixed(5)}</dd></div>
       <div><dt>Years</dt><dd>${cluster.years.join(", ")}</dd></div>
       <div><dt>Accidents</dt><dd>${cluster.accidentCount.toLocaleString()}</dd></div>
       <div><dt>Fatal / serious</dt><dd>${cluster.fatalCount} / ${cluster.seriousCount}</dd></div>
+      <div><dt>Fatal %</dt><dd>${formatFatalPercent(cluster)}</dd></div>
       <div><dt>Vulnerable users</dt><dd>${cluster.vulnerableCount.toLocaleString()}</dd></div>
-      <div><dt>Severity</dt><dd>${formatNumber(cluster.severityPoints)}</dd></div>
-      <div><dt>Risk score</dt><dd>${formatNumber(cluster.dangerScore)}</dd></div>
     </dl>
     ${trendPanel}
     ${recordPanel}
@@ -1283,8 +1371,7 @@ function clusterTrendSeries(cluster: IntersectionCluster, years: number[]): Clus
     }
     return {
       year,
-      accidentCount: 0,
-      severityPoints: 0
+      accidentCount: 0
     };
   });
 }
@@ -1354,6 +1441,7 @@ function setView(view: ViewKey): void {
     { key: "map", tab: elements.mapTab, panel: elements.mapView },
     { key: "state", tab: elements.stateTab, panel: elements.stateView },
     { key: "table", tab: elements.tableTab, panel: elements.tableView },
+    { key: "about", tab: elements.aboutTab, panel: elements.aboutView },
     { key: "settings", tab: elements.settingsTab, panel: elements.settingsView }
   ] as const;
 
@@ -1386,32 +1474,28 @@ function clearData(): void {
 
 function exportClusters(): void {
   if (!result || result.clusters.length === 0) {
-    setStatus("No ranked clusters to export.", 0);
+    setStatus("No analyzed clusters to export.", 0);
     return;
   }
 
   const header = [
-    "rank",
     "state",
     "lat",
     "lon",
     "accidents",
     "fatal",
     "serious",
-    "severity_points",
-    "danger_score"
+    "fatal_percent"
   ];
   const rows = result.clusters.map((cluster) =>
     [
-      cluster.rank,
       cluster.stateName,
       cluster.lat,
       cluster.lon,
       cluster.accidentCount,
       cluster.fatalCount,
       cluster.seriousCount,
-      cluster.severityPoints,
-      cluster.dangerScore
+      fatalPercentValue(cluster)
     ]
       .map(csvCell)
       .join(",")
@@ -1447,7 +1531,8 @@ function setAnalysisControlsDisabled(isDisabled: boolean): void {
     elements.clusterRadiusOut,
     elements.minAccidents,
     elements.topCount,
-    elements.stateFilter
+    elements.stateFilter,
+    ...fatalPercentInputs()
   ];
   elements.yearFilter.querySelectorAll<HTMLInputElement>("input").forEach((input) => controls.push(input));
 
@@ -1473,8 +1558,9 @@ function updateMapLoadingPanel(message: string, progress: number): void {
   const isProblem =
     (lowerMessage.includes("could not") || lowerMessage.includes("failed") || lowerMessage.includes("error") || lowerMessage.includes("blocked")) &&
     !lowerMessage.includes("cache write skipped");
-  const isIdle = lowerMessage.startsWith("data cleared") || lowerMessage.startsWith("load accident data") || lowerMessage.startsWith("no ranked");
-  const hasNoClusters = lowerMessage.startsWith("0 intersection clusters ranked");
+  const isIdle =
+    lowerMessage.startsWith("data cleared") || lowerMessage.startsWith("load accident data") || lowerMessage.startsWith("no analyzed");
+  const hasNoClusters = lowerMessage.startsWith("0 intersection clusters analyzed");
   const activeStep = loadingStepForProgress(progress);
 
   elements.mapLoadingStatus.textContent = message;
@@ -1493,7 +1579,7 @@ function updateMapLoadingPanel(message: string, progress: number): void {
 
 function loadingStepForProgress(progress: number): LoadingStepKey {
   if (progress >= 75) {
-    return "rank";
+    return "analyze";
   }
   if (progress >= 10) {
     return "parse";
@@ -1519,8 +1605,8 @@ function loadingTitle(step: LoadingStepKey, progress: number, isProblem: boolean
       return "Checking data cache";
     case "parse":
       return "Parsing accident records";
-    case "rank":
-      return "Ranking intersections";
+    case "analyze":
+      return "Analyzing intersections";
   }
 }
 
@@ -1639,6 +1725,14 @@ function formatNumber(value: number): string {
 
 function formatSignedPercent(value: number): string {
   return `${value > 0 ? "+" : ""}${new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 }).format(value * 100)}%`;
+}
+
+function formatFatalPercent(source: FatalPercentSource): string {
+  return `${fatalPercentValue(source)}%`;
+}
+
+function fatalPercentValue(source: FatalPercentSource): number {
+  return round(source.fatalPercent * 100, 1);
 }
 
 function formatDistance(valueMeters: number): string {

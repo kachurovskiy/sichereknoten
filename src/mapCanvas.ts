@@ -44,7 +44,7 @@ const OSM_TILE_FILTER = "grayscale(1) saturate(0) contrast(0.62) brightness(1.18
 const OSM_TILE_ALPHA = 0.58;
 
 interface VisualScale {
-  harmScale: number;
+  metricScale: number;
   zoomLevel: number;
 }
 
@@ -60,7 +60,7 @@ export class MapCanvas {
   private projectedClusters: ProjectedCluster[] = [];
   private selected: IntersectionCluster | null = null;
   private userLocation: UserLocation | null = null;
-  private maxDangerScore = 1;
+  private maxFatalPercent = 0.01;
   private severityFilters: SeverityFilters = { fatal: true, serious: true, other: false };
   private tileCache = new Map<string, TileRecord>();
   private tileUseCounter = 0;
@@ -94,10 +94,10 @@ export class MapCanvas {
 
   setData(clusters: IntersectionCluster[]): void {
     this.clusters = clusters;
-    this.maxDangerScore = Math.max(1, ...clusters.map((cluster) => cluster.dangerScore));
+    this.maxFatalPercent = Math.max(0.01, ...clusters.map((cluster) => cluster.fatalPercent));
     this.projectedClusters = clusters
       .map((cluster) => ({ cluster, projected: project(cluster.lon, cluster.lat) }))
-      .sort((a, b) => drawPriority(a.cluster, this.maxDangerScore) - drawPriority(b.cluster, this.maxDangerScore));
+      .sort((a, b) => drawPriority(a.cluster) - drawPriority(b.cluster));
     this.selected = null;
     this.fit();
     this.draw();
@@ -443,11 +443,10 @@ export class MapCanvas {
     const ctx = this.context;
 
     for (const cluster of visibleClusters) {
-      const colorIntensity = severityColorIntensity(cluster.cluster);
-      const harmIntensity = Math.min(1, cluster.cluster.dangerScore / visualScale.harmScale);
-      const radius = this.markerRadius(cluster.cluster, harmIntensity, colorIntensity, visualScale.zoomLevel);
-      const alpha = this.markerAlpha(cluster.cluster, harmIntensity, colorIntensity, visualScale.zoomLevel);
-      ctx.fillStyle = colorForIntensity(colorIntensity, alpha);
+      const metricIntensity = Math.min(1, cluster.cluster.fatalPercent / visualScale.metricScale);
+      const radius = this.markerRadius(cluster.cluster, metricIntensity, visualScale.zoomLevel);
+      const alpha = this.markerAlpha(cluster.cluster, metricIntensity, visualScale.zoomLevel);
+      ctx.fillStyle = colorForIntensity(metricIntensity, alpha);
       ctx.beginPath();
       ctx.arc(cluster.point.x, cluster.point.y, radius, 0, Math.PI * 2);
       ctx.fill();
@@ -507,7 +506,7 @@ export class MapCanvas {
       return null;
     }
 
-    candidates.sort((a, b) => a.distance - b.distance || b.cluster.dangerScore - a.cluster.dangerScore);
+    candidates.sort((a, b) => a.distance - b.distance || compareFatalMetric(a.cluster, b.cluster));
     const clusters = candidates.slice(0, 12).map((candidate) => candidate.cluster);
     const activeCycle = this.clickCycle;
     const canCycle =
@@ -563,23 +562,21 @@ export class MapCanvas {
     return clamp((Math.log10(this.scale) - 5.05) / 2.0, 0, 1);
   }
 
-  private markerRadius(cluster: IntersectionCluster, harmIntensity: number, severityIntensity: number, zoomLevel: number): number {
+  private markerRadius(cluster: IntersectionCluster, metricIntensity: number, zoomLevel: number): number {
     const volume = Math.min(1, Math.log1p(cluster.accidentCount) / Math.log(160));
     const radiusCss =
       lerp(0.75, 2.4, zoomLevel) +
-      Math.sqrt(harmIntensity) * lerp(1.25, 5.4, zoomLevel) +
-      volume * lerp(0.25, 1.45, zoomLevel) +
-      severityIntensity * lerp(0.2, 1.15, zoomLevel);
+      Math.sqrt(metricIntensity) * lerp(1.25, 5.4, zoomLevel) +
+      volume * lerp(0.25, 1.45, zoomLevel);
     return Math.min(14, radiusCss) * window.devicePixelRatio;
   }
 
-  private markerAlpha(cluster: IntersectionCluster, harmIntensity: number, severityIntensity: number, zoomLevel: number): number {
+  private markerAlpha(cluster: IntersectionCluster, metricIntensity: number, zoomLevel: number): number {
     const confidence = 1 - Math.exp(-cluster.accidentCount / 6);
     const baseAlpha = lerp(0.14, 0.24, zoomLevel);
-    const harmAlpha = Math.sqrt(harmIntensity) * lerp(0.22, 0.36, zoomLevel);
-    const severityAlpha = severityIntensity * lerp(0.12, 0.22, zoomLevel);
+    const metricAlpha = Math.sqrt(metricIntensity) * lerp(0.24, 0.42, zoomLevel);
     const fatalAlpha = cluster.fatalCount > 0 ? 0.08 : 0;
-    return clamp(baseAlpha + confidence * (harmAlpha + severityAlpha) + fatalAlpha, 0.14, 0.86);
+    return clamp(baseAlpha + confidence * metricAlpha + fatalAlpha, 0.14, 0.86);
   }
 
   private visibleClusterPoints(): VisibleClusterPoint[] {
@@ -603,19 +600,19 @@ export class MapCanvas {
   }
 
   private visualScale(visibleClusters: VisibleClusterPoint[], zoomLevel: number): VisualScale {
-    const localScoreScale = this.localScoreScale(visibleClusters);
+    const localMetricScale = this.localMetricScale(visibleClusters);
     const localWeight = smoothstep(zoomLevel);
     return {
-      harmScale: Math.max(1, lerp(this.maxDangerScore, localScoreScale, localWeight)),
+      metricScale: Math.max(0.01, lerp(this.maxFatalPercent, localMetricScale, localWeight)),
       zoomLevel
     };
   }
 
-  private localScoreScale(visibleClusters: VisibleClusterPoint[]): number {
+  private localMetricScale(visibleClusters: VisibleClusterPoint[]): number {
     if (visibleClusters.length === 0) {
-      return this.maxDangerScore;
+      return this.maxFatalPercent;
     }
-    return Math.max(1, ...visibleClusters.map((item) => item.cluster.dangerScore));
+    return Math.max(0.01, ...visibleClusters.map((item) => item.cluster.fatalPercent));
   }
 
   private isVisible(point: ProjectedPoint): boolean {
@@ -670,22 +667,17 @@ function pointerCenter(a: ProjectedPoint, b: ProjectedPoint): ProjectedPoint {
   };
 }
 
-function drawPriority(cluster: IntersectionCluster, maxDangerScore: number): number {
-  const harmPriority = cluster.dangerScore / Math.max(1, maxDangerScore);
-  return harmPriority + severityColorIntensity(cluster) * 0.75 + Math.min(2, cluster.fatalCount) * 0.35;
+function drawPriority(cluster: IntersectionCluster): number {
+  return cluster.fatalPercent + Math.min(10, cluster.accidentCount) * 0.001;
 }
 
-function severityColorIntensity(cluster: IntersectionCluster): number {
-  if (cluster.accidentCount <= 0) {
-    return 0;
-  }
-
-  const severityPerAccident = cluster.severityPoints / cluster.accidentCount;
-  const severityIntensity = clamp(severityPerAccident / 7, 0, 1);
-  const seriousShareIntensity = clamp((cluster.seriousCount / cluster.accidentCount) * 0.95, 0, 0.7);
-  const fatalIntensity = cluster.fatalCount > 0 ? 0.72 + 0.22 * (1 - Math.exp(-cluster.fatalCount / 2)) : 0;
-
-  return clamp(Math.max(severityIntensity, seriousShareIntensity, fatalIntensity), 0, 1);
+function compareFatalMetric(a: IntersectionCluster, b: IntersectionCluster): number {
+  return (
+    b.fatalPercent - a.fatalPercent ||
+    b.fatalCount - a.fatalCount ||
+    b.seriousCount - a.seriousCount ||
+    b.accidentCount - a.accidentCount
+  );
 }
 
 function clusterSeverity(cluster: IntersectionCluster): ClusterSeverity {

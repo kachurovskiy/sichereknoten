@@ -33,19 +33,6 @@ export function parseBooleanFlag(value: unknown): boolean | null {
   return null;
 }
 
-export function severityWeight(category: number | null): number {
-  if (category === 1) {
-    return 12;
-  }
-  if (category === 2) {
-    return 5;
-  }
-  if (category === 3) {
-    return 2;
-  }
-  return 1;
-}
-
 export function accidentFromRecord(
   fields: Record<string, unknown>,
   source: string,
@@ -83,7 +70,6 @@ export function accidentFromRecord(
     lightCondition: parseInteger(readField(fields, "ULICHTVERH")),
     roadSurface: parseInteger(readField(fields, "USTRZUSTAND", "IstStrassenzustand", "istStrasse", "IstStrasse")),
     plausibilityLevel: parseInteger(readField(fields, "PLST")),
-    severityWeight: severityWeight(category),
     linRefX: parseNumber(readField(fields, "LINREFX")),
     linRefY: parseNumber(readField(fields, "LINREFY")),
     lon,

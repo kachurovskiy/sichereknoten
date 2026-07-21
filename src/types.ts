@@ -26,7 +26,6 @@ export interface AccidentRecord {
   lightCondition: number | null;
   roadSurface: number | null;
   plausibilityLevel: number | null;
-  severityWeight: number;
   linRefX: number | null;
   linRefY: number | null;
   lon: number;
@@ -44,6 +43,17 @@ export interface AnalysisOptions {
   minAccidents: number;
   years: Set<number>;
   stateCode: string | "all";
+  fatalPercent: FatalPercentOptions;
+}
+
+export interface FatalPercentOptions {
+  fatalWeight: number;
+  seriousWeight: number;
+  fullSampleAccidents: number;
+  trendDeadZone: number;
+  trendFullSignal: number;
+  maxTrendAdjustment: number;
+  maxFatalPercent: number;
 }
 
 export type AccidentTrendDirection = "falling" | "stable" | "rising" | "unknown";
@@ -60,12 +70,10 @@ export interface AccidentTrend {
 export interface ClusterYearStat {
   year: number;
   accidentCount: number;
-  severityPoints: number;
 }
 
 export interface IntersectionCluster {
   id: string;
-  rank: number;
   lon: number;
   lat: number;
   stateCode: string;
@@ -75,9 +83,7 @@ export interface IntersectionCluster {
   seriousCount: number;
   lightCount: number;
   vulnerableCount: number;
-  severityPoints: number;
-  absoluteScore: number;
-  dangerScore: number;
+  fatalPercent: number;
   years: number[];
   yearlyStats: ClusterYearStat[];
   accidentTrend: AccidentTrend;
@@ -89,7 +95,9 @@ export interface StateSummary {
   stateName: string;
   accidentCount: number;
   clusterCount: number;
-  severityPoints: number;
+  fatalCount: number;
+  seriousCount: number;
+  fatalPercent: number;
   topCluster: IntersectionCluster | null;
 }
 

@@ -1,6 +1,6 @@
 # Data Processing
 
-This project is a static browser app. There is no backend processing step at runtime; all parsing, clustering, scoring, and ranking happens in the browser after the static assets load.
+This project is a static browser app. There is no backend processing step at runtime; all parsing, clustering, and analysis happens in the browser after the static assets load.
 
 ## Source Files
 
@@ -17,7 +17,7 @@ The bundled source data comes from:
 
 - Accident locations: [Unfallatlas](https://unfallatlas.statistikportal.de/) / Statistische Aemter des Bundes und der Laender. Dataset URI: <https://data.gov.de/suche/daten/unfallatlas>.
 
-The source data is reused under [Datenlizenz Deutschland - Namensnennung - Version 2.0](https://www.govdata.de/dl-de/by-2-0) (`dl-de/by-2-0`). The app changes the source data by parsing CSV files, filtering records, clustering accident points, and calculating derived scores and rankings. Any exported table or screenshot from the app should retain this source note or an equivalent attribution.
+The source data is reused under [Datenlizenz Deutschland - Namensnennung - Version 2.0](https://www.govdata.de/dl-de/by-2-0) (`dl-de/by-2-0`). The app changes the source data by parsing CSV files, filtering records, clustering accident points, and calculating derived analysis measures. Any exported table or screenshot from the app should retain this source note or an equivalent attribution.
 
 ## Build Script
 
@@ -85,7 +85,7 @@ After analysis succeeds for bundled data, the app also stores the resulting `Ana
 - selected years
 - selected Bundesland
 
-On later page loads with the same data, app build, and analysis settings, `runAnalysis()` restores that result and skips the expensive clustering/ranking stage. Changing any analysis control creates a different cache key. Changing source data or rebuilding app code invalidates the relevant cached analysis automatically.
+On later page loads with the same data, app build, and analysis settings, `runAnalysis()` restores that result and skips the expensive clustering stage. Changing any analysis control creates a different cache key. Changing source data or rebuilding app code invalidates the relevant cached analysis automatically.
 
 The cache is an optimization only. The app still works when IndexedDB is blocked, full, or cleared by the browser.
 
@@ -114,12 +114,12 @@ Mapped accident fields:
 - `IstRad`, `IstFuss`, `IstKrad`, `IstPKW`, `IstGkfz`: participant flags.
 - `XGCSWGS84`, `YGCSWGS84`: longitude and latitude.
 
-Severity weights from `UKATEGORIE`:
+Injury outcomes from `UKATEGORIE`:
 
-- `1`: 12 points
-- `2`: 5 points
-- `3`: 2 points
-- anything else: 1 point
+- `1`: fatal accident
+- `2`: serious-injury accident
+- `3`: light-injury accident
+- anything else: other or unknown outcome
 
 ## Intersection Inference
 
@@ -143,9 +143,9 @@ The default cluster radius is 60 meters.
 
 The map draws visible grayscale OpenStreetMap raster tiles from `https://tile.openstreetmap.org/{z}/{x}/{y}.png` behind the cluster points while showing OpenStreetMap attribution in the map corner. Direct `file://` use cannot send the browser `Referer` header required by the OSM tile usage policy, so tiles may be partial or blocked in that mode; use `npm run serve:docs` or GitHub Pages for complete tiles. Tiles are requested only for the current viewport and retained in a small in-memory browser cache; the app does not prefetch offline tile packs.
 
-Accident clusters are drawn as map-projected points. All visible clusters are rendered; the map renderer does not drop low-scoring clusters as a display optimization. Marker color emphasizes crash severity concentration: severity points per accident, serious-injury share, and especially fatal crashes. Marker size and transparency still use total harm/volume, with a continuously blended national-to-visible score scale as the user zooms. This keeps city-level hotspots readable without a hard visual-mode switch while separating severe clusters from merely large intersections. Higher-priority clusters are drawn later so stronger points remain visible when dots overlap. For responsiveness, projected cluster coordinates are cached and pan/zoom redraws are throttled to animation frames.
+Accident clusters are drawn as map-projected points. All visible clusters are rendered; the map renderer does not drop low-metric clusters as a display optimization. Marker color, size, transparency, draw order, and click tie-breaking use Fatal % as the core metric, with accident count used only as a secondary tie-break and volume cue. This keeps city-level hotspots readable while separating severe locations from merely large intersections. Higher Fatal % clusters are drawn later so stronger points remain visible when dots overlap. For responsiveness, projected cluster coordinates are cached and pan/zoom redraws are throttled to animation frames.
 
-## Scoring
+## Fatal %
 
 Each cluster stores:
 
@@ -154,16 +154,44 @@ Each cluster stores:
 - serious injury count
 - light injury count
 - vulnerable user count
-- severity points
-- absolute score
+- Fatal %
 
-Score:
+Fatal %:
 
 ```text
-severityPoints + accidentCount * 0.35 + vulnerableCount * 0.25
+(fatal * fatal weight + serious * serious weight) / total
 ```
 
-The app ranks clusters by this score.
+Default weights:
+
+- fatal weight: `1`
+- serious weight: `0.5`
+
+For clusters below the full-sample accident count in the selected scope, the app applies a progressive sample-size discount:
+
+```text
+discount = total / full sample accidents
+```
+
+At the full-sample accident count or higher, the discount is 1.0. The default full-sample accident count is `10`.
+
+The Accident trend also adjusts Fatal % by how strongly accidents are rising or falling:
+
+```text
+trend signal = clamp((abs(relative trend) - trend dead zone) / (full trend signal - trend dead zone), 0, 1)
+trend factor = 1 + trend signal * max trend adjustment for rising trends
+trend factor = 1 - trend signal * max trend adjustment for falling trends
+Fatal % = ((fatal * fatal weight + serious * serious weight) / total) * discount * trend factor
+```
+
+Default trend settings:
+
+- trend dead zone: `5%` per year
+- full trend signal: `15%` per year
+- max trend adjustment: `15%`
+- metric cap: `100%`
+
+All Fatal % parameters are available in Settings. The result is capped by the metric cap and displayed as a percentage. This avoids treating high-incident, high-traffic intersections as automatically worst when reliable traffic volume data is not available, while strongly reducing the influence of very small samples.
 
 ## Accident Trend
 
@@ -173,14 +201,14 @@ The falling/stable/rising label is based on a linear trend over the selected yea
 
 ## Bundesland Summaries
 
-After clusters are ranked, summaries are grouped by cluster Bundesland:
+After clusters are analyzed, summaries are grouped by cluster Bundesland:
 
 - total accident count
 - cluster count
-- total severity points
-- top-ranked cluster in that Bundesland
+- Fatal %
+- top cluster in that Bundesland
 
-The state summary table is sorted by total severity points.
+The state summary table is sorted by Fatal %.
 
 ## Updating Data
 

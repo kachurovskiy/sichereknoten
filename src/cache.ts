@@ -225,7 +225,14 @@ function analysisOptionsKey(options: AnalysisOptions): string {
     `cluster=${options.clusterRadiusMeters}`,
     `min=${options.minAccidents}`,
     `years=${years || "all"}`,
-    `state=${options.stateCode}`
+    `state=${options.stateCode}`,
+    `fatalWeight=${options.fatalPercent.fatalWeight}`,
+    `seriousWeight=${options.fatalPercent.seriousWeight}`,
+    `fullSample=${options.fatalPercent.fullSampleAccidents}`,
+    `trendDead=${options.fatalPercent.trendDeadZone}`,
+    `trendFull=${options.fatalPercent.trendFullSignal}`,
+    `trendMax=${options.fatalPercent.maxTrendAdjustment}`,
+    `fatalCap=${options.fatalPercent.maxFatalPercent}`
   ].join("|");
 }
 

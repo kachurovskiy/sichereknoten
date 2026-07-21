@@ -17,7 +17,7 @@ The app supports:
 - accident CSV files from `docs/data/csv`
 - map view with local canvas rendering and an OpenStreetMap basemap
 - Bundesland summaries and top intersection tables
-- CSV export of ranked clusters
+- CSV export of analyzed intersection clusters with Fatal %
 
 The app automatically loads the bundled CSV files from `docs/data/csv`. Raw SHP/DBF Unfallatlas downloads are not required in the repository because the bundled CSV files already contain the accident coordinates and attributes used by the browser analysis.
 
@@ -25,7 +25,7 @@ The map draws grayscale OpenStreetMap tiles behind the accident markers and load
 
 For direct `file://` use, the build also writes compressed data scripts in `docs/assets/data-*.js`. Re-run `npm run build` after changing files in `docs/data`.
 
-After the first successful load, parsed records are cached in IndexedDB under the generated data version, so normal refreshes skip CSV parsing. Ranked analysis results are also cached per data version, app build, and analysis settings, so reloads with the same controls skip the clustering stage. The cache invalidates automatically after `npm run build` changes the data version or app build fingerprint.
+After the first successful load, parsed records are cached in IndexedDB under the generated data version, so normal refreshes skip CSV parsing. Analysis results are also cached per data version, app build, and analysis settings, so reloads with the same controls skip the clustering stage. The cache invalidates automatically after `npm run build` changes the data version or app build fingerprint.
 
 ## Data Sources and License
 
@@ -35,6 +35,6 @@ Bundled input data is reused from these public sources:
 
 - Accident locations: [Unfallatlas](https://unfallatlas.statistikportal.de/) / Statistische Aemter des Bundes und der Laender. Dataset URI: <https://data.gov.de/suche/daten/unfallatlas>.
 
-The source data is reused under [Datenlizenz Deutschland - Namensnennung - Version 2.0](https://www.govdata.de/dl-de/by-2-0) (`dl-de/by-2-0`). This app processes and modifies the source data by parsing records, clustering accident points, calculating scores, and producing derived rankings. The rankings are therefore project-generated analysis, not an official publication by the data providers.
+The source data is reused under [Datenlizenz Deutschland - Namensnennung - Version 2.0](https://www.govdata.de/dl-de/by-2-0) (`dl-de/by-2-0`). This app processes and modifies the source data by parsing records, clustering accident points, and producing derived Fatal % analysis. The analysis is project-generated, not an official publication by the data providers.
 
-See [DATA_PROCESSING.md](DATA_PROCESSING.md) for the build-time data bundling, parser mappings, clustering, and scoring logic.
+See [DATA_PROCESSING.md](DATA_PROCESSING.md) for the build-time data bundling, parser mappings, clustering, and Fatal % logic.

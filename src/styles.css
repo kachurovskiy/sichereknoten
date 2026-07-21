@@ -126,7 +126,7 @@ button {
 
 .source-note a {
   color: #166b6d;
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .source-note a:hover,
@@ -179,7 +179,7 @@ select {
   flex: 0 0 auto;
   color: #53636d;
   font-size: 0.9rem;
-  font-weight: 750;
+  font-weight: 600;
   line-height: 1.1;
   white-space: nowrap;
 }
@@ -200,7 +200,7 @@ select {
   border-radius: 6px;
   border: 1px solid transparent;
   padding: 0 12px;
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .primary-button {
@@ -274,8 +274,8 @@ select {
 
 .hotspot-button {
   display: grid;
-  grid-template-columns: 28px minmax(0, 1fr);
-  gap: 10px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
   align-items: start;
   width: 100%;
   min-height: 72px;
@@ -295,18 +295,6 @@ select {
   outline: none;
 }
 
-.hotspot-rank {
-  display: inline-grid;
-  place-items: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
-  background: #172126;
-  color: #ffffff;
-  font-size: 0.82rem;
-  font-weight: 750;
-}
-
 .hotspot-main {
   display: grid;
   gap: 3px;
@@ -320,7 +308,7 @@ select {
 
 .hotspot-title {
   color: #172126;
-  font-weight: 750;
+  font-weight: 600;
   line-height: 1.2;
 }
 
@@ -444,7 +432,8 @@ select {
   grid-template-columns: minmax(0, 1fr) minmax(360px, 460px);
 }
 
-.settings-view.active {
+.settings-view.active,
+.about-view.active {
   grid-template-columns: repeat(2, minmax(280px, 520px));
   gap: 14px;
   align-items: start;
@@ -627,7 +616,7 @@ select {
 
 .loading-steps {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
   align-items: start;
 }
@@ -638,7 +627,7 @@ select {
   padding-top: 14px;
   color: #53636d;
   font-size: 0.76rem;
-  font-weight: 650;
+  font-weight: 600;
   text-align: center;
 }
 
@@ -868,7 +857,7 @@ select {
   padding: 0 8px;
   border-radius: 999px;
   font-size: 0.78rem;
-  font-weight: 750;
+  font-weight: 600;
 }
 
 .severity-fatal {
@@ -1049,7 +1038,7 @@ th {
   background: transparent;
   color: inherit;
   font: inherit;
-  font-weight: 750;
+  font-weight: 600;
   text-align: left;
   text-transform: inherit;
 }
@@ -1130,11 +1119,13 @@ tbody tr:focus {
   }
 
   .explore-panel,
-  .settings-view.active {
+  .settings-view.active,
+  .about-view.active {
     gap: 12px;
   }
 
-  .settings-view.active {
+  .settings-view.active,
+  .about-view.active {
     grid-template-columns: 1fr;
   }
 
@@ -1152,6 +1143,11 @@ tbody tr:focus {
     width: 100%;
   }
 
+  .tabs {
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+
   .toolbar-actions {
     flex-wrap: nowrap;
     overflow-x: auto;
@@ -1167,7 +1163,7 @@ tbody tr:focus {
   }
 
   .tab-button {
-    flex: 1 1 0;
+    flex: 0 0 auto;
   }
 
   .toggle-control,

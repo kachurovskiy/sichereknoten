@@ -38,11 +38,12 @@
             <button id="mapTab" class="tab-button active" role="tab" type="button" aria-selected="true">Map</button>
             <button id="stateTab" class="tab-button" role="tab" type="button" aria-selected="false">Bundesland</button>
             <button id="tableTab" class="tab-button" role="tab" type="button" aria-selected="false">Intersections</button>
+            <button id="aboutTab" class="tab-button" role="tab" type="button" aria-selected="false">About</button>
             <button id="settingsTab" class="tab-button" role="tab" type="button" aria-selected="false">Settings</button>
           </div>
           <div class="toolbar-actions" aria-label="Map display controls">
             <div class="toolbar-group" role="group" aria-labelledby="severityControls">
-              <span id="severityControls" class="toolbar-group-label">Accident severity</span>
+              <span id="severityControls" class="toolbar-group-label">Accident outcome</span>
               <div class="toolbar-group-controls">
                 <label class="toggle-control">
                   <input id="showFatalPoints" type="checkbox" checked />
@@ -85,7 +86,7 @@
                 <div class="loading-steps" aria-label="Loading steps">
                   <span class="loading-step active" data-loading-step="cache">Cache</span>
                   <span class="loading-step" data-loading-step="parse">Parse</span>
-                  <span class="loading-step" data-loading-step="rank">Rank</span>
+                  <span class="loading-step" data-loading-step="analyze">Analyze</span>
                 </div>
               </div>
             </div>
@@ -107,7 +108,7 @@
                   <th>Bundesland</th>
                   <th>Accidents</th>
                   <th>Clusters</th>
-                  <th>Severity</th>
+                  <th>Fatal %</th>
                   <th>Top cluster</th>
                 </tr>
               </thead>
@@ -121,19 +122,43 @@
             <table>
               <thead>
                 <tr>
-                  <th aria-sort="ascending"><button class="sort-button" type="button" data-cluster-sort="rank"><span>Rank</span><span class="sort-indicator" aria-hidden="true"></span></button></th>
                   <th aria-sort="none"><button class="sort-button" type="button" data-cluster-sort="state"><span>Bundesland</span><span class="sort-indicator" aria-hidden="true"></span></button></th>
                   <th aria-sort="none"><button class="sort-button" type="button" data-cluster-sort="location"><span>Location</span><span class="sort-indicator" aria-hidden="true"></span></button></th>
                   <th aria-sort="none"><button class="sort-button" type="button" data-cluster-sort="accidents"><span>Accidents</span><span class="sort-indicator" aria-hidden="true"></span></button></th>
                   <th aria-sort="none"><button class="sort-button" type="button" data-cluster-sort="fatal"><span>Fatal</span><span class="sort-indicator" aria-hidden="true"></span></button></th>
                   <th aria-sort="none"><button class="sort-button" type="button" data-cluster-sort="serious"><span>Serious</span><span class="sort-indicator" aria-hidden="true"></span></button></th>
-                  <th aria-sort="none"><button class="sort-button" type="button" data-cluster-sort="severity"><span>Severity</span><span class="sort-indicator" aria-hidden="true"></span></button></th>
-                  <th aria-sort="none"><button class="sort-button" type="button" data-cluster-sort="risk"><span>Risk</span><span class="sort-indicator" aria-hidden="true"></span></button></th>
+                  <th aria-sort="descending"><button class="sort-button" type="button" data-cluster-sort="fatalPercent"><span>Fatal %</span><span class="sort-indicator" aria-hidden="true"></span></button></th>
                 </tr>
               </thead>
               <tbody id="clusterTableBody"></tbody>
             </table>
           </div>
+        </section>
+
+        <section id="aboutView" class="view about-view">
+          <section class="settings-section">
+            <h2>What Fatal % means</h2>
+            <p class="source-note">
+              Fatal % is a weighted share of severe outcomes at an inferred intersection. By default: <code>(fatal + serious / 2) / total</code>.
+              Fatal accidents count once, serious-injury accidents count as half, and all accidents at the intersection form the denominator.
+            </p>
+            <p class="source-note">
+              The outcome weights, low-sample threshold, trend thresholds, and maximum trend adjustment are editable in Settings.
+            </p>
+            <p class="source-note">
+              By default, trend changes up to 5% per year leave Fatal % unchanged, changes of 15% or more get the full adjustment, and values in between scale gradually.
+            </p>
+          </section>
+
+          <section class="settings-section">
+            <h2>Why this focus</h2>
+            <p class="source-note">
+              We do not have reliable traffic volume data for each intersection. Intersections with many recorded incidents are therefore not automatically the worst places; they may simply be very highly loaded.
+            </p>
+            <p class="source-note">
+              This app focuses on dangerous intersections where the potential harm is higher, using fatal and serious-injury outcomes to separate severe locations from merely busy ones.
+            </p>
+          </section>
         </section>
 
         <section id="settingsView" class="view settings-view">
@@ -148,7 +173,7 @@
             <p class="source-note">
               Reused under
               <a href="https://www.govdata.de/dl-de/by-2-0" target="_blank" rel="noreferrer">Datenlizenz Deutschland - Namensnennung - Version 2.0</a>
-              / dl-de/by-2-0. Source data is processed, clustered, and scored by this app.
+              / dl-de/by-2-0. Source data is processed, clustered, and analyzed by this app.
             </p>
             <div class="button-row">
               <button id="loadBundledBtn" class="secondary-button" type="button">Reload data</button>
@@ -179,6 +204,31 @@
             <div class="year-filter" id="yearFilter" aria-label="Year filters"></div>
 
             <button id="analyzeBtn" class="primary-button" type="button">Analyze</button>
+          </section>
+
+          <section class="settings-section">
+            <h2>Fatal % metric</h2>
+
+            <label class="field-label" for="fatalWeight">Fatal accident weight</label>
+            <input id="fatalWeight" class="number-input" type="number" min="0" max="3" step="0.05" value="1" autocomplete="off" />
+
+            <label class="field-label" for="seriousWeight">Serious accident weight</label>
+            <input id="seriousWeight" class="number-input" type="number" min="0" max="3" step="0.05" value="0.5" autocomplete="off" />
+
+            <label class="field-label" for="fatalFullSample">Full sample accidents</label>
+            <input id="fatalFullSample" class="number-input" type="number" min="1" max="100" step="1" value="10" autocomplete="off" />
+
+            <label class="field-label" for="fatalTrendDeadZone">Trend dead zone (%/yr)</label>
+            <input id="fatalTrendDeadZone" class="number-input" type="number" min="0" max="100" step="1" value="5" autocomplete="off" />
+
+            <label class="field-label" for="fatalTrendFullSignal">Full trend signal (%/yr)</label>
+            <input id="fatalTrendFullSignal" class="number-input" type="number" min="0" max="100" step="1" value="15" autocomplete="off" />
+
+            <label class="field-label" for="fatalMaxTrendAdjustment">Max trend adjustment (%)</label>
+            <input id="fatalMaxTrendAdjustment" class="number-input" type="number" min="0" max="100" step="1" value="15" autocomplete="off" />
+
+            <label class="field-label" for="fatalMaxPercent">Metric cap (%)</label>
+            <input id="fatalMaxPercent" class="number-input" type="number" min="1" max="300" step="1" value="100" autocomplete="off" />
           </section>
         </section>
 
