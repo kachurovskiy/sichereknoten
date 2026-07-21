@@ -1,6 +1,6 @@
 import "./styles.css";
 import { gunzipSync } from "fflate";
-import { analyzeDangerousIntersections } from "./analysis";
+import { AnalysisExecutionPlan, analyzeDangerousIntersectionsInBackground } from "./analysisRunner";
 import { readAnalysisCache, readParsedDataCache, writeAnalysisCache, writeParsedDataCache } from "./cache";
 import { GeoGridIndex } from "./geo";
 import { MapCanvas } from "./mapCanvas";
@@ -48,7 +48,7 @@ type ViewKey = "map" | "state" | "table" | "settings";
 type SelectionReason = "auto" | "program" | "user";
 const LOADING_STEP_ORDER: LoadingStepKey[] = ["cache", "parse", "analyze"];
 const APP_CACHE_VERSION =
-  typeof __SICHERE_KNOTEN_APP_VERSION__ === "string" ? __SICHERE_KNOTEN_APP_VERSION__ : "dev-fatal-percent-dynamic-trend";
+  typeof __SICHERE_KNOTEN_APP_VERSION__ === "string" ? __SICHERE_KNOTEN_APP_VERSION__ : "dev-parallel-analysis";
 const ACCIDENT_CATEGORY_LABELS: Record<number, string> = {
   1: "Accident with persons killed",
   2: "Accident with seriously injured",
@@ -488,7 +488,7 @@ async function runAnalysisWithCache(options: AnalysisOptions, cacheContext: Anal
 
     setStatus("Analyzing intersections.", 75);
     await yieldToBrowser();
-    result = analyzeDangerousIntersections(accidents, options);
+    result = await analyzeDangerousIntersectionsInBackground(accidents, options, updateAnalysisPlanStatus);
     selectedCluster = null;
     activeAnalysisOptions = cloneAnalysisOptions(options);
     crossingAccidentIndexCache = null;
@@ -511,6 +511,22 @@ async function runAnalysisWithCache(options: AnalysisOptions, cacheContext: Anal
   } finally {
     setBusy(false);
   }
+}
+
+function updateAnalysisPlanStatus(plan: AnalysisExecutionPlan): void {
+  if (!plan.background) {
+    setStatus(plan.fallback ? "Worker analysis unavailable; analyzing intersections on the main thread." : "Analyzing intersections.", 75);
+    return;
+  }
+  if (!plan.parallel) {
+    setStatus("Analyzing intersections in a background task.", 75);
+    return;
+  }
+
+  setStatus(
+    `Analyzing intersections with ${plan.workerCount.toLocaleString()} background workers across ${plan.partitionCount.toLocaleString()} state tasks.`,
+    75
+  );
 }
 
 function readOptions(): AnalysisOptions {
@@ -902,6 +918,7 @@ function hotspotButton(cluster: IntersectionCluster, context: string): HTMLButto
     <span class="hotspot-main">
       <span class="hotspot-title">${escapeHtml(context)}</span>
       <span class="hotspot-stats">
+        <span class="hotspot-stat hotspot-stat-metric"><strong>${formatFatalPercent(cluster)}</strong> Fatal %</span>
         <span class="hotspot-stat hotspot-stat-total"><strong>${cluster.accidentCount.toLocaleString()}</strong> ${pluralNoun(cluster.accidentCount, "accident")}</span>
         <span class="hotspot-stat"><strong>${cluster.fatalCount.toLocaleString()}</strong> fatal</span>
         <span class="hotspot-stat"><strong>${cluster.seriousCount.toLocaleString()}</strong> serious</span>

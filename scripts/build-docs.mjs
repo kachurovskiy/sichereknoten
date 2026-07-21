@@ -25,8 +25,20 @@ await build({
   sourcemap: false,
   legalComments: "none",
   define: {
-    __SICHERE_KNOTEN_APP_VERSION__: JSON.stringify(appVersion)
+    __SICHERE_KNOTEN_APP_VERSION__: JSON.stringify(appVersion),
+    __SICHERE_KNOTEN_ANALYSIS_WORKER_URL__: JSON.stringify("./assets/analysis-worker.js")
   }
+});
+
+await build({
+  entryPoints: [path.join(root, "src/analysisWorker.ts")],
+  bundle: true,
+  outfile: path.join(assetsDir, "analysis-worker.js"),
+  format: "iife",
+  target: "es2022",
+  minify: true,
+  sourcemap: false,
+  legalComments: "none"
 });
 
 const sourceHtml = await readFile(path.join(root, "index.html"), "utf8");

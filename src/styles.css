@@ -349,12 +349,19 @@ select {
 .hotspot-stat strong {
   color: #172126;
   font-size: 0.86rem;
+  font-weight: 600;
 }
 
 .hotspot-stat-total {
   border-color: #bfd9d5;
   background: #eef6f4;
   color: #0f4f52;
+}
+
+.hotspot-stat-metric {
+  border-color: #d8c7b1;
+  background: #fff7ed;
+  color: #7a3d14;
 }
 
 .hotspot-empty {

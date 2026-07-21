@@ -67,6 +67,39 @@ export function analyzeDangerousIntersections(accidents: AccidentRecord[], optio
   };
 }
 
+export function combineAnalysisResults(results: AnalysisResult[]): AnalysisResult {
+  const oldClusterIds = new Map<string, string>();
+  const clusters = results
+    .flatMap((entry) => entry.clusters)
+    .sort(compareFatalMetric)
+    .map((cluster, index) => {
+      const id = `c-${index + 1}`;
+      oldClusterIds.set(partitionClusterKey(cluster), id);
+      return {
+        ...cluster,
+        id
+      };
+    });
+  const clusterById = new Map(clusters.map((cluster) => [cluster.id, cluster]));
+  const years = Array.from(new Set(results.flatMap((entry) => entry.years))).sort((a, b) => a - b);
+
+  return {
+    clusters,
+    stateSummaries: results
+      .flatMap((entry) => entry.stateSummaries)
+      .map((summary) => {
+        const topClusterId = summary.topCluster ? oldClusterIds.get(partitionClusterKey(summary.topCluster)) : null;
+        return {
+          ...summary,
+          topCluster: topClusterId ? clusterById.get(topClusterId) ?? null : null
+        };
+      })
+      .sort((a, b) => b.fatalPercent - a.fatalPercent || b.accidentCount - a.accidentCount),
+    filteredAccidentCount: results.reduce((total, entry) => total + entry.filteredAccidentCount, 0),
+    years
+  };
+}
+
 function buildClusters(accidents: AccidentRecord[], radiusMeters: number): ClusterAccumulator[] {
   const clusters: ClusterAccumulator[] = [];
   const buckets = new Map<string, ClusterAccumulator[]>();
@@ -450,6 +483,10 @@ function stateNameFromCode(code: string): string {
 
 function key(cx: number, cy: number): string {
   return `${cx}:${cy}`;
+}
+
+function partitionClusterKey(cluster: IntersectionCluster): string {
+  return `${cluster.stateCode}\0${cluster.id}`;
 }
 
 function round(value: number, decimals: number): number {
