@@ -5,6 +5,7 @@ import { readAnalysisCache, readParsedDataCache, writeAnalysisCache, writeParsed
 import { GeoGridIndex } from "./geo";
 import { MapCanvas } from "./mapCanvas";
 import { parseAccidentCsvFiles } from "./parsers/csv";
+import { accidentMatchesRoadUserFocus, ROAD_USER_DEFINITIONS, RoadUserDefinition, roadUserFocusKey } from "./roadUsers";
 import { STATE_NAMES } from "./states";
 import {
   AccidentRecord,
@@ -13,7 +14,8 @@ import {
   AnalysisResult,
   ClusterYearStat,
   SeverityPercentOptions,
-  IntersectionCluster
+  IntersectionCluster,
+  RoadUserKey
 } from "./types";
 
 const BUNDLED_CSV_FILES = [
@@ -53,13 +55,6 @@ type SelectionReason = "auto" | "program" | "user";
 type HotspotMetricPlacement = "header" | "stats";
 type AppLocale = "en" | "de";
 type LoadingStatusKind = "normal" | "problem" | "idle";
-type RoadUserKey = "car" | "pedestrian" | "bicycle" | "motorcycle" | "truck" | "other";
-
-interface RoadUserDefinition {
-  key: RoadUserKey;
-  labelKey: string;
-  read: (accident: AccidentRecord) => boolean | null;
-}
 
 interface RoadUserSummaryItem {
   definition: RoadUserDefinition;
@@ -218,6 +213,8 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "settings.clusterRadius": "Cluster radius (m)",
     "settings.clusterRadiusMeters": "Cluster radius in meters",
     "settings.minAccidents": "Minimum accidents",
+    "settings.roadUserFocus": "Road-user focus",
+    "settings.roadUserFocusNote": "Select one or more to include only accidents involving at least one selected road user. Leave all unchecked to include all accidents.",
     "settings.yearFilters": "Year filters",
     "settings.aboutSeverity": "About Severity %",
     "settings.whatMeasures": "What it measures",
@@ -505,6 +502,8 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "settings.clusterRadius": "Cluster-Radius (m)",
     "settings.clusterRadiusMeters": "Cluster-Radius in Metern",
     "settings.minAccidents": "Mindestanzahl Unfälle",
+    "settings.roadUserFocus": "Fokus Verkehrsteilnehmer",
+    "settings.roadUserFocusNote": "Wähle einen oder mehrere aus, um nur Unfälle mit mindestens einem ausgewählten Verkehrsteilnehmer einzubeziehen. Wenn nichts ausgewählt ist, werden alle Unfälle einbezogen.",
     "settings.yearFilters": "Jahresfilter",
     "settings.aboutSeverity": "Über Schweregrad %",
     "settings.whatMeasures": "Was gemessen wird",
@@ -731,14 +730,6 @@ const PLAUSIBILITY_LEVEL_LABELS: Record<number, string> = {
   1: "accident.plausibility.regular",
   2: "accident.plausibility.bicycle"
 };
-const ROAD_USER_DEFINITIONS: RoadUserDefinition[] = [
-  { key: "car", labelKey: "roadUser.car", read: (accident) => accident.involvesCar },
-  { key: "pedestrian", labelKey: "roadUser.pedestrian", read: (accident) => accident.involvesPedestrian },
-  { key: "bicycle", labelKey: "roadUser.bicycle", read: (accident) => accident.involvesBike },
-  { key: "motorcycle", labelKey: "roadUser.motorcycle", read: (accident) => accident.involvesMotorcycle },
-  { key: "truck", labelKey: "roadUser.truck", read: (accident) => accident.involvesTruck },
-  { key: "other", labelKey: "roadUser.other", read: (accident) => accident.involvesOther }
-];
 const factsheetTileCache = new Map<string, Promise<HTMLImageElement | null>>();
 
 interface ClusterTableSort {
@@ -810,6 +801,7 @@ const elements = {
   severityMaxTrendAdjustment: byId<HTMLInputElement>("severityMaxTrendAdjustment"),
   severityMaxPercent: byId<HTMLInputElement>("severityMaxPercent"),
   stateFilter: byId<HTMLSelectElement>("stateFilter"),
+  roadUserFocus: byId<HTMLDivElement>("roadUserFocus"),
   yearFilter: byId<HTMLDivElement>("yearFilter"),
   mapColumn: byId<HTMLDivElement>("mapColumn"),
   mapCanvas: byId<HTMLCanvasElement>("mapCanvas"),
@@ -929,6 +921,7 @@ function wireEvents(): void {
 
   elements.stateFilter.addEventListener("input", markAnalysisSettingsDirty);
   elements.stateFilter.addEventListener("change", markAnalysisSettingsDirty);
+  roadUserFocusInputs().forEach((input) => input.addEventListener("change", markAnalysisSettingsDirty));
 
   [elements.showFatalPoints, elements.showSeriousPoints, elements.showOtherPoints].forEach((input) => {
     input.addEventListener("change", applySeverityFilter);
@@ -1015,6 +1008,9 @@ function resetAnalysisControlsToDefaults(): void {
   resetInputToDefault(elements.clusterRadiusOut);
   resetInputToDefault(elements.minAccidents);
   severityPercentInputs().forEach(resetInputToDefault);
+  roadUserFocusInputs().forEach((input) => {
+    input.checked = input.defaultChecked;
+  });
   normalizeLinkedNumberRange(elements.clusterRadius, elements.clusterRadiusOut);
   normalizeNumberInput(elements.minAccidents);
   normalizeSeverityPercentInputs();
@@ -1260,9 +1256,28 @@ function readOptions(): AnalysisOptions {
     clusterRadiusMeters: Number(elements.clusterRadiusOut.value),
     minAccidents: normalizeNumberInput(elements.minAccidents),
     years,
+    roadUserFocus: readRoadUserFocus(),
     stateCode: elements.stateFilter.value as AnalysisOptions["stateCode"],
     severityPercent: readSeverityPercentOptions()
   };
+}
+
+function readRoadUserFocus(): Set<RoadUserKey> {
+  const focus = new Set<RoadUserKey>();
+  roadUserFocusInputs().forEach((input) => {
+    if (input.checked && isRoadUserKey(input.value)) {
+      focus.add(input.value);
+    }
+  });
+  return focus;
+}
+
+function roadUserFocusInputs(): HTMLInputElement[] {
+  return Array.from(elements.roadUserFocus.querySelectorAll<HTMLInputElement>("input[data-road-user-focus]"));
+}
+
+function isRoadUserKey(value: string): value is RoadUserKey {
+  return ROAD_USER_DEFINITIONS.some((definition) => definition.key === value);
 }
 
 function readSeverityPercentOptions(): SeverityPercentOptions {
@@ -1286,6 +1301,7 @@ function cloneAnalysisOptions(options: AnalysisOptions): AnalysisOptions {
   return {
     ...options,
     years: new Set(options.years),
+    roadUserFocus: new Set(options.roadUserFocus),
     severityPercent: { ...options.severityPercent }
   };
 }
@@ -2057,7 +2073,10 @@ function accidentMatchesAnalysisOptions(accident: AccidentRecord, options: Analy
   if (options.years.size > 0 && !options.years.has(accident.year)) {
     return false;
   }
-  return options.stateCode === "all" || accident.stateCode === options.stateCode;
+  if (options.stateCode !== "all" && accident.stateCode !== options.stateCode) {
+    return false;
+  }
+  return accidentMatchesRoadUserFocus(accident, options.roadUserFocus);
 }
 
 function analysisOptionsIndexKey(options: AnalysisOptions, searchRadiusMeters: number): string {
@@ -2065,7 +2084,8 @@ function analysisOptionsIndexKey(options: AnalysisOptions, searchRadiusMeters: n
     options.stateCode,
     options.clusterRadiusMeters,
     searchRadiusMeters,
-    [...options.years].sort((a, b) => a - b).join(",")
+    [...options.years].sort((a, b) => a - b).join(","),
+    roadUserFocusKey(options.roadUserFocus) || "all"
   ].join("|");
 }
 
@@ -3553,6 +3573,7 @@ function setAnalysisControlsDisabled(isDisabled: boolean): void {
     elements.stateFilter,
     ...severityPercentInputs()
   ];
+  roadUserFocusInputs().forEach((input) => controls.push(input));
   elements.yearFilter.querySelectorAll<HTMLInputElement>("input").forEach((input) => controls.push(input));
 
   for (const control of controls) {

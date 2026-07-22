@@ -269,6 +269,39 @@
                 <option value="all" data-i18n="option.allStates">All Bundeslaender</option>
               </select>
 
+              <div class="field-group">
+                <span class="field-label" data-i18n="settings.roadUserFocus">Road-user focus</span>
+                <div class="road-user-focus" id="roadUserFocus" aria-label="Road-user focus" data-i18n-aria-label="settings.roadUserFocus">
+                  <label class="year-pill">
+                    <input type="checkbox" value="car" data-road-user-focus="car" />
+                    <span data-i18n="roadUser.car">Passenger car</span>
+                  </label>
+                  <label class="year-pill">
+                    <input type="checkbox" value="pedestrian" data-road-user-focus="pedestrian" />
+                    <span data-i18n="roadUser.pedestrian">Pedestrian</span>
+                  </label>
+                  <label class="year-pill">
+                    <input type="checkbox" value="bicycle" data-road-user-focus="bicycle" />
+                    <span data-i18n="roadUser.bicycle">Bicycle</span>
+                  </label>
+                  <label class="year-pill">
+                    <input type="checkbox" value="motorcycle" data-road-user-focus="motorcycle" />
+                    <span data-i18n="roadUser.motorcycle">Motorcycle</span>
+                  </label>
+                  <label class="year-pill">
+                    <input type="checkbox" value="truck" data-road-user-focus="truck" />
+                    <span data-i18n="roadUser.truck">Goods road vehicle</span>
+                  </label>
+                  <label class="year-pill">
+                    <input type="checkbox" value="other" data-road-user-focus="other" />
+                    <span data-i18n="roadUser.other">Other means of transport</span>
+                  </label>
+                </div>
+                <p class="source-note" data-i18n="settings.roadUserFocusNote">
+                  Select one or more to include only accidents involving at least one selected road user. Leave all unchecked to include all accidents.
+                </p>
+              </div>
+
               <div class="year-filter" id="yearFilter" aria-label="Year filters" data-i18n-aria-label="settings.yearFilters"></div>
 
               <button id="analyzeBtn" class="primary-button" type="button" data-i18n="action.analyze">Analyze</button>

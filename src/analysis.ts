@@ -1,4 +1,5 @@
 import { lonLatToMeterPoint } from "./geo";
+import { accidentMatchesRoadUserFocus } from "./roadUsers";
 import {
   AccidentRecord,
   AccidentTrend,
@@ -49,7 +50,10 @@ export function analyzeDangerousIntersections(accidents: AccidentRecord[], optio
     if (options.years.size > 0 && !options.years.has(accident.year)) {
       return false;
     }
-    return options.stateCode === "all" || accident.stateCode === options.stateCode;
+    if (options.stateCode !== "all" && accident.stateCode !== options.stateCode) {
+      return false;
+    }
+    return accidentMatchesRoadUserFocus(accident, options.roadUserFocus);
   });
 
   const analysisYears =

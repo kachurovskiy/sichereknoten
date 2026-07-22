@@ -5,6 +5,7 @@ import {
   SerializableAnalysisOptions,
   serializeAnalysisOptions
 } from "./analysisWorkerProtocol";
+import { accidentMatchesRoadUserFocus } from "./roadUsers";
 import { AccidentRecord, AnalysisOptions, AnalysisResult } from "./types";
 
 declare const __SICHERE_KNOTEN_ANALYSIS_WORKER_URL__: string | undefined;
@@ -78,6 +79,9 @@ function analysisPartitions(accidents: AccidentRecord[], options: AnalysisOption
     if (selectedYears.size > 0 && !selectedYears.has(accident.year)) {
       continue;
     }
+    if (!accidentMatchesRoadUserFocus(accident, options.roadUserFocus)) {
+      continue;
+    }
     const stateAccidents = accidentsByState.get(accident.stateCode);
     if (stateAccidents) {
       stateAccidents.push(accident);
@@ -108,7 +112,10 @@ function filterAccidents(accidents: AccidentRecord[], options: AnalysisOptions):
     if (options.years.size > 0 && !options.years.has(accident.year)) {
       return false;
     }
-    return options.stateCode === "all" || accident.stateCode === options.stateCode;
+    if (options.stateCode !== "all" && accident.stateCode !== options.stateCode) {
+      return false;
+    }
+    return accidentMatchesRoadUserFocus(accident, options.roadUserFocus);
   });
 }
 

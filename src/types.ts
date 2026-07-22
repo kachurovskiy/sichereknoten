@@ -42,10 +42,13 @@ export interface AccidentRecord {
   involvesOther: boolean | null;
 }
 
+export type RoadUserKey = "car" | "pedestrian" | "bicycle" | "motorcycle" | "truck" | "other";
+
 export interface AnalysisOptions {
   clusterRadiusMeters: number;
   minAccidents: number;
   years: Set<number>;
+  roadUserFocus: Set<RoadUserKey>;
   stateCode: string | "all";
   severityPercent: SeverityPercentOptions;
 }

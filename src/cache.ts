@@ -1,4 +1,5 @@
 import { AccidentRecord, AnalysisOptions, AnalysisResult } from "./types";
+import { roadUserFocusKey } from "./roadUsers";
 
 export interface ParsedDataCache {
   accidents: AccidentRecord[];
@@ -225,6 +226,7 @@ function analysisOptionsKey(options: AnalysisOptions): string {
     `cluster=${options.clusterRadiusMeters}`,
     `min=${options.minAccidents}`,
     `years=${years || "all"}`,
+    `roadUsers=${roadUserFocusKey(options.roadUserFocus) || "all"}`,
     `state=${options.stateCode}`,
     `fatalWeight=${options.severityPercent.fatalWeight}`,
     `seriousWeight=${options.severityPercent.seriousWeight}`,

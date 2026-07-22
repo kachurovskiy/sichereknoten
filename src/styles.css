@@ -118,6 +118,11 @@ button {
   font-size: 0.9rem;
 }
 
+.field-group {
+  display: grid;
+  gap: 8px;
+}
+
 .source-note {
   margin: 0;
   color: #53636d;
@@ -277,7 +282,8 @@ select {
   text-align: right;
 }
 
-.year-filter {
+.year-filter,
+.road-user-focus {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
