@@ -44,7 +44,7 @@ type ClusterSortKey = "state" | "location" | "accidents" | "fatal" | "serious" |
 type SortDirection = "asc" | "desc";
 type LoadingStepKey = "cache" | "parse" | "analyze";
 type SeverityFilterKey = "fatal" | "serious" | "other";
-type ViewKey = "explore" | "map" | "details" | "street" | "state" | "table" | "settings";
+type ViewKey = "explore" | "map" | "details" | "state" | "table" | "settings";
 type SelectionReason = "auto" | "program" | "user";
 type HotspotMetricPlacement = "header" | "stats";
 type AppLocale = "en" | "de";
@@ -202,6 +202,10 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "noun.accident.other": "accidents",
     "map.openOsm": "Open in OpenStreetMap",
     "map.openGoogleMaps": "Open in Google Maps",
+    "map.openStreetView": "Open Street View",
+    "map.labelOsm": "OpenStreetMap",
+    "map.labelGoogleMaps": "Google Maps",
+    "map.labelStreetView": "Street View",
     "records.title": "Known accident records",
     "records.countOf": "{shown} of {total}",
     "records.empty": "No matching source accident records were found near this intersection.",
@@ -438,6 +442,10 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "noun.accident.other": "Unfälle",
     "map.openOsm": "In OpenStreetMap öffnen",
     "map.openGoogleMaps": "In Google Maps öffnen",
+    "map.openStreetView": "Street View öffnen",
+    "map.labelOsm": "OpenStreetMap",
+    "map.labelGoogleMaps": "Google Maps",
+    "map.labelStreetView": "Street View",
     "records.title": "Bekannte Unfalldatensätze",
     "records.countOf": "{shown} von {total}",
     "records.empty": "In der Nähe dieser Kreuzung wurden keine passenden Quelldatensätze gefunden.",
@@ -619,7 +627,6 @@ let accidentKeyLookupCache: AccidentKeyLookupCache | null = null;
 let isStreetViewOpen = readStoredStreetViewOpen();
 let activeView: ViewKey = "map";
 let loadingStatusKind: LoadingStatusKind = "normal";
-let mobileStreetViewWasBackgrounded = false;
 
 const elements = {
   app: byId<HTMLDivElement>("app"),
@@ -651,7 +658,6 @@ const elements = {
   mapLoadingBar: byId<HTMLDivElement>("mapLoadingBar"),
   loadingSteps: Array.from(document.querySelectorAll<HTMLElement>("[data-loading-step]")),
   selectedAside: byId<HTMLElement>("selectedAside"),
-  selectedMapActions: byId<HTMLDivElement>("selectedMapActions"),
   selectionDetails: byId<HTMLDivElement>("selectionDetails"),
   findNearbyBtn: byId<HTMLButtonElement>("findNearbyBtn"),
   nearbyList: byId<HTMLDivElement>("nearbyList"),
@@ -662,7 +668,6 @@ const elements = {
   exploreTab: byId<HTMLButtonElement>("exploreTab"),
   mapTab: byId<HTMLButtonElement>("mapTab"),
   detailsTab: byId<HTMLButtonElement>("detailsTab"),
-  streetTab: byId<HTMLButtonElement>("streetTab"),
   moreTab: byId<HTMLButtonElement>("moreTab"),
   stateTab: byId<HTMLButtonElement>("stateTab"),
   tableTab: byId<HTMLButtonElement>("tableTab"),
@@ -784,7 +789,6 @@ function wireEvents(): void {
   elements.exploreTab.addEventListener("click", () => setView("explore"));
   elements.mapTab.addEventListener("click", () => setView("map"));
   elements.detailsTab.addEventListener("click", () => setView("details"));
-  elements.streetTab.addEventListener("click", () => setView("street"));
   elements.moreTab.addEventListener("click", toggleMobileMoreMenu);
   elements.stateTab.addEventListener("click", () => setView("state"));
   elements.tableTab.addEventListener("click", () => setView("table"));
@@ -794,10 +798,6 @@ function wireEvents(): void {
   elements.mobileSettingsTab.addEventListener("click", () => setView("settings"));
   document.addEventListener("click", closeMobileMoreMenuOnOutsideClick);
   document.addEventListener("keydown", closeMobileMoreMenuOnEscape);
-  document.addEventListener("visibilitychange", handleVisibilityChange);
-  window.addEventListener("pagehide", markMobileStreetViewBackgrounded);
-  window.addEventListener("pageshow", handlePageShow);
-  window.addEventListener("focus", handleWindowFocus);
   mobileLayout.addEventListener("change", () => {
     if (!mobileLayout.matches && isMobilePaneView(activeView)) {
       setView("map");
@@ -1598,12 +1598,10 @@ function clusterSeverity(cluster: IntersectionCluster): SeverityFilterKey {
 function renderSelection(cluster: IntersectionCluster | null): void {
   if (!cluster) {
     elements.selectedAside.hidden = true;
-    elements.selectedMapActions.hidden = true;
-    elements.selectedMapActions.innerHTML = "";
     elements.mapView.classList.remove("has-selection");
     elements.selectionDetails.textContent = tr("details.none");
     updateContextTabs();
-    if (activeView === "details" || activeView === "street") {
+    if (activeView === "details") {
       setView("map");
     } else {
       updateStreetViewPanel();
@@ -1612,16 +1610,15 @@ function renderSelection(cluster: IntersectionCluster | null): void {
   }
 
   elements.selectedAside.hidden = false;
-  elements.selectedMapActions.hidden = false;
   elements.mapView.classList.add("has-selection");
   const lat = cluster.lat.toFixed(6);
   const lon = cluster.lon.toFixed(6);
   const openStreetMapUrl = `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lon}#map=18/${lat}/${lon}`;
   const googleMapsUrl = `https://www.google.com/maps/search/?api=1&query=${lat},${lon}`;
+  const streetViewUrl = googleStreetViewUrl(cluster);
   const trendPanel = renderTrendPanel(cluster);
   const recordPanel = renderSidebarAccidentRecords(clusterAccidentRecords(cluster), cluster.accidentCount);
 
-  elements.selectedMapActions.innerHTML = renderMapServiceActions(openStreetMapUrl, googleMapsUrl);
   elements.selectionDetails.innerHTML = `
     <dl>
       <div><dt>${escapeHtml(tr("details.state"))}</dt><dd>${escapeHtml(cluster.stateName)}</dd></div>
@@ -1632,6 +1629,7 @@ function renderSelection(cluster: IntersectionCluster | null): void {
       <div><dt>${escapeHtml(tr("details.harmPercent"))}</dt><dd>${formatFatalPercent(cluster)}</dd></div>
       <div><dt>${escapeHtml(tr("details.vulnerableUsers"))}</dt><dd>${formatInteger(cluster.vulnerableCount)}</dd></div>
     </dl>
+    ${renderMapServiceActions(openStreetMapUrl, googleMapsUrl, streetViewUrl)}
     ${trendPanel}
     ${recordPanel}
   `;
@@ -1645,50 +1643,10 @@ function toggleStreetViewPanel(): void {
   updateStreetViewPanel();
 }
 
-function handleVisibilityChange(): void {
-  if (document.visibilityState === "hidden") {
-    markMobileStreetViewBackgrounded();
-    return;
-  }
-  restoreMobileStreetViewReturn();
-}
-
-function handlePageShow(): void {
-  restoreMobileStreetViewReturn();
-}
-
-function handleWindowFocus(): void {
-  restoreMobileStreetViewReturn();
-}
-
-function markMobileStreetViewBackgrounded(): void {
-  if (mobileLayout.matches && activeView === "street") {
-    mobileStreetViewWasBackgrounded = true;
-  }
-}
-
-function restoreMobileStreetViewReturn(): void {
-  if (!mobileStreetViewWasBackgrounded || !mobileLayout.matches || activeView !== "street") {
-    mobileStreetViewWasBackgrounded = false;
-    return;
-  }
-
-  mobileStreetViewWasBackgrounded = false;
-  if (!selectedCluster) {
-    setView("map");
-    return;
-  }
-
-  isStreetViewOpen = false;
-  writeStoredStreetViewOpen(false);
-  clearStreetViewFrame();
-  setView("details");
-}
-
 function updateStreetViewPanel(): void {
   const cluster = selectedCluster;
   const hasSelection = cluster !== null;
-  const isExpanded = hasSelection && (isStreetViewOpen || activeView === "street");
+  const isExpanded = hasSelection && isStreetViewOpen;
 
   elements.streetViewPanel.hidden = !hasSelection;
   elements.mapColumn.classList.toggle("street-view-open", isExpanded);
@@ -1725,6 +1683,12 @@ function googleStreetViewEmbedUrl(cluster: IntersectionCluster): string {
   return `https://www.google.com/maps?layer=c&cbll=${lat},${lon}&cbp=11,0,0,0,0&output=svembed`;
 }
 
+function googleStreetViewUrl(cluster: IntersectionCluster): string {
+  const lat = cluster.lat.toFixed(6);
+  const lon = cluster.lon.toFixed(6);
+  return `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${lat},${lon}`;
+}
+
 function scheduleMapRefresh(): void {
   window.requestAnimationFrame(() => {
     if (mobileLayout.matches && activeView !== "map") {
@@ -1734,24 +1698,19 @@ function scheduleMapRefresh(): void {
   });
 }
 
-function renderMapServiceActions(openStreetMapUrl: string, googleMapsUrl: string): string {
-  const openStreetMapLabel = escapeHtml(tr("map.openOsm"));
-  const googleMapsLabel = escapeHtml(tr("map.openGoogleMaps"));
+function renderMapServiceActions(openStreetMapUrl: string, googleMapsUrl: string, streetViewUrl: string): string {
   return `
-    <a class="map-service-icon" href="${openStreetMapUrl}" target="_blank" rel="noopener noreferrer" aria-label="${openStreetMapLabel}" title="${openStreetMapLabel}">
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M3 6.5 9 4l6 2.5 6-2.5v13.5L15 20l-6-2.5L3 20V6.5z" />
-        <path d="M9 4v13.5" />
-        <path d="M15 6.5V20" />
-      </svg>
-    </a>
-    <a class="map-service-icon" href="${googleMapsUrl}" target="_blank" rel="noopener noreferrer" aria-label="${googleMapsLabel}" title="${googleMapsLabel}">
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M12 21s6-5.4 6-11a6 6 0 0 0-12 0c0 5.6 6 11 6 11z" />
-        <path d="M12 12.2a2.2 2.2 0 1 0 0-4.4 2.2 2.2 0 0 0 0 4.4z" />
-      </svg>
-    </a>
+    <div class="selected-map-actions" aria-label="${escapeHtml(tr("aria.openMapServices"))}">
+      ${mapServiceLink(openStreetMapUrl, tr("map.openOsm"), tr("map.labelOsm"))}
+      ${mapServiceLink(googleMapsUrl, tr("map.openGoogleMaps"), tr("map.labelGoogleMaps"))}
+      ${mapServiceLink(streetViewUrl, tr("map.openStreetView"), tr("map.labelStreetView"))}
+    </div>
   `;
+}
+
+function mapServiceLink(url: string, accessibleLabel: string, visibleLabel: string): string {
+  const label = escapeHtml(accessibleLabel);
+  return `<a class="map-service-link" href="${url}" target="_blank" rel="noopener noreferrer" aria-label="${label}" title="${label}">${escapeHtml(visibleLabel)}</a>`;
 }
 
 function renderSidebarAccidentRecords(records: CrossingAccident[], totalCount: number): string {
@@ -2162,7 +2121,7 @@ function trendClassName(direction: AccidentTrendDirection): string {
 }
 
 function setView(view: ViewKey): void {
-  if ((view === "details" || view === "street") && !selectedCluster) {
+  if (view === "details" && !selectedCluster) {
     setStatus(tr("details.selectFirst"), 100);
     view = "map";
   }
@@ -2174,7 +2133,6 @@ function setView(view: ViewKey): void {
     { key: "explore", tab: elements.exploreTab },
     { key: "map", tab: elements.mapTab },
     { key: "details", tab: elements.detailsTab },
-    { key: "street", tab: elements.streetTab },
     { key: "state", tab: elements.stateTab },
     { key: "state", tab: elements.mobileStateTab },
     { key: "table", tab: elements.tableTab },
@@ -2194,7 +2152,7 @@ function setView(view: ViewKey): void {
   }
   elements.moreTab.classList.toggle("active", isSecondaryView(view));
 
-  elements.mapView.classList.toggle("active", view === "map" || view === "details" || view === "street");
+  elements.mapView.classList.toggle("active", view === "map" || view === "details");
   elements.stateView.classList.toggle("active", view === "state");
   elements.tableView.classList.toggle("active", view === "table");
   elements.settingsView.classList.toggle("active", view === "settings");
@@ -2208,11 +2166,10 @@ function setView(view: ViewKey): void {
 function updateContextTabs(): void {
   const hasSelection = selectedCluster !== null;
   elements.detailsTab.disabled = !hasSelection;
-  elements.streetTab.disabled = !hasSelection;
 }
 
 function isMobilePaneView(view: ViewKey): boolean {
-  return view === "explore" || view === "details" || view === "street";
+  return view === "explore" || view === "details";
 }
 
 function isSecondaryView(view: ViewKey): boolean {

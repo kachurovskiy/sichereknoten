@@ -905,39 +905,30 @@ select {
 }
 
 .selected-map-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0 16px;
+}
+
+.map-service-link {
   display: inline-flex;
-  flex: 0 0 auto;
-  gap: 6px;
-}
-
-.selected-map-actions[hidden] {
-  display: none;
-}
-
-.map-service-icon {
-  display: inline-grid;
-  place-items: center;
-  width: 36px;
-  height: 36px;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  padding: 0 12px;
   border: 1px solid #cbd4ce;
   border-radius: 6px;
   background: #eef2ef;
   color: #1d2d34;
+  font-size: 0.86rem;
+  font-weight: 600;
+  line-height: 1;
   text-decoration: none;
 }
 
-.map-service-icon svg {
-  width: 19px;
-  height: 19px;
-  fill: none;
-  stroke: currentColor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 2;
-}
-
-.map-service-icon:hover,
-.map-service-icon:focus {
+.map-service-link:hover,
+.map-service-link:focus {
   border-color: #166b6d;
   color: #166b6d;
   outline: none;
@@ -1548,29 +1539,8 @@ tbody tr:focus {
   }
 
   .app-shell[data-active-view="details"] .map-column,
-  .app-shell[data-active-view="street"] .map-wrap,
-  .app-shell[data-active-view="map"] .selected-aside,
-  .app-shell[data-active-view="street"] .selected-aside {
+  .app-shell[data-active-view="map"] .selected-aside {
     display: none !important;
-  }
-
-  .app-shell[data-active-view="street"] .map-column {
-    display: grid;
-    grid-template-rows: minmax(0, 1fr);
-  }
-
-  .app-shell[data-active-view="street"] .street-view-panel {
-    display: grid;
-    grid-template-rows: minmax(0, 1fr);
-    height: 100%;
-  }
-
-  .app-shell[data-active-view="street"] .street-view-toggle {
-    display: none;
-  }
-
-  .app-shell[data-active-view="street"] .street-view-body {
-    border-top: 0;
   }
 
   .selected-aside {
