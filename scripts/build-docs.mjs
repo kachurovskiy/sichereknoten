@@ -26,7 +26,7 @@ await build({
   legalComments: "none",
   define: {
     __SICHERE_KNOTEN_APP_VERSION__: JSON.stringify(appVersion),
-    __SICHERE_KNOTEN_ANALYSIS_WORKER_URL__: JSON.stringify("./assets/analysis-worker.js")
+    __SICHERE_KNOTEN_ANALYSIS_WORKER_URL__: JSON.stringify(`./assets/analysis-worker.js?v=${appVersion}`)
   }
 });
 
@@ -43,10 +43,10 @@ await build({
 
 const sourceHtml = await readFile(path.join(root, "index.html"), "utf8");
 const docsHtml = sourceHtml
-  .replace("  </head>", '    <link rel="stylesheet" href="./assets/app.css" />\n  </head>')
+  .replace("  </head>", `    <link rel="stylesheet" href="./assets/app.css?v=${appVersion}" />\n  </head>`)
   .replace(
     '    <script type="module" src="/src/main.ts"></script>',
-    `${dataScriptTags.map((fileName) => `    <script src="./assets/${fileName}"></script>`).join("\n")}\n    <script src="./assets/app.js"></script>`
+    `${dataScriptTags.map((fileName) => `    <script src="./assets/${fileName}"></script>`).join("\n")}\n    <script src="./assets/app.js?v=${appVersion}"></script>`
   );
 
 await writeFile(path.join(docsDir, "index.html"), docsHtml);

@@ -1279,48 +1279,44 @@ tbody tr:focus {
 }
 
 @media (max-width: 640px) {
+  html,
   body {
+    height: 100%;
     overflow: hidden;
-    min-height: 100dvh;
   }
 
   .app-shell {
+    grid-template-columns: 1fr;
     grid-template-rows: auto minmax(0, 1fr);
     height: 100dvh;
     min-height: 0;
     overflow: hidden;
   }
 
-  .workspace,
-  .control-panel {
-    padding: 12px;
-  }
-
   .workspace {
-    order: -1;
-    grid-template-rows: auto minmax(0, 1fr);
-    gap: 10px;
-    height: 100dvh;
-    overflow: hidden;
+    display: contents;
   }
 
   .control-panel {
     display: none;
+    grid-row: 2;
     min-height: 0;
     max-height: none;
+    height: 100%;
+    padding: 12px;
     gap: 12px;
     overflow-y: auto;
     overscroll-behavior: contain;
+    border-right: 0;
     border-bottom: 0;
-  }
-
-  .app-shell[data-active-view="explore"] .workspace {
-    grid-template-rows: auto;
-    height: auto;
   }
 
   .app-shell[data-active-view="explore"] .control-panel {
     display: flex;
+  }
+
+  .app-shell:not([data-active-view="explore"]) .control-panel {
+    display: none;
   }
 
   .brand-block h1 {
@@ -1346,7 +1342,16 @@ tbody tr:focus {
   }
 
   .toolbar {
+    grid-row: 1;
+    order: -1;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
     align-items: stretch;
+    padding: 8px 10px;
+    border-bottom: 1px solid #d7ddd7;
+    background: #eceee9;
+    z-index: 20;
   }
 
   .mobile-pane-tab {
@@ -1360,7 +1365,12 @@ tbody tr:focus {
 
   .tabs {
     overflow-x: auto;
-    padding-bottom: 2px;
+    padding: 4px;
+    scrollbar-width: none;
+  }
+
+  .tabs::-webkit-scrollbar {
+    display: none;
   }
 
   .toolbar-actions {
@@ -1387,6 +1397,8 @@ tbody tr:focus {
 
   .tab-button {
     flex: 0 0 auto;
+    min-height: 36px;
+    padding: 0 10px;
   }
 
   .toggle-control,
@@ -1396,19 +1408,24 @@ tbody tr:focus {
   }
 
   .view.active {
+    grid-row: 2;
     min-height: 0;
     height: 100%;
+    padding: 12px;
+    overflow: hidden;
   }
 
   #mapView.active,
   #mapView.active.has-selection {
     grid-template-columns: 1fr;
+    grid-template-rows: minmax(0, 1fr);
     min-height: 0;
     height: 100%;
+    gap: 0;
   }
 
   .app-shell[data-active-view="explore"] .view {
-    display: none;
+    display: none !important;
   }
 
   .map-column {
@@ -1417,19 +1434,23 @@ tbody tr:focus {
     min-height: 0;
   }
 
+  .map-wrap {
+    min-height: 0;
+  }
+
   .map-column.street-view-open {
     grid-template-rows: minmax(0, 1fr);
   }
 
   .app-shell[data-active-view="map"] .street-view-panel {
-    display: none;
+    display: none !important;
   }
 
   .app-shell[data-active-view="details"] .map-column,
   .app-shell[data-active-view="street"] .map-wrap,
   .app-shell[data-active-view="map"] .selected-aside,
   .app-shell[data-active-view="street"] .selected-aside {
-    display: none;
+    display: none !important;
   }
 
   .app-shell[data-active-view="street"] .map-column {
@@ -1453,6 +1474,7 @@ tbody tr:focus {
 
   .selected-aside {
     height: 100%;
+    min-height: 0;
     max-height: none;
     overflow-y: auto;
   }
@@ -1460,7 +1482,13 @@ tbody tr:focus {
   #stateView.active,
   #tableView.active,
   .settings-view.active {
+    grid-template-rows: minmax(0, 1fr);
     overflow: auto;
+  }
+
+  #stateView.active .table-shell,
+  #tableView.active .table-shell {
+    min-height: 0;
   }
 
   .map-locate-button {
@@ -1479,7 +1507,6 @@ tbody tr:focus {
   }
 
   .splash-screen {
-    align-items: end;
     padding: 14px;
   }
 
