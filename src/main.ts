@@ -23,6 +23,7 @@ const BUNDLED_CSV_FILES = [
   "data/csv/Unfallorte2024_LinRef.csv",
   "data/csv/Unfallorte_2025_LR_BasisDLM.csv"
 ];
+const TABLE_ROWS_PER_STATE = 10;
 
 interface EmbeddedDataFile {
   path: string;
@@ -150,7 +151,6 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "settings.clusterRadius": "Cluster radius (m)",
     "settings.clusterRadiusMeters": "Cluster radius in meters",
     "settings.minAccidents": "Minimum accidents",
-    "settings.topRows": "Top rows",
     "settings.yearFilters": "Year filters",
     "settings.aboutSeverity": "About Severity %",
     "settings.whatMeasures": "What it measures",
@@ -393,7 +393,6 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "settings.clusterRadius": "Cluster-Radius (m)",
     "settings.clusterRadiusMeters": "Cluster-Radius in Metern",
     "settings.minAccidents": "Mindestanzahl Unfälle",
-    "settings.topRows": "Top-Zeilen",
     "settings.yearFilters": "Jahresfilter",
     "settings.aboutSeverity": "Über Schweregrad %",
     "settings.whatMeasures": "Was gemessen wird",
@@ -644,7 +643,6 @@ const elements = {
   clusterRadius: byId<HTMLInputElement>("clusterRadius"),
   clusterRadiusOut: byId<HTMLInputElement>("clusterRadiusOut"),
   minAccidents: byId<HTMLInputElement>("minAccidents"),
-  topCount: byId<HTMLInputElement>("topCount"),
   fatalWeight: byId<HTMLInputElement>("fatalWeight"),
   seriousWeight: byId<HTMLInputElement>("seriousWeight"),
   severityFullSample: byId<HTMLInputElement>("severityFullSample"),
@@ -770,18 +768,6 @@ function wireEvents(): void {
   elements.stateFilter.addEventListener("input", markAnalysisSettingsDirty);
   elements.stateFilter.addEventListener("change", markAnalysisSettingsDirty);
 
-  elements.topCount.addEventListener("input", () => {
-    if (result) {
-      renderTables();
-    }
-  });
-  elements.topCount.addEventListener("change", () => {
-    normalizeNumberInput(elements.topCount);
-    if (result) {
-      renderTables();
-    }
-  });
-
   [elements.showFatalPoints, elements.showSeriousPoints, elements.showOtherPoints].forEach((input) => {
     input.addEventListener("change", applySeverityFilter);
   });
@@ -866,11 +852,9 @@ function resetAnalysisControlsToDefaults(): void {
   resetInputToDefault(elements.clusterRadius);
   resetInputToDefault(elements.clusterRadiusOut);
   resetInputToDefault(elements.minAccidents);
-  resetInputToDefault(elements.topCount);
   severityPercentInputs().forEach(resetInputToDefault);
   normalizeLinkedNumberRange(elements.clusterRadius, elements.clusterRadiusOut);
   normalizeNumberInput(elements.minAccidents);
-  normalizeNumberInput(elements.topCount);
   normalizeSeverityPercentInputs();
 }
 
@@ -1299,8 +1283,7 @@ function renderTables(): void {
     elements.stateTableBody.append(row);
   }
 
-  const topCount = normalizeNumberInput(elements.topCount);
-  const clusters = clustersForTable(result.clusters, topCount);
+  const clusters = clustersForTable(result.clusters);
   for (const cluster of clusters) {
     const row = document.createElement("tr");
     row.tabIndex = 0;
@@ -1324,17 +1307,17 @@ function renderTables(): void {
   }
 }
 
-function clustersForTable(clusters: IntersectionCluster[], topCount: number): IntersectionCluster[] {
+function clustersForTable(clusters: IntersectionCluster[]): IntersectionCluster[] {
   const sortedClusters = sortClustersForTable(clusters);
   if (elements.stateFilter.value !== "all") {
-    return sortedClusters.slice(0, topCount);
+    return sortedClusters.slice(0, TABLE_ROWS_PER_STATE);
   }
 
   const byState = new Map<string, number>();
   const selected: IntersectionCluster[] = [];
   for (const cluster of sortedClusters) {
     const current = byState.get(cluster.stateCode) ?? 0;
-    if (current < topCount) {
+    if (current < TABLE_ROWS_PER_STATE) {
       selected.push(cluster);
       byState.set(cluster.stateCode, current + 1);
     }
@@ -2301,7 +2284,6 @@ function setAnalysisControlsDisabled(isDisabled: boolean): void {
     elements.clusterRadius,
     elements.clusterRadiusOut,
     elements.minAccidents,
-    elements.topCount,
     elements.stateFilter,
     ...severityPercentInputs()
   ];
