@@ -4,12 +4,12 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
-    <title>Sichere Knoten</title>
+    <title>Safe Intersections</title>
   </head>
   <body>
     <div id="appSplash" class="splash-screen" role="status" aria-live="polite" aria-busy="true">
       <div class="loading-panel splash-panel">
-        <p class="loading-eyebrow">Sichere Knoten</p>
+        <p class="loading-eyebrow" data-i18n="brand.name">Safe Intersections</p>
         <h2 id="splashLoadingTitle" data-i18n="loading.preparing">Preparing data</h2>
         <p id="splashLoadingStatus" class="loading-status" data-i18n="loading.checkingBundled">Checking bundled accident data.</p>
         <div class="loading-progress" aria-hidden="true">
@@ -25,8 +25,8 @@
     <div id="app" class="app-shell">
       <aside class="control-panel" aria-label="Application sidebar" data-i18n-aria-label="aria.sidebar">
         <div class="brand-block">
-          <h1>Sichere Knoten</h1>
-          <p class="brand-description" data-i18n="brand.description">Explore German accident data to identify high-risk intersections by severity, location, and year.</p>
+          <h1 data-i18n="brand.name">Safe Intersections</h1>
+          <p class="brand-description" data-i18n="brand.description">Explore German accident data to identify elevated-risk intersections by severity, location, and year.</p>
         </div>
 
         <div id="explorePanel" class="explore-panel">
@@ -92,7 +92,7 @@
         <section id="mapView" class="view active">
           <div id="mapColumn" class="map-column">
             <div class="map-wrap">
-              <canvas id="mapCanvas" width="1200" height="760" aria-label="Dangerous intersections map" data-i18n-aria-label="aria.map"></canvas>
+              <canvas id="mapCanvas" width="1200" height="760" aria-label="High-severity intersections map" data-i18n-aria-label="aria.map"></canvas>
               <a id="osmAttribution" class="osm-attribution" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">
                 &copy; OpenStreetMap contributors
               </a>
@@ -155,7 +155,7 @@
                   <th data-i18n="table.state">Bundesland</th>
                   <th data-i18n="table.accidents">Accidents</th>
                   <th data-i18n="table.clusters">Clusters</th>
-                  <th data-i18n="metric.harmPercent">Harm %</th>
+                  <th data-i18n="metric.severityPercent">Severity %</th>
                   <th data-i18n="table.topCluster">Top cluster</th>
                 </tr>
               </thead>
@@ -174,7 +174,7 @@
                   <th aria-sort="none"><button class="sort-button" type="button" data-cluster-sort="accidents"><span data-i18n="table.accidents">Accidents</span><span class="sort-indicator" aria-hidden="true"></span></button></th>
                   <th aria-sort="none"><button class="sort-button" type="button" data-cluster-sort="fatal"><span data-i18n="severity.fatal">Fatal</span><span class="sort-indicator" aria-hidden="true"></span></button></th>
                   <th aria-sort="none"><button class="sort-button" type="button" data-cluster-sort="serious"><span data-i18n="severity.serious">Serious</span><span class="sort-indicator" aria-hidden="true"></span></button></th>
-                  <th aria-sort="descending"><button class="sort-button" type="button" data-cluster-sort="fatalPercent"><span data-i18n="metric.harmPercent">Harm %</span><span class="sort-indicator" aria-hidden="true"></span></button></th>
+                  <th aria-sort="descending"><button class="sort-button" type="button" data-cluster-sort="severityPercent"><span data-i18n="metric.severityPercent">Severity %</span><span class="sort-indicator" aria-hidden="true"></span></button></th>
                 </tr>
               </thead>
               <tbody id="clusterTableBody"></tbody>
@@ -209,7 +209,7 @@
             </section>
 
             <section class="settings-section" data-settings-section="metric">
-              <h2 data-i18n="settings.metricTitle">Harm % metric</h2>
+              <h2 data-i18n="settings.metricTitle">Severity % metric</h2>
 
               <label class="field-label" for="fatalWeight" data-i18n="settings.fatalWeight">Fatal accident weight</label>
               <input id="fatalWeight" class="number-input" type="number" min="0" max="3" step="0.05" value="1" autocomplete="off" />
@@ -217,20 +217,20 @@
               <label class="field-label" for="seriousWeight" data-i18n="settings.seriousWeight">Serious accident weight</label>
               <input id="seriousWeight" class="number-input" type="number" min="0" max="3" step="0.05" value="0.5" autocomplete="off" />
 
-              <label class="field-label" for="fatalFullSample" data-i18n="settings.fullSample">Full sample accidents</label>
-              <input id="fatalFullSample" class="number-input" type="number" min="1" max="100" step="1" value="10" autocomplete="off" />
+              <label class="field-label" for="severityFullSample" data-i18n="settings.fullSample">Full sample accidents</label>
+              <input id="severityFullSample" class="number-input" type="number" min="1" max="100" step="1" value="10" autocomplete="off" />
 
-              <label class="field-label" for="fatalTrendDeadZone" data-i18n="settings.trendDeadZone">Trend dead zone (%/yr)</label>
-              <input id="fatalTrendDeadZone" class="number-input" type="number" min="0" max="100" step="1" value="5" autocomplete="off" />
+              <label class="field-label" for="severityTrendDeadZone" data-i18n="settings.trendDeadZone">Trend dead zone (%/yr)</label>
+              <input id="severityTrendDeadZone" class="number-input" type="number" min="0" max="100" step="1" value="5" autocomplete="off" />
 
-              <label class="field-label" for="fatalTrendFullSignal" data-i18n="settings.trendFullSignal">Full trend signal (%/yr)</label>
-              <input id="fatalTrendFullSignal" class="number-input" type="number" min="0" max="100" step="1" value="15" autocomplete="off" />
+              <label class="field-label" for="severityTrendFullSignal" data-i18n="settings.trendFullSignal">Full trend signal (%/yr)</label>
+              <input id="severityTrendFullSignal" class="number-input" type="number" min="0" max="100" step="1" value="15" autocomplete="off" />
 
-              <label class="field-label" for="fatalMaxTrendAdjustment" data-i18n="settings.maxTrendAdjustment">Max trend adjustment (%)</label>
-              <input id="fatalMaxTrendAdjustment" class="number-input" type="number" min="0" max="100" step="1" value="15" autocomplete="off" />
+              <label class="field-label" for="severityMaxTrendAdjustment" data-i18n="settings.maxTrendAdjustment">Max trend adjustment (%)</label>
+              <input id="severityMaxTrendAdjustment" class="number-input" type="number" min="0" max="100" step="1" value="15" autocomplete="off" />
 
-              <label class="field-label" for="fatalMaxPercent" data-i18n="settings.metricCap">Metric cap (%)</label>
-              <input id="fatalMaxPercent" class="number-input" type="number" min="1" max="300" step="1" value="100" autocomplete="off" />
+              <label class="field-label" for="severityMaxPercent" data-i18n="settings.metricCap">Metric cap (%)</label>
+              <input id="severityMaxPercent" class="number-input" type="number" min="1" max="300" step="1" value="100" autocomplete="off" />
             </section>
           </div>
 
@@ -239,8 +239,8 @@
               <h2 data-i18n="settings.analysis">Analysis</h2>
               <label class="field-label" for="clusterRadius" data-i18n="settings.clusterRadius">Cluster radius (m)</label>
               <div class="range-row">
-                <input id="clusterRadius" type="range" min="25" max="180" step="5" value="60" />
-                <input id="clusterRadiusOut" class="range-value-input" type="number" min="25" max="180" step="5" value="60" autocomplete="off" aria-label="Cluster radius in meters" data-i18n-aria-label="settings.clusterRadiusMeters" />
+                <input id="clusterRadius" type="range" min="25" max="180" step="5" value="50" />
+                <input id="clusterRadiusOut" class="range-value-input" type="number" min="25" max="180" step="5" value="50" autocomplete="off" aria-label="Cluster radius in meters" data-i18n-aria-label="settings.clusterRadiusMeters" />
               </div>
 
               <label class="field-label" for="minAccidents" data-i18n="settings.minAccidents">Minimum accidents</label>
@@ -260,25 +260,27 @@
             </section>
 
             <section class="settings-section settings-explainer-section" data-settings-section="about">
-              <h2 data-i18n="settings.aboutHarm">About Harm %</h2>
+              <h2 data-i18n="settings.aboutSeverity">About Severity %</h2>
               <div class="settings-explainer">
                 <div>
                   <h3 data-i18n="settings.whatMeasures">What it measures</h3>
                   <p class="source-note" data-i18n-html="settings.whatMeasuresText">
-                    Harm % is a weighted share of severe outcomes at an inferred intersection. By default: <code>(fatal + serious / 2) / total</code>.
+                    Severity % is a weighted share of severe outcomes at an inferred intersection. By default: <code>(fatal + serious / 2) / total</code>.
                     Fatal accidents count once, serious-injury accidents count as half, and all accidents at the intersection form the denominator.
+                    In the raw formula, 100% severity means the weighted severe count equals the total accident count; with default weights, that means every known record at the intersection was fatal.
+                    The displayed value can also reach 100% when trend adjustment pushes a high raw score up to the metric cap.
                   </p>
                   <p class="source-note" data-i18n="settings.discountText">
-                    Low accident totals are discounted, and the accident trend adjusts the result gradually once the yearly change is large enough to matter.
+                    Low accident totals are weighted conservatively, and the accident trend adjusts the result gradually once the yearly change is large enough to influence the score.
                   </p>
                 </div>
                 <div>
                   <h3 data-i18n="settings.whyFocus">Why this focus</h3>
                   <p class="source-note" data-i18n="settings.whyFocusText1">
-                    We do not have reliable traffic volume data for each intersection. Intersections with many recorded incidents are therefore not automatically the worst places; they may simply be very highly loaded.
+                    We do not have reliable traffic volume data for each intersection. Intersections with many recorded incidents are therefore not automatically the highest-severity locations; they may also be very highly loaded.
                   </p>
                   <p class="source-note" data-i18n="settings.whyFocusText2">
-                    The metric focuses on dangerous intersections where potential harm is higher, using fatal and serious-injury outcomes to separate severe locations from merely busy ones.
+                    The metric focuses on intersections with higher recorded severity, using fatal and serious-injury outcomes to distinguish severe locations from high-volume ones.
                   </p>
                 </div>
               </div>

@@ -12,7 +12,7 @@ import {
   AnalysisOptions,
   AnalysisResult,
   ClusterYearStat,
-  FatalPercentOptions,
+  SeverityPercentOptions,
   IntersectionCluster
 } from "./types";
 
@@ -40,7 +40,7 @@ declare global {
 
 declare const __SICHERE_KNOTEN_APP_VERSION__: string | undefined;
 
-type ClusterSortKey = "state" | "location" | "accidents" | "fatal" | "serious" | "fatalPercent";
+type ClusterSortKey = "state" | "location" | "accidents" | "fatal" | "serious" | "severityPercent";
 type SortDirection = "asc" | "desc";
 type LoadingStepKey = "cache" | "parse" | "analyze";
 type SeverityFilterKey = "fatal" | "serious" | "other";
@@ -56,7 +56,7 @@ const APP_CACHE_VERSION =
 const STREET_VIEW_OPEN_STORAGE_KEY = "sichere-knoten:street-view-open";
 const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
   en: {
-    "document.title": "Sichere Knoten",
+    "document.title": "Safe Intersections",
     "loading.preparing": "Preparing data",
     "loading.checkingBundled": "Checking bundled accident data.",
     "loading.bundle": "Automatic offline bundle",
@@ -74,11 +74,12 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "aria.toolbar": "Workspace toolbar",
     "aria.views": "Views",
     "aria.mapControls": "Map display controls",
-    "aria.map": "Dangerous intersections map",
+    "aria.map": "High-severity intersections map",
     "aria.selectedDetails": "Selected intersection details",
     "aria.openMapServices": "Open selected intersection in map services",
     "aria.loadingSteps": "Loading steps",
-    "brand.description": "Explore German accident data to identify high-risk intersections by severity, location, and year.",
+    "brand.name": "Safe Intersections",
+    "brand.description": "Explore German accident data to identify elevated-risk intersections by severity, location, and year.",
     "browse.title": "Browse by state",
     "field.state": "State",
     "field.accidentOutcome": "Accident outcome",
@@ -116,10 +117,10 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "details.years": "Years",
     "details.accidents": "Accidents",
     "details.fatalSerious": "Fatal / serious",
-    "details.harmPercent": "Harm %",
+    "details.severityPercent": "Severity %",
     "details.vulnerableUsers": "Vulnerable users",
-    "metric.harmPercent": "Harm %",
-    "metric.harm": "Harm",
+    "metric.severityPercent": "Severity %",
+    "metric.severity": "Severity",
     "unit.perYear": "/yr",
     "table.state": "State",
     "table.accidents": "Accidents",
@@ -137,7 +138,7 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "settings.reusedUnder": "Reused under",
     "settings.licenseNote": "/ dl-de/by-2-0. Source data is processed, clustered, and analyzed by this app.",
     "settings.repository": "Project repository:",
-    "settings.metricTitle": "Harm % metric",
+    "settings.metricTitle": "Severity % metric",
     "settings.fatalWeight": "Fatal accident weight",
     "settings.seriousWeight": "Serious accident weight",
     "settings.fullSample": "Full sample accidents",
@@ -151,17 +152,17 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "settings.minAccidents": "Minimum accidents",
     "settings.topRows": "Top rows",
     "settings.yearFilters": "Year filters",
-    "settings.aboutHarm": "About Harm %",
+    "settings.aboutSeverity": "About Severity %",
     "settings.whatMeasures": "What it measures",
     "settings.whatMeasuresText":
-      "Harm % is a weighted share of severe outcomes at an inferred intersection. By default: <code>(fatal + serious / 2) / total</code>. Fatal accidents count once, serious-injury accidents count as half, and all accidents at the intersection form the denominator.",
+      "Severity % is a weighted share of severe outcomes at an inferred intersection. By default: <code>(fatal + serious / 2) / total</code>. Fatal accidents count once, serious-injury accidents count as half, and all accidents at the intersection form the denominator. In the raw formula, 100% severity means the weighted severe count equals the total accident count; with default weights, that means every known record at the intersection was fatal. The displayed value can also reach 100% when trend adjustment pushes a high raw score up to the metric cap.",
     "settings.discountText":
-      "Low accident totals are discounted, and the accident trend adjusts the result gradually once the yearly change is large enough to matter.",
+      "Low accident totals are weighted conservatively, and the accident trend adjusts the result gradually once the yearly change is large enough to influence the score.",
     "settings.whyFocus": "Why this focus",
     "settings.whyFocusText1":
-      "We do not have reliable traffic volume data for each intersection. Intersections with many recorded incidents are therefore not automatically the worst places; they may simply be very highly loaded.",
+      "We do not have reliable traffic volume data for each intersection. Intersections with many recorded incidents are therefore not automatically the highest-severity locations; they may also be very highly loaded.",
     "settings.whyFocusText2":
-      "The metric focuses on dangerous intersections where potential harm is higher, using fatal and serious-injury outcomes to separate severe locations from merely busy ones.",
+      "The metric focuses on intersections with higher recorded severity, using fatal and serious-injury outcomes to distinguish severe locations from high-volume ones.",
     "status.settingsChanged": "Settings changed. Click Analyze to update results.",
     "status.checkingParsedCache": "Checking parsed data cache.",
     "status.loadingCachedAccidents": "Loading cached accidents {current}/{total}.",
@@ -181,9 +182,9 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "status.geolocationUnavailable": "Browser geolocation is not available on this page.",
     "status.requestingLocation": "Requesting your browser location.",
     "status.nearestIntersection":
-      "Showing nearest visible dangerous intersection ({distance} away, {accuracy} m location accuracy).",
+      "Showing nearest visible high-severity intersection ({distance} away, {accuracy} m location accuracy).",
     "status.centeredNoMatch":
-      "Centered map on your location ({accuracy} m accuracy). No visible dangerous intersection matched the active filters.",
+      "Centered map on your location ({accuracy} m accuracy). No visible high-severity intersection matched the active filters.",
     "status.centeredLocation": "Centered map on your location ({accuracy} m accuracy).",
     "status.locationDenied": "Location permission was denied.",
     "status.locationUnavailable": "Your location is currently unavailable.",
@@ -316,11 +317,12 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "aria.toolbar": "Arbeitsbereich-Werkzeugleiste",
     "aria.views": "Ansichten",
     "aria.mapControls": "Kartendarstellung",
-    "aria.map": "Karte gefährlicher Kreuzungen",
+    "aria.map": "Karte der Kreuzungen mit hohem Schweregrad",
     "aria.selectedDetails": "Details zur ausgewählten Kreuzung",
     "aria.openMapServices": "Ausgewählte Kreuzung in Kartendiensten öffnen",
     "aria.loadingSteps": "Ladeschritte",
-    "brand.description": "Erkunde deutsche Unfalldaten, um gefährliche Kreuzungen nach Schwere, Ort und Jahr zu erkennen.",
+    "brand.name": "Sichere Knoten",
+    "brand.description": "Erkunde deutsche Unfalldaten, um Kreuzungen mit erhöhtem Risiko nach Schwere, Ort und Jahr zu erkennen.",
     "browse.title": "Nach Bundesland suchen",
     "field.state": "Bundesland",
     "field.accidentOutcome": "Unfallfolge",
@@ -358,10 +360,10 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "details.years": "Jahre",
     "details.accidents": "Unfälle",
     "details.fatalSerious": "Tödlich / schwer",
-    "details.harmPercent": "Harm %",
+    "details.severityPercent": "Schweregrad %",
     "details.vulnerableUsers": "Ungeschützte Verkehrsteilnehmer",
-    "metric.harmPercent": "Harm %",
-    "metric.harm": "Harm",
+    "metric.severityPercent": "Schweregrad %",
+    "metric.severity": "Schweregrad",
     "unit.perYear": "/Jahr",
     "table.state": "Bundesland",
     "table.accidents": "Unfälle",
@@ -379,7 +381,7 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "settings.reusedUnder": "Weiterverwendet unter",
     "settings.licenseNote": "/ dl-de/by-2-0. Die Quelldaten werden von dieser App verarbeitet, geclustert und analysiert.",
     "settings.repository": "Projekt-Repository:",
-    "settings.metricTitle": "Harm-%-Metrik",
+    "settings.metricTitle": "Schweregrad-%-Metrik",
     "settings.fatalWeight": "Gewicht tödlicher Unfälle",
     "settings.seriousWeight": "Gewicht schwerer Unfälle",
     "settings.fullSample": "Volle Stichprobengröße",
@@ -393,17 +395,17 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "settings.minAccidents": "Mindestanzahl Unfälle",
     "settings.topRows": "Top-Zeilen",
     "settings.yearFilters": "Jahresfilter",
-    "settings.aboutHarm": "Über Harm %",
+    "settings.aboutSeverity": "Über Schweregrad %",
     "settings.whatMeasures": "Was gemessen wird",
     "settings.whatMeasuresText":
-      "Harm % ist der gewichtete Anteil schwerer Folgen an einer abgeleiteten Kreuzung. Standardmäßig gilt: <code>(tödlich + schwer / 2) / gesamt</code>. Tödliche Unfälle zählen einfach, Unfälle mit Schwerverletzten halb, und alle Unfälle an der Kreuzung bilden den Nenner.",
+      "Schweregrad % ist der gewichtete Anteil schwerer Folgen an einer abgeleiteten Kreuzung. Standardmäßig gilt: <code>(tödlich + schwer / 2) / gesamt</code>. Tödliche Unfälle zählen einfach, Unfälle mit Schwerverletzten halb, und alle Unfälle an der Kreuzung bilden den Nenner. In der Rohformel bedeutet 100% Schweregrad, dass die gewichtete Anzahl schwerer Folgen der Gesamtzahl der Unfälle entspricht; mit den Standardgewichten heißt das, dass jeder bekannte Datensatz an der Kreuzung tödlich war. Der angezeigte Wert kann ebenfalls 100% erreichen, wenn die Trendanpassung einen hohen Rohwert bis zur Metrik-Obergrenze anhebt.",
     "settings.discountText":
-      "Niedrige Unfallzahlen werden abgeschwächt, und der Unfalltrend passt das Ergebnis erst dann schrittweise an, wenn die jährliche Veränderung groß genug ist.",
+      "Niedrige Unfallzahlen werden konservativ gewichtet, und der Unfalltrend passt das Ergebnis schrittweise an, sobald die jährliche Veränderung deutlich genug ist, um den Wert zu beeinflussen.",
     "settings.whyFocus": "Warum dieser Fokus",
     "settings.whyFocusText1":
-      "Wir haben keine verlässlichen Verkehrsstärkedaten für jede Kreuzung. Kreuzungen mit vielen registrierten Vorfällen sind deshalb nicht automatisch die gefährlichsten Orte; sie können einfach sehr stark belastet sein.",
+      "Wir haben keine verlässlichen Verkehrsstärkedaten für jede Kreuzung. Kreuzungen mit vielen registrierten Vorfällen sind deshalb nicht automatisch die Orte mit dem höchsten Schweregrad; sie können auch sehr stark belastet sein.",
     "settings.whyFocusText2":
-      "Die Metrik fokussiert gefährliche Kreuzungen mit höherem Schadenspotenzial und nutzt tödliche sowie schwere Unfallfolgen, um schwere Orte von nur stark befahrenen Orten zu trennen.",
+      "Die Metrik fokussiert Kreuzungen mit höherem erfasstem Schweregrad und nutzt tödliche sowie schwere Unfallfolgen, um Orte mit schweren Folgen von stark belasteten Orten zu unterscheiden.",
     "status.settingsChanged": "Einstellungen geändert. Klicke auf Analysieren, um die Ergebnisse zu aktualisieren.",
     "status.checkingParsedCache": "Cache mit eingelesenen Daten wird geprüft.",
     "status.loadingCachedAccidents": "Unfälle aus dem Cache werden geladen {current}/{total}.",
@@ -422,9 +424,9 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "status.intersectionClustersAnalyzed": "{count} Kreuzungscluster analysiert.",
     "status.geolocationUnavailable": "Browser-Geolokalisierung ist auf dieser Seite nicht verfügbar.",
     "status.requestingLocation": "Browser-Standort wird angefragt.",
-    "status.nearestIntersection": "Nächste sichtbare gefährliche Kreuzung wird angezeigt ({distance} entfernt, {accuracy} m Standortgenauigkeit).",
+    "status.nearestIntersection": "Nächste sichtbare Kreuzung mit hohem Schweregrad wird angezeigt ({distance} entfernt, {accuracy} m Standortgenauigkeit).",
     "status.centeredNoMatch":
-      "Karte auf deinen Standort zentriert ({accuracy} m Genauigkeit). Keine sichtbare gefährliche Kreuzung passt zu den aktiven Filtern.",
+      "Karte auf deinen Standort zentriert ({accuracy} m Genauigkeit). Keine sichtbare Kreuzung mit hohem Schweregrad passt zu den aktiven Filtern.",
     "status.centeredLocation": "Karte auf deinen Standort zentriert ({accuracy} m Genauigkeit).",
     "status.locationDenied": "Standortberechtigung wurde verweigert.",
     "status.locationUnavailable": "Dein Standort ist derzeit nicht verfügbar.",
@@ -587,8 +589,8 @@ interface ClusterTableSort {
   direction: SortDirection;
 }
 
-interface FatalPercentSource {
-  fatalPercent: number;
+interface SeverityPercentSource {
+  severityPercent: number;
 }
 
 interface TrendSeriesPoint extends ClusterYearStat {
@@ -619,7 +621,7 @@ interface CrossingAccident {
 let accidents: AccidentRecord[] = [];
 let result: AnalysisResult | null = null;
 let selectedCluster: IntersectionCluster | null = null;
-let clusterTableSort: ClusterTableSort = { key: "fatalPercent", direction: "desc" };
+let clusterTableSort: ClusterTableSort = { key: "severityPercent", direction: "desc" };
 let analysisSettingsDirty = false;
 let activeDataVersion: string | null = null;
 let userLocation: { lat: number; lon: number; accuracyMeters: number | null } | null = null;
@@ -645,11 +647,11 @@ const elements = {
   topCount: byId<HTMLInputElement>("topCount"),
   fatalWeight: byId<HTMLInputElement>("fatalWeight"),
   seriousWeight: byId<HTMLInputElement>("seriousWeight"),
-  fatalFullSample: byId<HTMLInputElement>("fatalFullSample"),
-  fatalTrendDeadZone: byId<HTMLInputElement>("fatalTrendDeadZone"),
-  fatalTrendFullSignal: byId<HTMLInputElement>("fatalTrendFullSignal"),
-  fatalMaxTrendAdjustment: byId<HTMLInputElement>("fatalMaxTrendAdjustment"),
-  fatalMaxPercent: byId<HTMLInputElement>("fatalMaxPercent"),
+  severityFullSample: byId<HTMLInputElement>("severityFullSample"),
+  severityTrendDeadZone: byId<HTMLInputElement>("severityTrendDeadZone"),
+  severityTrendFullSignal: byId<HTMLInputElement>("severityTrendFullSignal"),
+  severityMaxTrendAdjustment: byId<HTMLInputElement>("severityMaxTrendAdjustment"),
+  severityMaxPercent: byId<HTMLInputElement>("severityMaxPercent"),
   stateFilter: byId<HTMLSelectElement>("stateFilter"),
   yearFilter: byId<HTMLDivElement>("yearFilter"),
   mapColumn: byId<HTMLDivElement>("mapColumn"),
@@ -762,8 +764,8 @@ function wireEvents(): void {
   wireLinkedNumberRange(elements.clusterRadius, elements.clusterRadiusOut, markAnalysisSettingsDirty);
 
   wireClampedNumberInput(elements.minAccidents, markAnalysisSettingsDirty);
-  wireClampedNumberInput(elements.fatalFullSample, markAnalysisSettingsDirty);
-  fatalPercentDecimalInputs().forEach((input) => wireClampedDecimalInput(input, markAnalysisSettingsDirty));
+  wireClampedNumberInput(elements.severityFullSample, markAnalysisSettingsDirty);
+  severityPercentDecimalInputs().forEach((input) => wireClampedDecimalInput(input, markAnalysisSettingsDirty));
 
   elements.stateFilter.addEventListener("input", markAnalysisSettingsDirty);
   elements.stateFilter.addEventListener("change", markAnalysisSettingsDirty);
@@ -865,11 +867,11 @@ function resetAnalysisControlsToDefaults(): void {
   resetInputToDefault(elements.clusterRadiusOut);
   resetInputToDefault(elements.minAccidents);
   resetInputToDefault(elements.topCount);
-  fatalPercentInputs().forEach(resetInputToDefault);
+  severityPercentInputs().forEach(resetInputToDefault);
   normalizeLinkedNumberRange(elements.clusterRadius, elements.clusterRadiusOut);
   normalizeNumberInput(elements.minAccidents);
   normalizeNumberInput(elements.topCount);
-  normalizeFatalPercentInputs();
+  normalizeSeverityPercentInputs();
 }
 
 function resetInputToDefault(input: HTMLInputElement): void {
@@ -902,31 +904,31 @@ function normalizeDecimalInput(input: HTMLInputElement): number {
   return normalized;
 }
 
-function normalizeFatalPercentInputs(): void {
-  normalizeNumberInput(elements.fatalFullSample);
-  fatalPercentDecimalInputs().forEach(normalizeDecimalInput);
+function normalizeSeverityPercentInputs(): void {
+  normalizeNumberInput(elements.severityFullSample);
+  severityPercentDecimalInputs().forEach(normalizeDecimalInput);
 }
 
-function fatalPercentInputs(): HTMLInputElement[] {
+function severityPercentInputs(): HTMLInputElement[] {
   return [
     elements.fatalWeight,
     elements.seriousWeight,
-    elements.fatalFullSample,
-    elements.fatalTrendDeadZone,
-    elements.fatalTrendFullSignal,
-    elements.fatalMaxTrendAdjustment,
-    elements.fatalMaxPercent
+    elements.severityFullSample,
+    elements.severityTrendDeadZone,
+    elements.severityTrendFullSignal,
+    elements.severityMaxTrendAdjustment,
+    elements.severityMaxPercent
   ];
 }
 
-function fatalPercentDecimalInputs(): HTMLInputElement[] {
+function severityPercentDecimalInputs(): HTMLInputElement[] {
   return [
     elements.fatalWeight,
     elements.seriousWeight,
-    elements.fatalTrendDeadZone,
-    elements.fatalTrendFullSignal,
-    elements.fatalMaxTrendAdjustment,
-    elements.fatalMaxPercent
+    elements.severityTrendDeadZone,
+    elements.severityTrendFullSignal,
+    elements.severityMaxTrendAdjustment,
+    elements.severityMaxPercent
   ];
 }
 
@@ -1111,23 +1113,23 @@ function readOptions(): AnalysisOptions {
     minAccidents: normalizeNumberInput(elements.minAccidents),
     years,
     stateCode: elements.stateFilter.value as AnalysisOptions["stateCode"],
-    fatalPercent: readFatalPercentOptions()
+    severityPercent: readSeverityPercentOptions()
   };
 }
 
-function readFatalPercentOptions(): FatalPercentOptions {
-  const trendDeadZonePercent = normalizeDecimalInput(elements.fatalTrendDeadZone);
-  const trendFullSignalPercent = Math.max(trendDeadZonePercent + 0.1, normalizeDecimalInput(elements.fatalTrendFullSignal));
-  elements.fatalTrendFullSignal.value = formatInputNumber(trendFullSignalPercent);
+function readSeverityPercentOptions(): SeverityPercentOptions {
+  const trendDeadZonePercent = normalizeDecimalInput(elements.severityTrendDeadZone);
+  const trendFullSignalPercent = Math.max(trendDeadZonePercent + 0.1, normalizeDecimalInput(elements.severityTrendFullSignal));
+  elements.severityTrendFullSignal.value = formatInputNumber(trendFullSignalPercent);
 
   return {
     fatalWeight: normalizeDecimalInput(elements.fatalWeight),
     seriousWeight: normalizeDecimalInput(elements.seriousWeight),
-    fullSampleAccidents: normalizeNumberInput(elements.fatalFullSample),
+    fullSampleAccidents: normalizeNumberInput(elements.severityFullSample),
     trendDeadZone: trendDeadZonePercent / 100,
     trendFullSignal: trendFullSignalPercent / 100,
-    maxTrendAdjustment: normalizeDecimalInput(elements.fatalMaxTrendAdjustment) / 100,
-    maxFatalPercent: normalizeDecimalInput(elements.fatalMaxPercent) / 100
+    maxTrendAdjustment: normalizeDecimalInput(elements.severityMaxTrendAdjustment) / 100,
+    maxSeverityPercent: normalizeDecimalInput(elements.severityMaxPercent) / 100
   };
 }
 
@@ -1135,7 +1137,7 @@ function cloneAnalysisOptions(options: AnalysisOptions): AnalysisOptions {
   return {
     ...options,
     years: new Set(options.years),
-    fatalPercent: { ...options.fatalPercent }
+    severityPercent: { ...options.severityPercent }
   };
 }
 
@@ -1285,7 +1287,7 @@ function renderTables(): void {
       <td>${escapeHtml(summary.stateName)}</td>
       <td>${formatInteger(summary.accidentCount)}</td>
       <td>${formatInteger(summary.clusterCount)}</td>
-      <td>${formatFatalPercent(summary)}</td>
+      <td>${formatSeverityPercent(summary)}</td>
       <td>${summary.topCluster ? clusterLocation(summary.topCluster) : ""}</td>
     `;
     const topCluster = summary.topCluster;
@@ -1308,7 +1310,7 @@ function renderTables(): void {
       <td>${formatInteger(cluster.accidentCount)}</td>
       <td>${formatInteger(cluster.fatalCount)}</td>
       <td>${formatInteger(cluster.seriousCount)}</td>
-      <td>${formatFatalPercent(cluster)}</td>
+      <td>${formatSeverityPercent(cluster)}</td>
     `;
     row.addEventListener("click", () => {
       selectClusterOnMap(cluster);
@@ -1387,14 +1389,14 @@ function clusterSortValue(cluster: IntersectionCluster, key: ClusterSortKey): nu
       return cluster.fatalCount;
     case "serious":
       return cluster.seriousCount;
-    case "fatalPercent":
-      return cluster.fatalPercent;
+    case "severityPercent":
+      return cluster.severityPercent;
   }
 }
 
 function compareClusterCoreMetric(a: IntersectionCluster, b: IntersectionCluster): number {
   return (
-    b.fatalPercent - a.fatalPercent ||
+    b.severityPercent - a.severityPercent ||
     b.fatalCount - a.fatalCount ||
     b.seriousCount - a.seriousCount ||
     b.accidentCount - a.accidentCount ||
@@ -1499,7 +1501,7 @@ function hotspotButton(
   button.className = "hotspot-button";
   button.classList.toggle("selected", selectedCluster?.id === cluster.id);
   const metricPlacement = options.metricPlacement ?? "stats";
-  const metricStat = `<span class="hotspot-stat hotspot-stat-metric"><strong>${formatFatalPercent(cluster)}</strong> ${escapeHtml(tr("metric.harm"))}</span>`;
+  const metricStat = `<span class="hotspot-stat hotspot-stat-metric"><strong>${formatSeverityPercent(cluster)}</strong> ${escapeHtml(tr("metric.severity"))}</span>`;
   button.innerHTML = `
     <span class="hotspot-main">
       <span class="hotspot-heading">
@@ -1637,7 +1639,7 @@ function renderSelection(cluster: IntersectionCluster | null): void {
       <div><dt>${escapeHtml(tr("details.years"))}</dt><dd>${cluster.years.join(", ")}</dd></div>
       <div><dt>${escapeHtml(tr("details.accidents"))}</dt><dd>${formatInteger(cluster.accidentCount)}</dd></div>
       <div><dt>${escapeHtml(tr("details.fatalSerious"))}</dt><dd>${formatInteger(cluster.fatalCount)} / ${formatInteger(cluster.seriousCount)}</dd></div>
-      <div><dt>${escapeHtml(tr("details.harmPercent"))}</dt><dd>${formatFatalPercent(cluster)}</dd></div>
+      <div><dt>${escapeHtml(tr("details.severityPercent"))}</dt><dd>${formatSeverityPercent(cluster)}</dd></div>
       <div><dt>${escapeHtml(tr("details.vulnerableUsers"))}</dt><dd>${formatInteger(cluster.vulnerableCount)}</dd></div>
     </dl>
     ${renderMapServiceActions(openStreetMapUrl, googleMapsUrl, streetViewUrl)}
@@ -2262,7 +2264,7 @@ function exportClusters(): void {
       cluster.accidentCount,
       cluster.fatalCount,
       cluster.seriousCount,
-      fatalPercentValue(cluster)
+      severityPercentValue(cluster)
     ]
       .map(csvCell)
       .join(",")
@@ -2272,7 +2274,7 @@ function exportClusters(): void {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = "dangerous-intersections.csv";
+  link.download = "high-severity-intersections.csv";
   link.click();
   URL.revokeObjectURL(url);
 }
@@ -2301,7 +2303,7 @@ function setAnalysisControlsDisabled(isDisabled: boolean): void {
     elements.minAccidents,
     elements.topCount,
     elements.stateFilter,
-    ...fatalPercentInputs()
+    ...severityPercentInputs()
   ];
   elements.yearFilter.querySelectorAll<HTMLInputElement>("input").forEach((input) => controls.push(input));
 
@@ -2519,12 +2521,12 @@ function formatSignedPercent(value: number): string {
   return `${value > 0 ? "+" : ""}${new Intl.NumberFormat(NUMBER_LOCALE, { maximumFractionDigits: 1 }).format(value * 100)}%`;
 }
 
-function formatFatalPercent(source: FatalPercentSource): string {
-  return `${fatalPercentValue(source)}%`;
+function formatSeverityPercent(source: SeverityPercentSource): string {
+  return `${severityPercentValue(source)}%`;
 }
 
-function fatalPercentValue(source: FatalPercentSource): number {
-  return Math.round(source.fatalPercent * 100);
+function severityPercentValue(source: SeverityPercentSource): number {
+  return Math.round(source.severityPercent * 100);
 }
 
 function formatDistance(valueMeters: number): string {

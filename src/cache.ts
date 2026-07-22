@@ -226,13 +226,13 @@ function analysisOptionsKey(options: AnalysisOptions): string {
     `min=${options.minAccidents}`,
     `years=${years || "all"}`,
     `state=${options.stateCode}`,
-    `fatalWeight=${options.fatalPercent.fatalWeight}`,
-    `seriousWeight=${options.fatalPercent.seriousWeight}`,
-    `fullSample=${options.fatalPercent.fullSampleAccidents}`,
-    `trendDead=${options.fatalPercent.trendDeadZone}`,
-    `trendFull=${options.fatalPercent.trendFullSignal}`,
-    `trendMax=${options.fatalPercent.maxTrendAdjustment}`,
-    `fatalCap=${options.fatalPercent.maxFatalPercent}`
+    `fatalWeight=${options.severityPercent.fatalWeight}`,
+    `seriousWeight=${options.severityPercent.seriousWeight}`,
+    `fullSample=${options.severityPercent.fullSampleAccidents}`,
+    `trendDead=${options.severityPercent.trendDeadZone}`,
+    `trendFull=${options.severityPercent.trendFullSignal}`,
+    `trendMax=${options.severityPercent.maxTrendAdjustment}`,
+    `severityCap=${options.severityPercent.maxSeverityPercent}`
   ].join("|");
 }
 

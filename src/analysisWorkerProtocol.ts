@@ -1,11 +1,11 @@
-import { AccidentRecord, AnalysisOptions, AnalysisResult, FatalPercentOptions } from "./types";
+import { AccidentRecord, AnalysisOptions, AnalysisResult, SeverityPercentOptions } from "./types";
 
 export interface SerializableAnalysisOptions {
   clusterRadiusMeters: number;
   minAccidents: number;
   years: number[];
   stateCode: string | "all";
-  fatalPercent: FatalPercentOptions;
+  severityPercent: SeverityPercentOptions;
 }
 
 export interface AnalysisWorkerRequest {
@@ -28,7 +28,7 @@ export function serializeAnalysisOptions(options: AnalysisOptions): Serializable
   return {
     ...options,
     years: Array.from(options.years).sort((a, b) => a - b),
-    fatalPercent: { ...options.fatalPercent }
+    severityPercent: { ...options.severityPercent }
   };
 }
 
@@ -36,6 +36,6 @@ export function deserializeAnalysisOptions(options: SerializableAnalysisOptions)
   return {
     ...options,
     years: new Set(options.years),
-    fatalPercent: { ...options.fatalPercent }
+    severityPercent: { ...options.severityPercent }
   };
 }

@@ -43,17 +43,17 @@ export interface AnalysisOptions {
   minAccidents: number;
   years: Set<number>;
   stateCode: string | "all";
-  fatalPercent: FatalPercentOptions;
+  severityPercent: SeverityPercentOptions;
 }
 
-export interface FatalPercentOptions {
+export interface SeverityPercentOptions {
   fatalWeight: number;
   seriousWeight: number;
   fullSampleAccidents: number;
   trendDeadZone: number;
   trendFullSignal: number;
   maxTrendAdjustment: number;
-  maxFatalPercent: number;
+  maxSeverityPercent: number;
 }
 
 export type AccidentTrendDirection = "falling" | "stable" | "rising" | "unknown";
@@ -83,7 +83,7 @@ export interface IntersectionCluster {
   seriousCount: number;
   lightCount: number;
   vulnerableCount: number;
-  fatalPercent: number;
+  severityPercent: number;
   years: number[];
   yearlyStats: ClusterYearStat[];
   accidentTrend: AccidentTrend;
@@ -97,7 +97,7 @@ export interface StateSummary {
   clusterCount: number;
   fatalCount: number;
   seriousCount: number;
-  fatalPercent: number;
+  severityPercent: number;
   topCluster: IntersectionCluster | null;
 }
 

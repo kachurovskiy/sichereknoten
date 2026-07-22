@@ -5,7 +5,7 @@ import {
   AnalysisOptions,
   AnalysisResult,
   ClusterYearStat,
-  FatalPercentOptions,
+  SeverityPercentOptions,
   IntersectionCluster,
   StateSummary
 } from "./types";
@@ -56,12 +56,12 @@ export function analyzeDangerousIntersections(accidents: AccidentRecord[], optio
 
   const clusters = buildClusters(filtered, options.clusterRadiusMeters)
     .filter((cluster) => cluster.accidentCount >= options.minAccidents)
-    .map((cluster) => finalizeCluster(cluster, analysisYears, options.fatalPercent))
-    .sort(compareFatalMetric);
+    .map((cluster) => finalizeCluster(cluster, analysisYears, options.severityPercent))
+    .sort(compareSeverityMetric);
 
   return {
     clusters,
-    stateSummaries: summarizeStates(clusters, analysisYears, options.fatalPercent),
+    stateSummaries: summarizeStates(clusters, analysisYears, options.severityPercent),
     filteredAccidentCount: filtered.length,
     years: analysisYears
   };
@@ -71,7 +71,7 @@ export function combineAnalysisResults(results: AnalysisResult[]): AnalysisResul
   const oldClusterIds = new Map<string, string>();
   const clusters = results
     .flatMap((entry) => entry.clusters)
-    .sort(compareFatalMetric)
+    .sort(compareSeverityMetric)
     .map((cluster, index) => {
       const id = `c-${index + 1}`;
       oldClusterIds.set(partitionClusterKey(cluster), id);
@@ -94,7 +94,7 @@ export function combineAnalysisResults(results: AnalysisResult[]): AnalysisResul
           topCluster: topClusterId ? clusterById.get(topClusterId) ?? null : null
         };
       })
-      .sort((a, b) => b.fatalPercent - a.fatalPercent || b.accidentCount - a.accidentCount),
+      .sort((a, b) => b.severityPercent - a.severityPercent || b.accidentCount - a.accidentCount),
     filteredAccidentCount: results.reduce((total, entry) => total + entry.filteredAccidentCount, 0),
     years
   };
@@ -248,7 +248,7 @@ function updateClusterBucket(
 function finalizeCluster(
   cluster: ClusterAccumulator,
   analysisYears: number[],
-  fatalPercentOptions: FatalPercentOptions
+  severityPercentOptions: SeverityPercentOptions
 ): IntersectionCluster {
   const stateCode = topMapEntry(cluster.stateCounts) ?? "00";
   const yearlyStats = Array.from(cluster.yearStats.values())
@@ -267,7 +267,7 @@ function finalizeCluster(
     seriousCount: cluster.seriousCount,
     lightCount: cluster.lightCount,
     vulnerableCount: cluster.vulnerableCount,
-    fatalPercent: fatalPercent(cluster, accidentTrend, fatalPercentOptions),
+    severityPercent: severityPercent(cluster, accidentTrend, severityPercentOptions),
     years: Array.from(cluster.yearSet).sort((a, b) => a - b),
     yearlyStats,
     accidentTrend,
@@ -339,7 +339,7 @@ function unknownAccidentTrend(years: number): AccidentTrend {
 function summarizeStates(
   clusters: IntersectionCluster[],
   analysisYears: number[],
-  fatalPercentOptions: FatalPercentOptions
+  severityPercentOptions: SeverityPercentOptions
 ): StateSummary[] {
   const summaries = new Map<string, StateSummaryAccumulator>();
 
@@ -353,7 +353,7 @@ function summarizeStates(
         clusterCount: 0,
         fatalCount: 0,
         seriousCount: 0,
-        fatalPercent: 0,
+        severityPercent: 0,
         topCluster: null,
         yearStats: new Map()
       } satisfies StateSummaryAccumulator);
@@ -363,7 +363,7 @@ function summarizeStates(
     summary.fatalCount += cluster.fatalCount;
     summary.seriousCount += cluster.seriousCount;
     mergeSummaryYearStats(summary.yearStats, cluster.yearlyStats);
-    if (!summary.topCluster || compareFatalMetric(cluster, summary.topCluster) < 0) {
+    if (!summary.topCluster || compareSeverityMetric(cluster, summary.topCluster) < 0) {
       summary.topCluster = cluster;
     }
     summaries.set(cluster.stateCode, summary);
@@ -375,10 +375,10 @@ function summarizeStates(
       const { yearStats: _yearStats, ...stateSummary } = summary;
       return {
         ...stateSummary,
-        fatalPercent: fatalPercent(summary, accidentTrend, fatalPercentOptions)
+        severityPercent: severityPercent(summary, accidentTrend, severityPercentOptions)
       };
     })
-    .sort((a, b) => b.fatalPercent - a.fatalPercent || b.accidentCount - a.accidentCount);
+    .sort((a, b) => b.severityPercent - a.severityPercent || b.accidentCount - a.accidentCount);
 }
 
 function mergeSummaryYearStats(target: Map<number, ClusterYearAccumulator>, yearlyStats: ClusterYearStat[]): void {
@@ -398,30 +398,30 @@ function mergeSummaryYearStats(target: Map<number, ClusterYearAccumulator>, year
   }
 }
 
-function compareFatalMetric(a: IntersectionCluster, b: IntersectionCluster): number {
+function compareSeverityMetric(a: IntersectionCluster, b: IntersectionCluster): number {
   return (
-    b.fatalPercent - a.fatalPercent ||
+    b.severityPercent - a.severityPercent ||
     b.fatalCount - a.fatalCount ||
     b.seriousCount - a.seriousCount ||
     b.accidentCount - a.accidentCount
   );
 }
 
-function fatalPercent(
+function severityPercent(
   source: { accidentCount: number; fatalCount: number; seriousCount: number },
   trend: AccidentTrend,
-  options: FatalPercentOptions
+  options: SeverityPercentOptions
 ): number {
   if (source.accidentCount <= 0) {
     return 0;
   }
-  const rawFatalEquivalentShare =
+  const rawSeverityShare =
     (source.fatalCount * options.fatalWeight + source.seriousCount * options.seriousWeight) / source.accidentCount;
-  const adjusted = rawFatalEquivalentShare * smallSampleFactor(source.accidentCount, options) * trendFactor(trend, options);
-  return round(clamp(adjusted, 0, Math.max(0, options.maxFatalPercent)), 4);
+  const adjusted = rawSeverityShare * smallSampleFactor(source.accidentCount, options) * trendFactor(trend, options);
+  return round(clamp(adjusted, 0, Math.max(0, options.maxSeverityPercent)), 4);
 }
 
-function smallSampleFactor(accidentCount: number, options: FatalPercentOptions): number {
+function smallSampleFactor(accidentCount: number, options: SeverityPercentOptions): number {
   const fullSampleAccidents = Math.max(1, options.fullSampleAccidents);
   if (accidentCount >= fullSampleAccidents) {
     return 1;
@@ -429,7 +429,7 @@ function smallSampleFactor(accidentCount: number, options: FatalPercentOptions):
   return accidentCount / fullSampleAccidents;
 }
 
-function trendFactor(trend: AccidentTrend, options: FatalPercentOptions): number {
+function trendFactor(trend: AccidentTrend, options: SeverityPercentOptions): number {
   if (trend.relativeSlopePerYear === null) {
     return 1;
   }

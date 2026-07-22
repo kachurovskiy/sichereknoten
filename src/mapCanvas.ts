@@ -72,7 +72,7 @@ export class MapCanvas {
   private selected: IntersectionCluster | null = null;
   private selectedIncidentPoints: ProjectedIncidentPoint[] = [];
   private userLocation: UserLocation | null = null;
-  private maxFatalPercent = 0.01;
+  private maxSeverityPercent = 0.01;
   private severityFilters: SeverityFilters = { fatal: true, serious: true, other: false };
   private tileCache = new Map<string, TileRecord>();
   private tileUseCounter = 0;
@@ -106,7 +106,7 @@ export class MapCanvas {
 
   setData(clusters: IntersectionCluster[]): void {
     this.clusters = clusters;
-    this.maxFatalPercent = Math.max(0.01, ...clusters.map((cluster) => cluster.fatalPercent));
+    this.maxSeverityPercent = Math.max(0.01, ...clusters.map((cluster) => cluster.severityPercent));
     this.projectedClusters = clusters
       .map((cluster) => ({ cluster, projected: project(cluster.lon, cluster.lat) }))
       .sort((a, b) => drawPriority(a.cluster) - drawPriority(b.cluster));
@@ -479,7 +479,7 @@ export class MapCanvas {
     const ctx = this.context;
 
     for (const cluster of visibleClusters) {
-      const metricIntensity = Math.min(1, cluster.cluster.fatalPercent / visualScale.metricScale);
+      const metricIntensity = Math.min(1, cluster.cluster.severityPercent / visualScale.metricScale);
       const radius = this.markerRadius(cluster.cluster, metricIntensity, visualScale.zoomLevel);
       const alpha = this.markerAlpha(cluster.cluster, metricIntensity, visualScale.zoomLevel);
       ctx.fillStyle = colorForIntensity(metricIntensity, alpha);
@@ -583,7 +583,7 @@ export class MapCanvas {
       return null;
     }
 
-    candidates.sort((a, b) => a.distance - b.distance || compareFatalMetric(a.cluster, b.cluster));
+    candidates.sort((a, b) => a.distance - b.distance || compareSeverityMetric(a.cluster, b.cluster));
     const clusters = candidates.slice(0, 12).map((candidate) => candidate.cluster);
     const activeCycle = this.clickCycle;
     const canCycle =
@@ -681,16 +681,16 @@ export class MapCanvas {
     const localMetricScale = this.localMetricScale(visibleClusters);
     const localWeight = smoothstep(zoomLevel);
     return {
-      metricScale: Math.max(0.01, lerp(this.maxFatalPercent, localMetricScale, localWeight)),
+      metricScale: Math.max(0.01, lerp(this.maxSeverityPercent, localMetricScale, localWeight)),
       zoomLevel
     };
   }
 
   private localMetricScale(visibleClusters: VisibleClusterPoint[]): number {
     if (visibleClusters.length === 0) {
-      return this.maxFatalPercent;
+      return this.maxSeverityPercent;
     }
-    return Math.max(0.01, ...visibleClusters.map((item) => item.cluster.fatalPercent));
+    return Math.max(0.01, ...visibleClusters.map((item) => item.cluster.severityPercent));
   }
 
   private isVisible(point: ProjectedPoint): boolean {
@@ -750,12 +750,12 @@ function pointerCenter(a: ProjectedPoint, b: ProjectedPoint): ProjectedPoint {
 }
 
 function drawPriority(cluster: IntersectionCluster): number {
-  return cluster.fatalPercent + Math.min(10, cluster.accidentCount) * 0.001;
+  return cluster.severityPercent + Math.min(10, cluster.accidentCount) * 0.001;
 }
 
-function compareFatalMetric(a: IntersectionCluster, b: IntersectionCluster): number {
+function compareSeverityMetric(a: IntersectionCluster, b: IntersectionCluster): number {
   return (
-    b.fatalPercent - a.fatalPercent ||
+    b.severityPercent - a.severityPercent ||
     b.fatalCount - a.fatalCount ||
     b.seriousCount - a.seriousCount ||
     b.accidentCount - a.accidentCount
