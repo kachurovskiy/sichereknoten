@@ -52,10 +52,19 @@
             <button id="exploreTab" class="tab-button mobile-pane-tab" role="tab" type="button" aria-selected="false">Browse</button>
             <button id="mapTab" class="tab-button active" role="tab" type="button" aria-selected="true">Map</button>
             <button id="detailsTab" class="tab-button mobile-pane-tab" role="tab" type="button" aria-selected="false" disabled>Details</button>
-            <button id="streetTab" class="tab-button mobile-pane-tab" role="tab" type="button" aria-selected="false" disabled>Street View</button>
-            <button id="stateTab" class="tab-button" role="tab" type="button" aria-selected="false">Bundesland</button>
-            <button id="tableTab" class="tab-button" role="tab" type="button" aria-selected="false">Intersections</button>
-            <button id="settingsTab" class="tab-button" role="tab" type="button" aria-selected="false">Settings</button>
+            <button id="streetTab" class="tab-button mobile-pane-tab" role="tab" type="button" aria-selected="false" disabled>
+              <span class="tab-label tab-label-full">Street View</span>
+              <span class="tab-label tab-label-short">Street</span>
+            </button>
+            <button id="moreTab" class="tab-button mobile-more-tab" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="mobileMoreMenu">More</button>
+            <button id="stateTab" class="tab-button secondary-tab" role="tab" type="button" aria-selected="false">Bundesland</button>
+            <button id="tableTab" class="tab-button secondary-tab" role="tab" type="button" aria-selected="false">Intersections</button>
+            <button id="settingsTab" class="tab-button secondary-tab" role="tab" type="button" aria-selected="false">Settings</button>
+          </div>
+          <div id="mobileMoreMenu" class="mobile-more-menu" role="menu" hidden>
+            <button id="mobileStateTab" class="mobile-more-item" role="menuitem" type="button">Bundesland</button>
+            <button id="mobileTableTab" class="mobile-more-item" role="menuitem" type="button">Intersections</button>
+            <button id="mobileSettingsTab" class="mobile-more-item" role="menuitem" type="button">Settings</button>
           </div>
           <div class="toolbar-actions" aria-label="Map display controls">
             <div class="toolbar-group" role="group" aria-labelledby="severityControls">

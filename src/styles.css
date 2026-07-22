@@ -433,6 +433,39 @@ select {
   display: none;
 }
 
+.mobile-more-tab,
+.mobile-more-menu,
+.tab-label-short {
+  display: none;
+}
+
+.tab-label-full {
+  display: inline;
+}
+
+.mobile-more-menu[hidden] {
+  display: none;
+}
+
+.mobile-more-item {
+  min-height: 38px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #1d2d34;
+  font-weight: 600;
+  text-align: left;
+}
+
+.mobile-more-item:hover,
+.mobile-more-item:focus-visible,
+.mobile-more-item.active {
+  background: #172126;
+  color: #ffffff;
+  outline: none;
+}
+
 .toggle-control {
   display: inline-flex;
   align-items: center;
@@ -1348,6 +1381,7 @@ tbody tr:focus {
     grid-template-columns: minmax(0, 1fr);
     gap: 8px;
     align-items: stretch;
+    position: relative;
     padding: 8px 10px;
     border-bottom: 1px solid #d7ddd7;
     background: #eceee9;
@@ -1358,19 +1392,33 @@ tbody tr:focus {
     display: inline-flex;
   }
 
+  .secondary-tab {
+    display: none !important;
+  }
+
+  .mobile-more-tab {
+    display: inline-flex;
+  }
+
+  .tab-label-full {
+    display: none;
+  }
+
+  .tab-label-short {
+    display: inline;
+  }
+
   .tabs,
   .toolbar-actions {
     width: 100%;
   }
 
   .tabs {
-    overflow-x: auto;
+    display: flex;
+    gap: 3px;
+    overflow: visible;
     padding: 4px;
-    scrollbar-width: none;
-  }
-
-  .tabs::-webkit-scrollbar {
-    display: none;
+    min-width: 0;
   }
 
   .toolbar-actions {
@@ -1396,15 +1444,57 @@ tbody tr:focus {
   }
 
   .tab-button {
-    flex: 0 0 auto;
+    display: inline-flex;
+    flex: 1 1 0;
+    align-items: center;
+    justify-content: center;
+    min-width: 0;
     min-height: 36px;
-    padding: 0 10px;
+    padding: 0 6px;
+    font-size: 0.88rem;
+    line-height: 1;
+    white-space: nowrap;
+  }
+
+  .mobile-more-menu {
+    position: absolute;
+    top: 54px;
+    right: 10px;
+    z-index: 40;
+    display: grid;
+    gap: 2px;
+    width: min(220px, calc(100vw - 20px));
+    padding: 6px;
+    border: 1px solid #d4dad4;
+    border-radius: 8px;
+    background: #ffffff;
+    box-shadow: 0 16px 36px rgba(23, 33, 38, 0.18);
+  }
+
+  .mobile-more-menu[hidden] {
+    display: none;
   }
 
   .toggle-control,
   .icon-button,
   .secondary-button {
     flex: 0 0 auto;
+  }
+
+  .toolbar-group {
+    min-height: 34px;
+    padding: 3px 5px 3px 8px;
+  }
+
+  .toolbar-group-label {
+    font-size: 0.78rem;
+  }
+
+  .toolbar-group .toggle-control {
+    min-height: 28px;
+    padding: 0 5px;
+    gap: 4px;
+    font-size: 0.82rem;
   }
 
   .view.active {

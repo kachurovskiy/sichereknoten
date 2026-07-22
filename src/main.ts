@@ -182,9 +182,14 @@ const elements = {
   mapTab: byId<HTMLButtonElement>("mapTab"),
   detailsTab: byId<HTMLButtonElement>("detailsTab"),
   streetTab: byId<HTMLButtonElement>("streetTab"),
+  moreTab: byId<HTMLButtonElement>("moreTab"),
   stateTab: byId<HTMLButtonElement>("stateTab"),
   tableTab: byId<HTMLButtonElement>("tableTab"),
   settingsTab: byId<HTMLButtonElement>("settingsTab"),
+  mobileMoreMenu: byId<HTMLDivElement>("mobileMoreMenu"),
+  mobileStateTab: byId<HTMLButtonElement>("mobileStateTab"),
+  mobileTableTab: byId<HTMLButtonElement>("mobileTableTab"),
+  mobileSettingsTab: byId<HTMLButtonElement>("mobileSettingsTab"),
   mapView: byId<HTMLElement>("mapView"),
   stateView: byId<HTMLElement>("stateView"),
   tableView: byId<HTMLElement>("tableView"),
@@ -252,14 +257,21 @@ function wireEvents(): void {
   elements.mapTab.addEventListener("click", () => setView("map"));
   elements.detailsTab.addEventListener("click", () => setView("details"));
   elements.streetTab.addEventListener("click", () => setView("street"));
+  elements.moreTab.addEventListener("click", toggleMobileMoreMenu);
   elements.stateTab.addEventListener("click", () => setView("state"));
   elements.tableTab.addEventListener("click", () => setView("table"));
   elements.settingsTab.addEventListener("click", () => setView("settings"));
+  elements.mobileStateTab.addEventListener("click", () => setView("state"));
+  elements.mobileTableTab.addEventListener("click", () => setView("table"));
+  elements.mobileSettingsTab.addEventListener("click", () => setView("settings"));
+  document.addEventListener("click", closeMobileMoreMenuOnOutsideClick);
+  document.addEventListener("keydown", closeMobileMoreMenuOnEscape);
   mobileLayout.addEventListener("change", () => {
     if (!mobileLayout.matches && isMobilePaneView(activeView)) {
       setView("map");
       return;
     }
+    setMobileMoreMenuOpen(false);
     scheduleMapRefresh();
   });
 
@@ -1555,15 +1567,23 @@ function setView(view: ViewKey): void {
     { key: "details", tab: elements.detailsTab },
     { key: "street", tab: elements.streetTab },
     { key: "state", tab: elements.stateTab },
+    { key: "state", tab: elements.mobileStateTab },
     { key: "table", tab: elements.tableTab },
-    { key: "settings", tab: elements.settingsTab }
+    { key: "table", tab: elements.mobileTableTab },
+    { key: "settings", tab: elements.settingsTab },
+    { key: "settings", tab: elements.mobileSettingsTab }
   ] as const;
 
   for (const entry of tabs) {
     const active = entry.key === view;
     entry.tab.classList.toggle("active", active);
-    entry.tab.setAttribute("aria-selected", String(active));
+    if (entry.tab.getAttribute("role") === "tab") {
+      entry.tab.setAttribute("aria-selected", String(active));
+    } else {
+      entry.tab.toggleAttribute("aria-current", active);
+    }
   }
+  elements.moreTab.classList.toggle("active", isSecondaryView(view));
 
   elements.mapView.classList.toggle("active", view === "map" || view === "details" || view === "street");
   elements.stateView.classList.toggle("active", view === "state");
@@ -1572,6 +1592,7 @@ function setView(view: ViewKey): void {
 
   updateContextTabs();
   updateStreetViewPanel();
+  setMobileMoreMenuOpen(false);
   scheduleMapRefresh();
 }
 
@@ -1583,6 +1604,37 @@ function updateContextTabs(): void {
 
 function isMobilePaneView(view: ViewKey): boolean {
   return view === "explore" || view === "details" || view === "street";
+}
+
+function isSecondaryView(view: ViewKey): boolean {
+  return view === "state" || view === "table" || view === "settings";
+}
+
+function toggleMobileMoreMenu(event: MouseEvent): void {
+  event.stopPropagation();
+  setMobileMoreMenuOpen(elements.mobileMoreMenu.hidden);
+}
+
+function setMobileMoreMenuOpen(isOpen: boolean): void {
+  elements.mobileMoreMenu.hidden = !isOpen;
+  elements.moreTab.setAttribute("aria-expanded", String(isOpen));
+}
+
+function closeMobileMoreMenuOnOutsideClick(event: MouseEvent): void {
+  const target = event.target;
+  if (!(target instanceof Node)) {
+    return;
+  }
+  if (elements.mobileMoreMenu.contains(target) || elements.moreTab.contains(target)) {
+    return;
+  }
+  setMobileMoreMenuOpen(false);
+}
+
+function closeMobileMoreMenuOnEscape(event: KeyboardEvent): void {
+  if (event.key === "Escape") {
+    setMobileMoreMenuOpen(false);
+  }
 }
 
 function updateRangeOutputs(): void {
