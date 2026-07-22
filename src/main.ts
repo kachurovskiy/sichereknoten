@@ -34,6 +34,7 @@ interface EmbeddedDataFile {
   encoding: "gzip-base64";
   size: number;
   compressedSize: number;
+  modifiedTime?: string;
   chunks: string[];
 }
 
@@ -67,8 +68,49 @@ interface RoadUserSummaryItem {
   share: number;
 }
 
+interface FactsheetLayout {
+  pages: HTMLCanvasElement[];
+  context: CanvasRenderingContext2D;
+  y: number;
+  links: FactsheetPdfLink[];
+  textSpans: FactsheetPdfTextSpan[];
+}
+
+interface FactsheetPdfPage {
+  jpegBytes: Uint8Array;
+  width: number;
+  height: number;
+  links: FactsheetPdfLink[];
+  textSpans: FactsheetPdfTextSpan[];
+}
+
+interface FactsheetPdfLink {
+  pageIndex: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  url: string;
+}
+
+interface FactsheetPdfTextSpan {
+  pageIndex: number;
+  x: number;
+  y: number;
+  fontSize: number;
+  text: string;
+}
+
 const LOADING_STEP_ORDER: LoadingStepKey[] = ["cache", "parse", "analyze"];
 const MOBILE_LAYOUT_QUERY = "(max-width: 640px)";
+const FACTSHEET_PAGE_WIDTH = 1240;
+const FACTSHEET_PAGE_HEIGHT = 1754;
+const FACTSHEET_MARGIN = 64;
+const FACTSHEET_BOTTOM_MARGIN = 96;
+const FACTSHEET_CONTENT_WIDTH = FACTSHEET_PAGE_WIDTH - FACTSHEET_MARGIN * 2;
+const OSM_TILE_URL_TEMPLATE = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
+const PROJECT_REPOSITORY_URL = "https://github.com/kachurovskiy/sichereknoten";
+const PROJECT_REPOSITORY_LABEL = "kachurovskiy/sichereknoten";
 const APP_CACHE_VERSION =
   typeof __SICHERE_KNOTEN_APP_VERSION__ === "string" ? __SICHERE_KNOTEN_APP_VERSION__ : "dev-parallel-analysis";
 const STREET_VIEW_OPEN_STORAGE_KEY = "sichere-knoten:street-view-open";
@@ -122,6 +164,7 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "action.reloadData": "Reload data",
     "action.clear": "Clear",
     "action.exportCsv": "Export CSV",
+    "action.downloadFactsheet": "Download factsheet",
     "action.analyze": "Analyze",
     "action.analyzeChanges": "Analyze changes",
     "streetView.title": "Google Street View",
@@ -217,6 +260,9 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "status.noAnalysisMatches": "No intersections match the active analysis settings.",
     "status.dataCleared": "Data cleared. Use Reload data to load bundled files again.",
     "status.noClustersToExport": "No analyzed clusters to export.",
+    "status.factsheetCreating": "Preparing factsheet PDF.",
+    "status.factsheetDownloaded": "Factsheet downloaded.",
+    "status.factsheetFailed": "Could not create factsheet: {error}",
     "status.bundleLoadFailed":
       "Could not load {path}. The docs/data files must sit next to docs/index.html. Some browsers block automatic file:// reads; GitHub Pages or any static host will work. {errors}",
     "status.localReadBlocked": "local read blocked",
@@ -264,6 +310,32 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "roadUsers.title": "Road users",
     "roadUsers.summaryAria": "Road-user distribution for selected intersection",
     "roadUsers.segmentLabel": "{label}: {count} involved, {percent}",
+    "factsheet.title": "Selected intersection factsheet",
+    "factsheet.generated": "Generated",
+    "factsheet.location": "Location",
+    "factsheet.map": "Map image",
+    "factsheet.mapLinks": "Map links",
+    "factsheet.mapAttribution": "(C) OpenStreetMap contributors",
+    "factsheet.mapTilesUnavailable": "OpenStreetMap tiles could not be loaded.",
+    "factsheet.period": "Period",
+    "factsheet.coordinates": "Coordinates",
+    "factsheet.counts": "Exact accident counts",
+    "factsheet.total": "Total",
+    "factsheet.lightOther": "Light / other",
+    "factsheet.severity": "Severity",
+    "factsheet.dataSource": "Data source and publication date",
+    "factsheet.accidentSource": "Accident data: Unfallatlas, Federal and state statistical offices.",
+    "factsheet.municipalitySource": "Municipality names: Destatis municipality directory extract, 2nd quarter 2026.",
+    "factsheet.license": "License: Datenlizenz Deutschland - Namensnennung - Version 2.0.",
+    "factsheet.publicationUnknown": "Publication date is not included in the bundled CSV metadata.",
+    "factsheet.latestBundleDate": "Latest bundled file timestamp: {date}.",
+    "factsheet.methodology": "Methodology note",
+    "factsheet.methodologyText": "Accident points are clustered within the configured radius. Severity % is a weighted share of fatal and serious-injury outcomes, adjusted conservatively for small samples and trend.",
+    "factsheet.limitations": "Limitations",
+    "factsheet.limitationsText": "Coordinates are generalized source accident locations, not surveyed junction geometry. No traffic-volume exposure data is available, so high counts may also reflect high traffic volumes. Road-user counts use involvement flags and one accident can involve multiple user types.",
+    "factsheet.mapNote": "OpenStreetMap base map with source accident coordinates; marker positions are based on generalized source coordinates.",
+    "factsheet.noRoadUsers": "No road-user involvement fields are available for these records.",
+    "factsheet.filePrefix": "intersection-factsheet",
     "accident.category.killed": "Accident with persons killed",
     "accident.category.seriouslyInjured": "Accident with seriously injured",
     "accident.category.slightlyInjured": "Accident with slightly injured",
@@ -372,6 +444,7 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "action.reloadData": "Daten neu laden",
     "action.clear": "Leeren",
     "action.exportCsv": "CSV exportieren",
+    "action.downloadFactsheet": "Faktenblatt herunterladen",
     "action.analyze": "Analysieren",
     "action.analyzeChanges": "Änderungen analysieren",
     "streetView.title": "Google Street View",
@@ -466,6 +539,9 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "status.noAnalysisMatches": "Keine Kreuzungen passen zu den aktiven Analyse-Einstellungen.",
     "status.dataCleared": "Daten geleert. Nutze Daten neu laden, um die gebündelten Dateien erneut zu laden.",
     "status.noClustersToExport": "Keine analysierten Cluster zum Exportieren.",
+    "status.factsheetCreating": "Faktenblatt-PDF wird vorbereitet.",
+    "status.factsheetDownloaded": "Faktenblatt heruntergeladen.",
+    "status.factsheetFailed": "Faktenblatt konnte nicht erstellt werden: {error}",
     "status.bundleLoadFailed":
       "{path} konnte nicht geladen werden. Die docs/data-Dateien müssen neben docs/index.html liegen. Einige Browser blockieren automatische file://-Zugriffe; GitHub Pages oder jeder statische Host funktioniert. {errors}",
     "status.localReadBlocked": "lokaler Lesezugriff blockiert",
@@ -513,6 +589,32 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "roadUsers.title": "Verkehrsteilnehmer",
     "roadUsers.summaryAria": "Verteilung der Verkehrsteilnehmer dieser Kreuzung",
     "roadUsers.segmentLabel": "{label}: {count} beteiligt, {percent}",
+    "factsheet.title": "Faktenblatt ausgewählte Kreuzung",
+    "factsheet.generated": "Erstellt",
+    "factsheet.location": "Ort",
+    "factsheet.map": "Kartenbild",
+    "factsheet.mapLinks": "Kartenlinks",
+    "factsheet.mapAttribution": "(C) OpenStreetMap-Mitwirkende",
+    "factsheet.mapTilesUnavailable": "OpenStreetMap-Kacheln konnten nicht geladen werden.",
+    "factsheet.period": "Zeitraum",
+    "factsheet.coordinates": "Koordinaten",
+    "factsheet.counts": "Exakte Unfallzahlen",
+    "factsheet.total": "Gesamt",
+    "factsheet.lightOther": "Leicht / sonstige",
+    "factsheet.severity": "Schweregrad",
+    "factsheet.dataSource": "Datenquelle und Veröffentlichungsdatum",
+    "factsheet.accidentSource": "Unfalldaten: Unfallatlas, Statistische Ämter des Bundes und der Länder.",
+    "factsheet.municipalitySource": "Gemeindenamen: Destatis-Gemeindeverzeichnis-Auszug, 2. Quartal 2026.",
+    "factsheet.license": "Lizenz: Datenlizenz Deutschland - Namensnennung - Version 2.0.",
+    "factsheet.publicationUnknown": "Ein formales Veröffentlichungsdatum ist in den gebündelten CSV-Metadaten nicht enthalten.",
+    "factsheet.latestBundleDate": "Neuester gebündelter Dateizeitstempel: {date}.",
+    "factsheet.methodology": "Methodischer Hinweis",
+    "factsheet.methodologyText": "Unfallpunkte werden innerhalb des eingestellten Radius geclustert. Schweregrad % ist der gewichtete Anteil tödlicher und schwerer Unfallfolgen, mit konservativer Anpassung für kleine Stichproben und Trend.",
+    "factsheet.limitations": "Einschränkungen",
+    "factsheet.limitationsText": "Koordinaten sind generalisierte Unfallorte aus den Quelldaten, keine vermessene Kreuzungsgeometrie. Verkehrsstärkedaten fehlen, daher können hohe Unfallzahlen auch hohe Verkehrsbelastung widerspiegeln. Verkehrsteilnehmer-Zahlen nutzen Beteiligungskennzeichen; ein Unfall kann mehrere Nutzerarten betreffen.",
+    "factsheet.mapNote": "OpenStreetMap-Grundkarte mit Unfallkoordinaten aus den Quelldaten; Markierungen basieren auf generalisierten Quellkoordinaten.",
+    "factsheet.noRoadUsers": "Für diese Datensätze sind keine Verkehrsteilnehmerfelder verfügbar.",
+    "factsheet.filePrefix": "faktenblatt-kreuzung",
     "accident.category.killed": "Unfall mit Getöteten",
     "accident.category.seriouslyInjured": "Unfall mit Schwerverletzten",
     "accident.category.slightlyInjured": "Unfall mit Leichtverletzten",
@@ -623,6 +725,7 @@ const ROAD_USER_DEFINITIONS: RoadUserDefinition[] = [
   { key: "truck", labelKey: "roadUser.truck", read: (accident) => accident.involvesTruck },
   { key: "other", labelKey: "roadUser.other", read: (accident) => accident.involvesOther }
 ];
+const factsheetTileCache = new Map<string, Promise<HTMLImageElement | null>>();
 
 interface ClusterTableSort {
   key: ClusterSortKey;
@@ -733,7 +836,8 @@ const elements = {
   streetViewBody: byId<HTMLDivElement>("streetViewBody"),
   streetViewFrame: byId<HTMLIFrameElement>("streetViewFrame"),
   streetViewEmpty: byId<HTMLParagraphElement>("streetViewEmpty"),
-  exportBtn: byId<HTMLButtonElement>("exportBtn")
+  exportBtn: byId<HTMLButtonElement>("exportBtn"),
+  downloadFactsheetBtn: byId<HTMLButtonElement>("downloadFactsheetBtn")
 };
 
 const map = new MapCanvas(elements.mapCanvas, handleClusterSelection);
@@ -799,6 +903,7 @@ function wireEvents(): void {
   elements.clearBtn.addEventListener("click", clearData);
   elements.analyzeBtn.addEventListener("click", () => runAnalysis());
   elements.exportBtn.addEventListener("click", exportClusters);
+  elements.downloadFactsheetBtn.addEventListener("click", () => void downloadSelectedFactsheet());
 
   wireLinkedNumberRange(elements.clusterRadius, elements.clusterRadiusOut, markAnalysisSettingsDirty);
 
@@ -1642,10 +1747,8 @@ function renderSelection(cluster: IntersectionCluster | null): void {
 
   elements.selectedAside.hidden = false;
   elements.mapView.classList.add("has-selection");
-  const lat = cluster.lat.toFixed(6);
-  const lon = cluster.lon.toFixed(6);
-  const openStreetMapUrl = `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lon}#map=18/${lat}/${lon}`;
-  const googleMapsUrl = `https://www.google.com/maps/search/?api=1&query=${lat},${lon}`;
+  const openStreetMapUrl = openStreetMapUrlForCluster(cluster);
+  const googleMapsUrl = googleMapsUrlForCluster(cluster);
   const streetViewUrl = googleStreetViewUrl(cluster);
   const accidentRecords = clusterAccidentRecords(cluster);
   const trendPanel = renderTrendPanel(cluster, accidentRecords);
@@ -1717,6 +1820,18 @@ function clearStreetViewFrame(): void {
   elements.streetViewFrame.hidden = true;
   elements.streetViewFrame.removeAttribute("src");
   delete elements.streetViewFrame.dataset.src;
+}
+
+function openStreetMapUrlForCluster(cluster: IntersectionCluster): string {
+  const lat = cluster.lat.toFixed(6);
+  const lon = cluster.lon.toFixed(6);
+  return `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lon}#map=18/${lat}/${lon}`;
+}
+
+function googleMapsUrlForCluster(cluster: IntersectionCluster): string {
+  const lat = cluster.lat.toFixed(6);
+  const lon = cluster.lon.toFixed(6);
+  return `https://www.google.com/maps/search/?api=1&query=${lat},${lon}`;
 }
 
 function googleStreetViewEmbedUrl(cluster: IntersectionCluster): string {
@@ -2469,6 +2584,897 @@ function exportClusters(): void {
   URL.revokeObjectURL(url);
 }
 
+async function downloadSelectedFactsheet(): Promise<void> {
+  const cluster = selectedCluster;
+  if (!cluster) {
+    setStatus(tr("details.selectFirst"), 100, "idle");
+    return;
+  }
+
+  elements.downloadFactsheetBtn.disabled = true;
+  setStatus(tr("status.factsheetCreating"), 100);
+  try {
+    const records = clusterAccidentRecords(cluster);
+    const blob = await createFactsheetPdf(cluster, records);
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = factsheetFileName(cluster);
+    link.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    setStatus(tr("status.factsheetDownloaded"), 100);
+  } catch (error) {
+    setStatus(trf("status.factsheetFailed", { error: errorMessage(error) }), 100, "problem");
+  } finally {
+    elements.downloadFactsheetBtn.disabled = false;
+  }
+}
+
+async function createFactsheetPdf(cluster: IntersectionCluster, records: CrossingAccident[]): Promise<Blob> {
+  const layout = createFactsheetLayout();
+  await drawFactsheetOverview(layout, cluster, records);
+  drawFactsheetAccidentDetails(layout, records);
+  drawFactsheetPageFooters(layout);
+  const pages = layout.pages.map((canvas, pageIndex): FactsheetPdfPage => ({
+    jpegBytes: dataUrlBytes(canvas.toDataURL("image/jpeg", 0.9)),
+    width: canvas.width,
+    height: canvas.height,
+    links: layout.links.filter((link) => link.pageIndex === pageIndex),
+    textSpans: layout.textSpans.filter((span) => span.pageIndex === pageIndex)
+  }));
+  return createImagePagesPdf(pages);
+}
+
+function createFactsheetLayout(): FactsheetLayout {
+  const { canvas, context } = createFactsheetPage();
+  return {
+    pages: [canvas],
+    context,
+    y: FACTSHEET_MARGIN,
+    links: [],
+    textSpans: []
+  };
+}
+
+function createFactsheetPage(): { canvas: HTMLCanvasElement; context: CanvasRenderingContext2D } {
+  const canvas = document.createElement("canvas");
+  canvas.width = FACTSHEET_PAGE_WIDTH;
+  canvas.height = FACTSHEET_PAGE_HEIGHT;
+  const context = canvas.getContext("2d");
+  if (!context) {
+    throw new Error("Canvas rendering is not available.");
+  }
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.textBaseline = "alphabetic";
+  return { canvas, context };
+}
+
+function addFactsheetPage(layout: FactsheetLayout): void {
+  const { canvas, context } = createFactsheetPage();
+  layout.pages.push(canvas);
+  layout.context = context;
+  layout.y = FACTSHEET_MARGIN;
+}
+
+function ensureFactsheetSpace(layout: FactsheetLayout, neededHeight: number): void {
+  if (layout.y + neededHeight > FACTSHEET_PAGE_HEIGHT - FACTSHEET_BOTTOM_MARGIN) {
+    addFactsheetPage(layout);
+  }
+}
+
+async function drawFactsheetOverview(layout: FactsheetLayout, cluster: IntersectionCluster, records: CrossingAccident[]): Promise<void> {
+  const context = layout.context;
+  context.fillStyle = "#172126";
+  context.font = factsheetFont(40, 600);
+  drawFactsheetText(layout, tr("factsheet.title"), FACTSHEET_MARGIN, layout.y + 20);
+  layout.y += 52;
+
+  context.fillStyle = "#53636d";
+  context.font = factsheetFont(18, 400);
+  drawFactsheetText(layout, `${tr("factsheet.generated")}: ${formatDate(new Date())}`, FACTSHEET_MARGIN, layout.y);
+  layout.y += 36;
+
+  drawFactsheetSectionHeading(layout, tr("factsheet.location"));
+  context.fillStyle = "#172126";
+  context.font = factsheetFont(30, 600);
+  drawFactsheetLines(layout, wrappedCanvasLines(context, clusterLocationText(cluster), FACTSHEET_CONTENT_WIDTH), FACTSHEET_MARGIN, 35);
+  const area = clusterAreaText(cluster);
+  if (area) {
+    drawFactsheetParagraph(layout, area, 19, 26, "#53636d");
+  }
+
+  drawFactsheetSectionHeading(layout, tr("factsheet.map"));
+  const mapHeight = 470;
+  ensureFactsheetSpace(layout, mapHeight + 44);
+  await drawFactsheetOsmMap(layout.context, cluster, records, FACTSHEET_MARGIN, layout.y, FACTSHEET_CONTENT_WIDTH, mapHeight);
+  layout.y += mapHeight + 16;
+  drawFactsheetParagraph(layout, `${tr("factsheet.mapNote")} ${tr("factsheet.mapAttribution")}.`, 18, 25, "#53636d");
+  drawFactsheetMapLinksSection(layout, cluster);
+
+  drawFactsheetSectionHeading(layout, tr("factsheet.counts"));
+  drawFactsheetRows(layout, [
+    [tr("factsheet.period"), factsheetPeriodLabel(cluster, records)],
+    [tr("factsheet.total"), formatInteger(cluster.accidentCount)],
+    [tr("severity.fatal"), formatInteger(cluster.fatalCount)],
+    [tr("severity.serious"), formatInteger(cluster.seriousCount)],
+    [tr("factsheet.lightOther"), formatInteger(Math.max(0, cluster.accidentCount - cluster.fatalCount - cluster.seriousCount))],
+    [tr("factsheet.severity"), formatSeverityPercent(cluster)],
+    [tr("factsheet.coordinates"), `${cluster.lat.toFixed(5)}, ${cluster.lon.toFixed(5)}`]
+  ]);
+
+  drawFactsheetTrendSection(layout, cluster);
+  drawFactsheetRoadUserSection(layout, records);
+  drawFactsheetSourceSection(layout);
+  drawFactsheetTextSection(layout, tr("factsheet.methodology"), tr("factsheet.methodologyText"));
+  drawFactsheetTextSection(layout, tr("factsheet.limitations"), tr("factsheet.limitationsText"));
+}
+
+function drawFactsheetMapLinksSection(layout: FactsheetLayout, cluster: IntersectionCluster): void {
+  drawFactsheetSectionHeading(layout, tr("factsheet.mapLinks"));
+  drawFactsheetLinkRow(layout, tr("map.labelOsm"), openStreetMapUrlForCluster(cluster), tr("map.openOsm"));
+  drawFactsheetLinkRow(layout, tr("map.labelGoogleMaps"), googleMapsUrlForCluster(cluster), tr("map.openGoogleMaps"));
+  drawFactsheetLinkRow(layout, tr("map.labelStreetView"), googleStreetViewUrl(cluster), tr("map.openStreetView"));
+}
+
+function drawFactsheetTrendSection(layout: FactsheetLayout, cluster: IntersectionCluster): void {
+  const years = result?.years.length ? result.years : cluster.years;
+  const series = clusterTrendSeries(cluster, years);
+  if (series.length === 0) {
+    return;
+  }
+
+  drawFactsheetSectionHeading(layout, tr("trend.title"));
+  const trend = cluster.accidentTrend;
+  const trendLabel = trendDirectionLabel(trend.direction);
+  const relativeSlope = trend.relativeSlopePerYear === null ? "" : ` ${formatSignedPercent(trend.relativeSlopePerYear)}${tr("unit.perYear")}`;
+  const latestAccidents = [...series].reverse().find((point) => point.accidentCount > 0)?.accidentCount ?? 0;
+  drawFactsheetParagraph(
+    layout,
+    `${trendLabel}${relativeSlope} - ${trf("trend.latest", { count: formatInteger(latestAccidents) })}. ${tr("trend.note")}`,
+    19,
+    26,
+    "#38454b"
+  );
+
+  const chartHeight = 250;
+  ensureFactsheetSpace(layout, chartHeight + 8);
+  drawFactsheetTrendChart(layout, series, FACTSHEET_MARGIN, layout.y, FACTSHEET_CONTENT_WIDTH, chartHeight);
+  layout.y += chartHeight + 8;
+}
+
+function drawFactsheetTrendChart(
+  layout: FactsheetLayout,
+  series: ClusterYearStat[],
+  x: number,
+  y: number,
+  width: number,
+  height: number
+): void {
+  const context = layout.context;
+  context.fillStyle = "#f8faf7";
+  context.fillRect(x, y, width, height);
+
+  const chart = {
+    left: x + 78,
+    right: x + width - 34,
+    top: y + 32,
+    bottom: y + height - 50
+  };
+  const chartWidth = chart.right - chart.left;
+  const chartHeight = chart.bottom - chart.top;
+  const maxAccidents = Math.max(1, ...series.map((point) => point.accidentCount));
+  const yAxisTicks = uniqueNumbers([0, Math.ceil(maxAccidents / 2), maxAccidents]).sort((a, b) => a - b);
+
+  context.font = factsheetFont(18, 500);
+  context.fillStyle = "#53636d";
+  context.textAlign = "right";
+  context.textBaseline = "middle";
+  for (const value of yAxisTicks) {
+    const tickY = chart.bottom - (value / maxAccidents) * chartHeight;
+    drawFactsheetText(layout, formatInteger(value), chart.left - 12, tickY);
+  }
+
+  context.strokeStyle = "#8fa09a";
+  context.lineWidth = 2;
+  context.beginPath();
+  context.moveTo(chart.left, chart.top);
+  context.lineTo(chart.left, chart.bottom);
+  context.stroke();
+
+  const points = series.map((point, index) => {
+    const pointX = series.length === 1 ? chart.left + chartWidth / 2 : chart.left + (index / (series.length - 1)) * chartWidth;
+    const pointY = chart.bottom - (point.accidentCount / maxAccidents) * chartHeight;
+    return { ...point, x: pointX, y: pointY };
+  });
+
+  context.strokeStyle = "#166b6d";
+  context.lineWidth = 5;
+  context.beginPath();
+  points.forEach((point, index) => {
+    if (index === 0) {
+      context.moveTo(point.x, point.y);
+    } else {
+      context.lineTo(point.x, point.y);
+    }
+  });
+  context.stroke();
+
+  context.textAlign = "center";
+  context.textBaseline = "alphabetic";
+  context.font = factsheetFont(17, 500);
+  points.forEach((point) => {
+    context.fillStyle = "#166b6d";
+    context.beginPath();
+    context.arc(point.x, point.y, 7, 0, Math.PI * 2);
+    context.fill();
+    context.fillStyle = "#53636d";
+    drawFactsheetText(layout, String(point.year), point.x, chart.bottom + 34);
+  });
+
+  context.textAlign = "start";
+  context.textBaseline = "alphabetic";
+}
+
+function drawFactsheetRoadUserSection(layout: FactsheetLayout, records: CrossingAccident[]): void {
+  drawFactsheetSectionHeading(layout, tr("roadUsers.title"));
+  const items = roadUserSummaryItems(records);
+  if (items.length === 0) {
+    drawFactsheetParagraph(layout, tr("factsheet.noRoadUsers"), 19, 26, "#38454b");
+    return;
+  }
+
+  ensureFactsheetSpace(layout, 56);
+  const context = layout.context;
+  const barX = FACTSHEET_MARGIN;
+  const barY = layout.y;
+  const barHeight = 34;
+  const total = items.reduce((sum, item) => sum + item.count, 0);
+  let currentX = barX;
+  for (const item of items) {
+    const segmentWidth = Math.max(10, (FACTSHEET_CONTENT_WIDTH * item.count) / total);
+    context.fillStyle = roadUserColor(item.definition.key);
+    context.fillRect(currentX, barY, segmentWidth, barHeight);
+    currentX += segmentWidth;
+  }
+  layout.y += 56;
+
+  drawFactsheetRows(
+    layout,
+    items.map((item) => [item.label, `${formatInteger(item.count)} (${formatSharePercent(item.share)})`])
+  );
+}
+
+function drawFactsheetSourceSection(layout: FactsheetLayout): void {
+  drawFactsheetSectionHeading(layout, tr("factsheet.dataSource"));
+  const latestDate = latestBundledFileDate();
+  const lines = [
+    tr("factsheet.accidentSource"),
+    tr("factsheet.municipalitySource"),
+    tr("factsheet.license"),
+    tr("factsheet.publicationUnknown"),
+    latestDate ? trf("factsheet.latestBundleDate", { date: formatDate(latestDate) }) : ""
+  ].filter(Boolean);
+  for (const line of lines) {
+    drawFactsheetParagraph(layout, line, 19, 26, "#38454b");
+  }
+  drawFactsheetRepositoryLink(layout);
+}
+
+function drawFactsheetRepositoryLink(layout: FactsheetLayout): void {
+  drawFactsheetLinkRow(layout, tr("settings.repository"), PROJECT_REPOSITORY_URL, PROJECT_REPOSITORY_LABEL);
+}
+
+function drawFactsheetLinkRow(layout: FactsheetLayout, label: string, url: string, linkLabel = url): void {
+  let context = layout.context;
+  context.font = factsheetFont(19, 400);
+  const prefix = `${label.replace(/:\s*$/, "")}: `;
+  const linkX = FACTSHEET_MARGIN + context.measureText(prefix).width;
+  const availableWidth = Math.max(220, FACTSHEET_CONTENT_WIDTH - (linkX - FACTSHEET_MARGIN));
+  const lineHeight = 26;
+  const linkLines = wrappedCanvasLines(context, linkLabel, availableWidth);
+  ensureFactsheetSpace(layout, Math.max(1, linkLines.length) * lineHeight + 12);
+
+  context = layout.context;
+  const pageIndex = layout.pages.length - 1;
+  context.font = factsheetFont(19, 400);
+  context.fillStyle = "#38454b";
+  drawFactsheetText(layout, prefix, FACTSHEET_MARGIN, layout.y);
+
+  context.fillStyle = "#0b5d87";
+  linkLines.forEach((line, index) => {
+    const lineY = layout.y + index * lineHeight;
+    const lineX = index === 0 ? linkX : FACTSHEET_MARGIN;
+    const lineWidth = context.measureText(line).width;
+    drawFactsheetText(layout, line, lineX, lineY);
+    layout.links.push({
+      pageIndex,
+      x: lineX,
+      y: lineY - 24,
+      width: lineWidth,
+      height: 34,
+      url
+    });
+  });
+  layout.y += Math.max(1, linkLines.length) * lineHeight + 8;
+}
+
+function drawFactsheetTextSection(layout: FactsheetLayout, title: string, text: string): void {
+  drawFactsheetSectionHeading(layout, title);
+  drawFactsheetParagraph(layout, text, 19, 26, "#38454b");
+}
+
+function drawFactsheetAccidentDetails(layout: FactsheetLayout, records: CrossingAccident[]): void {
+  drawFactsheetSectionHeading(layout, tr("records.title"));
+  if (records.length === 0) {
+    drawFactsheetParagraph(layout, tr("records.empty"), 21, 29, "#38454b");
+    return;
+  }
+
+  records.forEach(({ accident, distanceMeters }, index) => {
+    ensureFactsheetSpace(layout, 84);
+    if (index > 0) {
+      layout.y += 18;
+    }
+    const context = layout.context;
+    context.fillStyle = "#172126";
+    context.font = factsheetFont(22, 600);
+    const heading = `${index + 1}. ${accidentSeverityLabel(accident)} - ${accidentTimeLabel(accident)}`;
+    drawFactsheetLines(layout, wrappedCanvasLines(context, heading, FACTSHEET_CONTENT_WIDTH), FACTSHEET_MARGIN, 29);
+    drawFactsheetRows(
+      layout,
+      accidentRecordRows(accident, distanceMeters).map((row) => [row.label, row.value])
+    );
+    layout.y += 16;
+  });
+}
+
+function drawFactsheetSectionHeading(layout: FactsheetLayout, title: string): void {
+  ensureFactsheetSpace(layout, 74);
+  if (layout.y > FACTSHEET_MARGIN + 4) {
+    layout.y += 12;
+  }
+  const context = layout.context;
+  context.fillStyle = "#172126";
+  context.font = factsheetFont(25, 600);
+  drawFactsheetText(layout, title, FACTSHEET_MARGIN, layout.y + 22);
+  layout.y += 62;
+}
+
+function drawFactsheetRows(layout: FactsheetLayout, rows: Array<[string, string]>): void {
+  const labelX = FACTSHEET_MARGIN;
+  const labelWidth = 280;
+  const valueX = labelX + labelWidth + 28;
+  const valueWidth = FACTSHEET_CONTENT_WIDTH - labelWidth - 28;
+  const lineHeight = 25;
+
+  for (const [label, value] of rows) {
+    const context = layout.context;
+    context.font = factsheetFont(18, 600);
+    const labelLines = wrappedCanvasLines(context, label, labelWidth);
+    context.font = factsheetFont(18, 400);
+    const valueLines = wrappedCanvasLines(context, value, valueWidth);
+    const lineCount = Math.max(labelLines.length, valueLines.length);
+    ensureFactsheetSpace(layout, lineCount * lineHeight + 8);
+
+    const drawContext = layout.context;
+    drawContext.font = factsheetFont(18, 600);
+    drawContext.fillStyle = "#53636d";
+    drawCanvasTextLines(layout, drawContext, labelLines, labelX, layout.y + 18, lineHeight);
+    drawContext.font = factsheetFont(18, 500);
+    drawContext.fillStyle = "#172126";
+    drawCanvasTextLines(layout, drawContext, valueLines, valueX, layout.y + 18, lineHeight);
+    layout.y += lineCount * lineHeight + 8;
+  }
+}
+
+function drawFactsheetParagraph(
+  layout: FactsheetLayout,
+  text: string,
+  fontSize: number,
+  lineHeight: number,
+  color: string,
+  maxWidth = FACTSHEET_CONTENT_WIDTH
+): void {
+  const context = layout.context;
+  context.font = factsheetFont(fontSize, 400);
+  context.fillStyle = color;
+  const lines = wrappedCanvasLines(context, text, maxWidth);
+  drawFactsheetLines(layout, lines, FACTSHEET_MARGIN, lineHeight);
+  layout.y += 8;
+}
+
+function drawFactsheetText(layout: FactsheetLayout, text: string, x: number, y: number): void {
+  layout.context.fillText(text, x, y);
+  recordFactsheetText(layout, text, x, y);
+}
+
+function recordFactsheetText(layout: FactsheetLayout, text: string, x: number, y: number): void {
+  if (!text.trim()) {
+    return;
+  }
+  layout.textSpans.push({
+    pageIndex: layout.pages.length - 1,
+    x,
+    y,
+    fontSize: factsheetTextFontSize(layout.context.font),
+    text
+  });
+}
+
+function factsheetTextFontSize(font: string): number {
+  const match = /(\d+(?:\.\d+)?)px/.exec(font);
+  return match ? Number(match[1]) : 18;
+}
+
+function drawFactsheetLines(layout: FactsheetLayout, lines: string[], x: number, lineHeight: number): void {
+  for (const line of lines) {
+    const font = layout.context.font;
+    const fillStyle = layout.context.fillStyle;
+    ensureFactsheetSpace(layout, lineHeight + 4);
+    layout.context.font = font;
+    layout.context.fillStyle = fillStyle;
+    drawFactsheetText(layout, line, x, layout.y);
+    layout.y += lineHeight;
+  }
+}
+
+function drawCanvasTextLines(
+  layout: FactsheetLayout,
+  context: CanvasRenderingContext2D,
+  lines: string[],
+  x: number,
+  y: number,
+  lineHeight: number
+): void {
+  lines.forEach((line, index) => {
+    drawFactsheetText(layout, line, x, y + index * lineHeight);
+  });
+}
+
+function wrappedCanvasLines(context: CanvasRenderingContext2D, text: string, maxWidth: number): string[] {
+  const words = text.split(/\s+/).filter(Boolean);
+  if (words.length === 0) {
+    return [""];
+  }
+
+  const lines: string[] = [];
+  let line = "";
+  for (const word of words) {
+    const testLine = line ? `${line} ${word}` : word;
+    if (context.measureText(testLine).width > maxWidth && line) {
+      lines.push(line);
+      line = word;
+    } else {
+      line = testLine;
+    }
+  }
+  lines.push(line);
+  return lines;
+}
+
+function factsheetFont(size: number, weight: number): string {
+  const safeWeight = Math.min(weight, 600);
+  return `${safeWeight} ${size}px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+}
+
+function drawFactsheetPageFooters(layout: FactsheetLayout): void {
+  layout.pages.forEach((canvas, index) => {
+    const context = canvas.getContext("2d");
+    if (!context) {
+      return;
+    }
+    context.fillStyle = "#53636d";
+    context.font = factsheetFont(17, 400);
+    const footerText = `${index + 1} / ${layout.pages.length}`;
+    context.fillText(footerText, FACTSHEET_MARGIN, FACTSHEET_PAGE_HEIGHT - 44);
+    layout.textSpans.push({
+      pageIndex: index,
+      x: FACTSHEET_MARGIN,
+      y: FACTSHEET_PAGE_HEIGHT - 44,
+      fontSize: 17,
+      text: footerText
+    });
+  });
+}
+
+async function drawFactsheetOsmMap(
+  context: CanvasRenderingContext2D,
+  cluster: IntersectionCluster,
+  records: CrossingAccident[],
+  x: number,
+  y: number,
+  width: number,
+  height: number
+): Promise<void> {
+  context.save();
+  context.beginPath();
+  context.rect(x, y, width, height);
+  context.clip();
+  context.fillStyle = "#eef2ef";
+  context.fillRect(x, y, width, height);
+
+  const zoom = chooseFactsheetMapZoom(cluster, records, width, height);
+  const center = osmWorldPixel(cluster.lon, cluster.lat, zoom);
+  const topLeft = { x: center.x - width / 2, y: center.y - height / 2 };
+  const tileCount = 2 ** zoom;
+  const startTileX = Math.floor(topLeft.x / 256);
+  const endTileX = Math.floor((topLeft.x + width) / 256);
+  const startTileY = Math.max(0, Math.floor(topLeft.y / 256));
+  const endTileY = Math.min(tileCount - 1, Math.floor((topLeft.y + height) / 256));
+  let loadedTiles = 0;
+  const tileJobs: Array<Promise<{ tileX: number; tileY: number; image: HTMLImageElement | null }>> = [];
+
+  for (let tileY = startTileY; tileY <= endTileY; tileY += 1) {
+    for (let tileX = startTileX; tileX <= endTileX; tileX += 1) {
+      const wrappedX = wrapOsmTileX(tileX, tileCount);
+      tileJobs.push(loadFactsheetOsmTile(zoom, wrappedX, tileY).then((image) => ({ tileX, tileY, image })));
+    }
+  }
+
+  const tiles = await Promise.all(tileJobs);
+  for (const { tileX, tileY, image } of tiles) {
+    if (!image) {
+      continue;
+    }
+    const drawX = x + tileX * 256 - topLeft.x;
+    const drawY = y + tileY * 256 - topLeft.y;
+    context.drawImage(image, drawX, drawY, 256, 256);
+    loadedTiles += 1;
+  }
+
+  if (loadedTiles === 0) {
+    context.fillStyle = "#53636d";
+    context.font = factsheetFont(22, 600);
+    context.fillText(tr("factsheet.mapTilesUnavailable"), x + 24, y + 48);
+  }
+
+  drawFactsheetOsmMarkers(context, cluster, records, x, y, width, height, zoom, topLeft);
+  context.restore();
+  drawFactsheetMapAttribution(context, x, y, width, height);
+}
+
+function drawFactsheetOsmMarkers(
+  context: CanvasRenderingContext2D,
+  cluster: IntersectionCluster,
+  records: CrossingAccident[],
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  zoom: number,
+  topLeft: { x: number; y: number }
+): void {
+  const center = osmWorldPixel(cluster.lon, cluster.lat, zoom);
+  const centerX = x + center.x - topLeft.x;
+  const centerY = y + center.y - topLeft.y;
+  context.fillStyle = "rgba(22, 107, 109, 0.18)";
+  context.beginPath();
+  context.arc(centerX, centerY, 42, 0, Math.PI * 2);
+  context.fill();
+  context.fillStyle = "#166b6d";
+  context.beginPath();
+  context.arc(centerX, centerY, 10, 0, Math.PI * 2);
+  context.fill();
+  context.strokeStyle = "#ffffff";
+  context.lineWidth = 4;
+  context.stroke();
+
+  context.font = factsheetFont(17, 600);
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  records.forEach(({ accident }, index) => {
+    const point = osmWorldPixel(accident.lon, accident.lat, zoom);
+    const pointX = x + point.x - topLeft.x;
+    const pointY = y + point.y - topLeft.y;
+    if (pointX < x || pointX > x + width || pointY < y || pointY > y + height) {
+      return;
+    }
+    const label = String(index + 1);
+    const radius = Math.max(11, context.measureText(label).width / 2 + 6);
+    context.fillStyle = "#050505";
+    context.beginPath();
+    context.arc(pointX, pointY, radius, 0, Math.PI * 2);
+    context.fill();
+    context.fillStyle = "#ffffff";
+    context.fillText(label, pointX, pointY + 1);
+  });
+  context.textAlign = "start";
+  context.textBaseline = "alphabetic";
+}
+
+function drawFactsheetMapAttribution(context: CanvasRenderingContext2D, x: number, y: number, width: number, height: number): void {
+  const label = tr("factsheet.mapAttribution");
+  context.font = factsheetFont(15, 600);
+  const labelWidth = context.measureText(label).width + 14;
+  context.fillStyle = "rgba(255, 255, 255, 0.9)";
+  context.fillRect(x + 8, y + height - 30, labelWidth, 22);
+  context.fillStyle = "#1d2d34";
+  context.fillText(label, x + 15, y + height - 14);
+}
+
+function chooseFactsheetMapZoom(cluster: IntersectionCluster, records: CrossingAccident[], width: number, height: number): number {
+  const offsets = records.map(({ accident }) => localMeterOffset(cluster, accident));
+  const radiusMeters = Math.max(90, ...offsets.flatMap((offset) => [Math.abs(offset.x), Math.abs(offset.y)])) + 70;
+  for (let zoom = 19; zoom >= 10; zoom -= 1) {
+    const metersPerPixel = (156_543.03392 * Math.cos(radians(cluster.lat))) / 2 ** zoom;
+    if (width * metersPerPixel >= radiusMeters * 2 && height * metersPerPixel >= radiusMeters * 2) {
+      return zoom;
+    }
+  }
+  return 10;
+}
+
+function osmWorldPixel(lon: number, lat: number, zoom: number): { x: number; y: number } {
+  const clampedLat = clampNumber(lat, -85.05112878, 85.05112878);
+  const sinLat = Math.sin(radians(clampedLat));
+  const scale = 256 * 2 ** zoom;
+  return {
+    x: ((lon + 180) / 360) * scale,
+    y: (0.5 - Math.log((1 + sinLat) / (1 - sinLat)) / (4 * Math.PI)) * scale
+  };
+}
+
+function wrapOsmTileX(x: number, tileCount: number): number {
+  return ((x % tileCount) + tileCount) % tileCount;
+}
+
+function loadFactsheetOsmTile(zoom: number, x: number, y: number): Promise<HTMLImageElement | null> {
+  const key = `${zoom}/${x}/${y}`;
+  const cached = factsheetTileCache.get(key);
+  if (cached) {
+    return cached;
+  }
+
+  const promise = new Promise<HTMLImageElement | null>((resolve) => {
+    const image = new Image();
+    image.crossOrigin = "anonymous";
+    image.decoding = "async";
+    image.referrerPolicy = "origin";
+    image.onload = () => resolve(image);
+    image.onerror = () => resolve(null);
+    image.src = OSM_TILE_URL_TEMPLATE.replace("{z}", String(zoom)).replace("{x}", String(x)).replace("{y}", String(y));
+  });
+  factsheetTileCache.set(key, promise);
+  return promise;
+}
+
+function localMeterOffset(center: { lat: number; lon: number }, point: { lat: number; lon: number }): { x: number; y: number } {
+  return {
+    x: (point.lon - center.lon) * 111_320 * Math.cos(radians(center.lat)),
+    y: (point.lat - center.lat) * 110_540
+  };
+}
+
+function clusterAreaText(cluster: IntersectionCluster): string {
+  return [cluster.stateName, cluster.administrativeRegionName, cluster.districtName, cluster.municipalityName]
+    .filter((part, index, parts): part is string => Boolean(part) && parts.indexOf(part) === index)
+    .join(", ");
+}
+
+function factsheetPeriodLabel(cluster: IntersectionCluster, records: CrossingAccident[]): string {
+  const years = uniqueNumbers((records.length ? records.map(({ accident }) => accident.year) : cluster.years).filter(Boolean)).sort((a, b) => a - b);
+  if (years.length === 0) {
+    return "-";
+  }
+  const first = years[0];
+  const last = years[years.length - 1];
+  return first === last ? String(first) : `${first}-${last}`;
+}
+
+function latestBundledFileDate(): Date | null {
+  const files = globalThis.__SICHERE_KNOTEN_DATA__?.files ?? [];
+  const timestamps = files
+    .map((file) => (file.modifiedTime ? new Date(file.modifiedTime) : null))
+    .filter((date): date is Date => date instanceof Date && Number.isFinite(date.getTime()))
+    .sort((a, b) => b.getTime() - a.getTime());
+  return timestamps[0] ?? null;
+}
+
+function factsheetFileName(cluster: IntersectionCluster): string {
+  const slug = clusterLocationText(cluster)
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 64);
+  return `${tr("factsheet.filePrefix")}-${slug || cluster.id}.pdf`;
+}
+
+function createImagePagesPdf(pages: FactsheetPdfPage[]): Blob {
+  if (pages.length === 0) {
+    throw new Error("No factsheet pages were rendered.");
+  }
+
+  const pageWidth = 595.28;
+  const pageHeight = 841.89;
+  const chunks: Uint8Array[] = [];
+  const offsets = [0];
+  let length = 0;
+  const encoder = new TextEncoder();
+  const push = (chunk: string | Uint8Array): void => {
+    const bytes = typeof chunk === "string" ? encoder.encode(chunk) : chunk;
+    chunks.push(bytes);
+    length += bytes.byteLength;
+  };
+  const addObject = (id: number, parts: Array<string | Uint8Array>): void => {
+    offsets[id] = length;
+    push(`${id} 0 obj\n`);
+    parts.forEach(push);
+    push("\nendobj\n");
+  };
+  const pageObjectId = (index: number): number => 3 + index * 3;
+  const imageObjectId = (index: number): number => pageObjectId(index) + 1;
+  const contentObjectId = (index: number): number => pageObjectId(index) + 2;
+  const baseObjectCount = 2 + pages.length * 3;
+  const fontObjectId = baseObjectCount + 1;
+  let nextAnnotationObjectId = fontObjectId + 1;
+  const annotationObjectIds = pages.map((page) => page.links.map(() => nextAnnotationObjectId++));
+  const objectCount = nextAnnotationObjectId - 1;
+
+  push("%PDF-1.4\n");
+  addObject(1, ["<< /Type /Catalog /Pages 2 0 R >>"]);
+  addObject(2, [
+    `<< /Type /Pages /Kids [${pages.map((_, index) => `${pageObjectId(index)} 0 R`).join(" ")}] /Count ${pages.length} >>`
+  ]);
+  pages.forEach((page, index) => {
+    const pageId = pageObjectId(index);
+    const imageId = imageObjectId(index);
+    const contentId = contentObjectId(index);
+    const imageName = `Im${index}`;
+    const content = `q\n${pageWidth} 0 0 ${pageHeight} 0 0 cm\n/${imageName} Do\nQ\n${createPdfTextLayer(page, pageWidth, pageHeight)}`;
+    const annotationIds = annotationObjectIds[index];
+    const annotations = annotationIds.length > 0 ? ` /Annots [${annotationIds.map((id) => `${id} 0 R`).join(" ")}]` : "";
+    addObject(pageId, [
+      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageWidth} ${pageHeight}] /Resources << /XObject << /${imageName} ${imageId} 0 R >> /Font << /F1 ${fontObjectId} 0 R >> >> /Contents ${contentId} 0 R${annotations} >>`
+    ]);
+    addObject(imageId, [
+      `<< /Type /XObject /Subtype /Image /Width ${page.width} /Height ${page.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${page.jpegBytes.byteLength} >>\nstream\n`,
+      page.jpegBytes,
+      "\nendstream"
+    ]);
+    addObject(contentId, [`<< /Length ${encoder.encode(content).byteLength} >>\nstream\n${content}endstream`]);
+  });
+  addObject(fontObjectId, ["<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>"]);
+  pages.forEach((page, pageIndex) => {
+    const scaleX = pageWidth / page.width;
+    const scaleY = pageHeight / page.height;
+    page.links.forEach((link, linkIndex) => {
+      const left = link.x * scaleX;
+      const right = (link.x + link.width) * scaleX;
+      const top = pageHeight - link.y * scaleY;
+      const bottom = pageHeight - (link.y + link.height) * scaleY;
+      addObject(annotationObjectIds[pageIndex][linkIndex], [
+        `<< /Type /Annot /Subtype /Link /Rect [${formatPdfNumber(left)} ${formatPdfNumber(bottom)} ${formatPdfNumber(
+          right
+        )} ${formatPdfNumber(top)}] /Border [0 0 0] /A << /S /URI /URI ${pdfLiteralString(link.url)} >> >>`
+      ]);
+    });
+  });
+  const xrefOffset = length;
+  push(`xref\n0 ${objectCount + 1}\n0000000000 65535 f\r\n`);
+  for (let id = 1; id <= objectCount; id += 1) {
+    push(`${String(offsets[id]).padStart(10, "0")} 00000 n\r\n`);
+  }
+  push(`trailer\n<< /Size ${objectCount + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`);
+
+  const pdfBytes = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    pdfBytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new Blob([pdfBytes.buffer as ArrayBuffer], { type: "application/pdf" });
+}
+
+function createPdfTextLayer(page: FactsheetPdfPage, pageWidth: number, pageHeight: number): string {
+  if (page.textSpans.length === 0) {
+    return "";
+  }
+
+  const scaleX = pageWidth / page.width;
+  const scaleY = pageHeight / page.height;
+  return page.textSpans
+    .map((span) => {
+      const x = formatPdfNumber(span.x * scaleX);
+      const y = formatPdfNumber(pageHeight - span.y * scaleY);
+      const fontSize = formatPdfNumber(span.fontSize * scaleY);
+      return `BT\n/F1 ${fontSize} Tf\n3 Tr\n1 0 0 1 ${x} ${y} Tm\n${pdfWinAnsiHexString(span.text)} Tj\nET\n`;
+    })
+    .join("");
+}
+
+function formatPdfNumber(value: number): string {
+  return String(round(value, 2));
+}
+
+function pdfLiteralString(value: string): string {
+  return `(${value.replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)").replace(/\r/g, "\\r").replace(/\n/g, "\\n")})`;
+}
+
+function pdfWinAnsiHexString(value: string): string {
+  const bytes = encodePdfWinAnsi(value);
+  return `<${bytes.map((byte) => byte.toString(16).padStart(2, "0")).join("")}>`;
+}
+
+function encodePdfWinAnsi(value: string): number[] {
+  const bytes: number[] = [];
+  for (const char of value) {
+    bytes.push(pdfWinAnsiByte(char));
+  }
+  return bytes;
+}
+
+function pdfWinAnsiByte(char: string): number {
+  const code = char.codePointAt(0) ?? 63;
+  if ((code >= 32 && code <= 126) || (code >= 160 && code <= 255)) {
+    return code;
+  }
+  const mapped = PDF_WIN_ANSI_EXTRA_BYTES[code];
+  return mapped ?? 63;
+}
+
+const PDF_WIN_ANSI_EXTRA_BYTES: Record<number, number> = {
+  0x20ac: 0x80,
+  0x201a: 0x82,
+  0x0192: 0x83,
+  0x201e: 0x84,
+  0x2026: 0x85,
+  0x2020: 0x86,
+  0x2021: 0x87,
+  0x02c6: 0x88,
+  0x2030: 0x89,
+  0x0160: 0x8a,
+  0x2039: 0x8b,
+  0x0152: 0x8c,
+  0x017d: 0x8e,
+  0x2018: 0x91,
+  0x2019: 0x92,
+  0x201c: 0x93,
+  0x201d: 0x94,
+  0x2022: 0x95,
+  0x2013: 0x96,
+  0x2014: 0x97,
+  0x02dc: 0x98,
+  0x2122: 0x99,
+  0x0161: 0x9a,
+  0x203a: 0x9b,
+  0x0153: 0x9c,
+  0x017e: 0x9e,
+  0x0178: 0x9f
+};
+
+function dataUrlBytes(dataUrl: string): Uint8Array {
+  const encoded = dataUrl.split(",", 2)[1];
+  if (!encoded) {
+    throw new Error("Could not encode factsheet image.");
+  }
+  const binary = window.atob(encoded);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
+}
+
+function roadUserColor(key: RoadUserKey): string {
+  switch (key) {
+    case "car":
+      return "#425b70";
+    case "pedestrian":
+      return "#7c4d12";
+    case "bicycle":
+      return "#166b6d";
+    case "motorcycle":
+      return "#8b3f7a";
+    case "truck":
+      return "#b9392b";
+    case "other":
+      return "#53636d";
+  }
+}
+
 function clusterLocation(cluster: IntersectionCluster): string {
   return escapeHtml(clusterLocationText(cluster));
 }
@@ -2704,6 +3710,10 @@ function formatInteger(value: number): string {
 
 function formatNumber(value: number): string {
   return new Intl.NumberFormat(NUMBER_LOCALE, { maximumFractionDigits: 2 }).format(value);
+}
+
+function formatDate(value: Date): string {
+  return new Intl.DateTimeFormat(NUMBER_LOCALE, { year: "numeric", month: "short", day: "2-digit" }).format(value);
 }
 
 function formatSignedPercent(value: number): string {

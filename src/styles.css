@@ -904,6 +904,14 @@ select {
   font-size: 1rem;
 }
 
+.factsheet-button {
+  flex: 0 1 auto;
+  min-height: 34px;
+  padding: 0 10px;
+  font-size: 0.82rem;
+  white-space: normal;
+}
+
 .selected-map-actions {
   display: flex;
   flex-wrap: wrap;
@@ -1029,7 +1037,7 @@ select {
   background: #050505;
   color: #ffffff;
   font-size: 0.8rem;
-  font-weight: 800;
+  font-weight: 600;
   line-height: 1;
 }
 

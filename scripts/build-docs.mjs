@@ -63,6 +63,7 @@ async function writeDataBundle() {
   );
   for (const file of files) {
     const bytes = await readFile(file.sourcePath);
+    const sourceStats = await stat(file.sourcePath);
     const compressed = gzipSync(bytes, { level: 9 });
     const bundledFile = {
       path: file.publicPath,
@@ -71,6 +72,7 @@ async function writeDataBundle() {
       encoding: "gzip-base64",
       size: bytes.byteLength,
       compressedSize: compressed.byteLength,
+      modifiedTime: sourceStats.mtime.toISOString(),
       chunks: chunkString(compressed.toString("base64"), 256 * 1024)
     };
     const scriptFileName = `data-${scriptFileNames.length}.js`;
