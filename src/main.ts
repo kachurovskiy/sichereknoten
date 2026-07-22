@@ -139,6 +139,10 @@ let accidentKeyLookupCache: AccidentKeyLookupCache | null = null;
 let isStreetViewOpen = readStoredStreetViewOpen();
 
 const elements = {
+  splash: byId<HTMLDivElement>("appSplash"),
+  splashLoadingTitle: byId<HTMLHeadingElement>("splashLoadingTitle"),
+  splashLoadingStatus: byId<HTMLParagraphElement>("splashLoadingStatus"),
+  splashLoadingBar: byId<HTMLDivElement>("splashLoadingBar"),
   loadBundledBtn: byId<HTMLButtonElement>("loadBundledBtn"),
   clearBtn: byId<HTMLButtonElement>("clearBtn"),
   analyzeBtn: byId<HTMLButtonElement>("analyzeBtn"),
@@ -161,7 +165,7 @@ const elements = {
   mapLoadingTitle: byId<HTMLHeadingElement>("mapLoadingTitle"),
   mapLoadingStatus: byId<HTMLParagraphElement>("mapLoadingStatus"),
   mapLoadingBar: byId<HTMLDivElement>("mapLoadingBar"),
-  mapLoadingSteps: Array.from(document.querySelectorAll<HTMLElement>("[data-loading-step]")),
+  loadingSteps: Array.from(document.querySelectorAll<HTMLElement>("[data-loading-step]")),
   selectedAside: byId<HTMLElement>("selectedAside"),
   selectedMapActions: byId<HTMLDivElement>("selectedMapActions"),
   selectionDetails: byId<HTMLDivElement>("selectionDetails"),
@@ -1595,6 +1599,8 @@ function clusterLocationText(cluster: IntersectionCluster): string {
 function setBusy(isBusy: boolean): void {
   elements.analyzeBtn.disabled = isBusy;
   elements.loadBundledBtn.disabled = isBusy;
+  elements.splash.hidden = !isBusy;
+  elements.splash.setAttribute("aria-busy", String(isBusy));
   setAnalysisControlsDisabled(isBusy);
   updateAnalyzeButton();
 }
@@ -1624,10 +1630,10 @@ function updateAnalyzeButton(): void {
 
 function setStatus(message: string, progress: number): void {
   const normalizedProgress = Math.max(0, Math.min(100, progress));
-  updateMapLoadingPanel(message, normalizedProgress);
+  updateLoadingPanels(message, normalizedProgress);
 }
 
-function updateMapLoadingPanel(message: string, progress: number): void {
+function updateLoadingPanels(message: string, progress: number): void {
   const lowerMessage = message.toLowerCase();
   const isProblem =
     (lowerMessage.includes("could not") || lowerMessage.includes("failed") || lowerMessage.includes("error") || lowerMessage.includes("blocked")) &&
@@ -1636,13 +1642,17 @@ function updateMapLoadingPanel(message: string, progress: number): void {
     lowerMessage.startsWith("data cleared") || lowerMessage.startsWith("load accident data") || lowerMessage.startsWith("no analyzed");
   const hasNoClusters = lowerMessage.startsWith("0 intersection clusters analyzed");
   const activeStep = loadingStepForProgress(progress);
+  const title = loadingTitle(activeStep, progress, isProblem, isIdle, hasNoClusters);
 
   elements.mapLoadingStatus.textContent = message;
+  elements.splashLoadingStatus.textContent = message;
   elements.mapLoadingBar.style.width = `${progress}%`;
-  elements.mapLoadingTitle.textContent = loadingTitle(activeStep, progress, isProblem, isIdle, hasNoClusters);
+  elements.splashLoadingBar.style.width = `${progress}%`;
+  elements.mapLoadingTitle.textContent = title;
+  elements.splashLoadingTitle.textContent = title;
 
   const activeIndex = LOADING_STEP_ORDER.indexOf(activeStep);
-  for (const step of elements.mapLoadingSteps) {
+  for (const step of elements.loadingSteps) {
     const key = step.dataset.loadingStep as LoadingStepKey | undefined;
     const index = key ? LOADING_STEP_ORDER.indexOf(key) : -1;
     const isDone = index >= 0 && !isProblem && !isIdle && (index < activeIndex || progress >= 100);

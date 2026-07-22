@@ -711,6 +711,25 @@ select {
   display: none;
 }
 
+.splash-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(236, 238, 233, 0.96);
+}
+
+.splash-screen[hidden] {
+  display: none;
+}
+
+.splash-panel {
+  width: min(460px, 100%);
+  background: rgba(255, 255, 255, 0.96);
+}
+
 .loading-panel {
   display: grid;
   gap: 12px;
@@ -1358,6 +1377,15 @@ tbody tr:focus {
 
   .loading-panel {
     padding: 14px;
+  }
+
+  .splash-screen {
+    align-items: end;
+    padding: 14px;
+  }
+
+  .splash-panel {
+    width: 100%;
   }
 
   .details dl div {

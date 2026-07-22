@@ -8,6 +8,21 @@
     <link rel="stylesheet" href="./assets/app.css" />
   </head>
   <body>
+    <div id="appSplash" class="splash-screen" role="status" aria-live="polite" aria-busy="true">
+      <div class="loading-panel splash-panel">
+        <p class="loading-eyebrow">Sichere Knoten</p>
+        <h2 id="splashLoadingTitle">Preparing data</h2>
+        <p id="splashLoadingStatus" class="loading-status">Checking bundled accident data.</p>
+        <div class="loading-progress" aria-hidden="true">
+          <div id="splashLoadingBar" class="loading-progress-bar"></div>
+        </div>
+        <div class="loading-steps" aria-label="Loading steps">
+          <span class="loading-step active" data-loading-step="cache">Cache</span>
+          <span class="loading-step" data-loading-step="parse">Parse</span>
+          <span class="loading-step" data-loading-step="analyze">Analyze</span>
+        </div>
+      </div>
+    </div>
     <div id="app" class="app-shell">
       <aside class="control-panel" aria-label="Application sidebar">
         <div class="brand-block">
