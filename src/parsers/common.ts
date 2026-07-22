@@ -53,6 +53,11 @@ export function accidentFromRecord(
   const category = parseInteger(readField(fields, "UKATEGORIE"));
   const id = readOptionalString(readField(fields, "UIDENTSTLAE", "UIDENTSTLA", "ID", "OID_")) ?? `${source}:${index}`;
   const serialNumber = readOptionalString(readField(fields, "ID", "OID_"));
+  const year = parseInteger(readField(fields, "UJAHR")) ?? 0;
+  const month = parseInteger(readField(fields, "UMONAT"));
+  const explicitDay = parseInteger(readField(fields, "UTAG", "UTAGMONAT", "UMONATSTAG", "UDAY", "U_DAY"));
+  const weekday = parseInteger(readField(fields, "UWOCHENTAG"));
+  const day = validDateDay(year, month, explicitDay, weekday) ? explicitDay : dayFromSourceId(id, year, month, weekday);
 
   return {
     id,
@@ -67,11 +72,11 @@ export function accidentFromRecord(
     districtName: districtNameFor(stateCode, administrativeRegionCode, districtCode),
     municipalityCode,
     municipalityName: municipalityNameFor(stateCode, administrativeRegionCode, districtCode, municipalityCode),
-    year: parseInteger(readField(fields, "UJAHR")) ?? 0,
-    month: parseInteger(readField(fields, "UMONAT")),
-    day: parseInteger(readField(fields, "UTAG", "UTAGMONAT", "UMONATSTAG", "UDAY", "U_DAY")),
+    year,
+    month,
+    day,
     hour: parseInteger(readField(fields, "USTUNDE")),
-    weekday: parseInteger(readField(fields, "UWOCHENTAG")),
+    weekday,
     category,
     accidentKind: parseInteger(readField(fields, "UART")),
     accidentType: parseInteger(readField(fields, "UTYP1")),
@@ -89,6 +94,39 @@ export function accidentFromRecord(
     involvesTruck: parseBooleanFlag(readField(fields, "IstGkfz")),
     involvesOther: parseBooleanFlag(readField(fields, "IstSonstige"))
   };
+}
+
+function dayFromSourceId(id: string, year: number, month: number | null, weekday: number | null): number | null {
+  const match = /^(\d{2})(\d{2})(\d{2})(\d{2})/.exec(id);
+  if (!match) {
+    return null;
+  }
+
+  const encodedYear = 2000 + Number(match[2]);
+  const encodedMonth = Number(match[3]);
+  const encodedDay = Number(match[4]);
+  if (encodedYear !== year || month !== encodedMonth) {
+    return null;
+  }
+
+  return validDateDay(year, month, encodedDay, weekday) ? encodedDay : null;
+}
+
+function validDateDay(year: number, month: number | null, day: number | null, weekday: number | null): day is number {
+  if (!year || month === null || day === null || month < 1 || month > 12 || day < 1 || day > 31) {
+    return false;
+  }
+
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) {
+    return false;
+  }
+
+  if (weekday !== null && weekday >= 1 && weekday <= 7) {
+    const sourceWeekday = date.getUTCDay() + 1;
+    return sourceWeekday === weekday;
+  }
+  return true;
 }
 
 function readOptionalString(value: unknown): string | null {

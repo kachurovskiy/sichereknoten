@@ -108,7 +108,7 @@ Mapped accident fields:
 
 - `UIDENTSTLAE` or `UIDENTSTLA`: source accident id.
 - `ULAND`: Bundesland code.
-- `UJAHR`, `UMONAT`, `USTUNDE`, `UWOCHENTAG`: time fields.
+- `UJAHR`, `UMONAT`, `USTUNDE`, `UWOCHENTAG`: time fields. The bundled files do not expose a separate day-of-month column; when the source accident id encodes a valid `YYMMDD` date, the day is derived from `UIDENTSTLAE`/`UIDENTSTLA` and validated against year, month, and weekday.
 - `UKATEGORIE`: injury severity category.
 - `UART`, `UTYP1`: accident classification fields.
 - `IstRad`, `IstFuss`, `IstKrad`, `IstPKW`, `IstGkfz`: participant flags.
