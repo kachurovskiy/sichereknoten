@@ -208,6 +208,7 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "settings.fatalWeight": "Fatal accident weight",
     "settings.seriousWeight": "Serious accident weight",
     "settings.fullSample": "Full sample accidents",
+    "settings.trendYears": "Trend period (years)",
     "settings.trendDeadZone": "Trend dead zone (%/yr)",
     "settings.trendFullSignal": "Full trend signal (%/yr)",
     "settings.maxTrendAdjustment": "Max trend adjustment (%)",
@@ -222,7 +223,7 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "settings.whatMeasuresText":
       "Severity % is a weighted share of severe outcomes at an inferred intersection. By default: <code>(fatal + serious / 2) / total</code>. Fatal accidents count once, serious-injury accidents count as half, and all accidents at the intersection form the denominator. In the raw formula, 100% severity means the weighted severe count equals the total accident count; with default weights, that means every known record at the intersection was fatal. The displayed value can also reach 100% when trend adjustment pushes a high raw score up to the metric cap.",
     "settings.discountText":
-      "Low accident totals are weighted conservatively, and the accident trend adjusts the result gradually once the yearly change is large enough to influence the score.",
+      "Low accident totals are weighted conservatively, and the accident trend adjusts the result gradually using the latest configured selected years.",
     "settings.whyFocus": "Why this focus",
     "settings.whyFocusText1":
       "We do not have reliable traffic volume data for each intersection. Intersections with many recorded incidents are therefore not automatically the highest-severity locations; they may also be very highly loaded.",
@@ -292,6 +293,7 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "records.recordId": "Record ID",
     "records.source": "Source",
     "records.unknownYear": "Unknown year",
+    "records.dayNotProvided": "day not provided",
     "records.unknownCode": "Unknown code",
     "records.noRoadUserFields": "No road-user fields",
     "records.yes": "yes",
@@ -329,8 +331,12 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "factsheet.license": "License: Datenlizenz Deutschland - Namensnennung - Version 2.0.",
     "factsheet.publicationUnknown": "Publication date is not included in the bundled CSV metadata.",
     "factsheet.latestBundleDate": "Latest bundled file timestamp: {date}.",
+    "factsheet.trendSummary":
+      "{trend}. Trend period setting: {setting} years; trend calculated from selected years {trendYears}. Chart shows selected years {chartYears}. Years with no accidents count as zero.",
     "factsheet.methodology": "Methodology note",
-    "factsheet.methodologyText": "Accident points are clustered within the configured radius. Severity % is a weighted share of fatal and serious-injury outcomes, adjusted conservatively for small samples and trend.",
+    "factsheet.methodologyText": "Accident points are clustered within the configured radius. Severity % is a weighted share of fatal and serious-injury outcomes, adjusted conservatively for small samples and the selected trend period.",
+    "factsheet.methodologyTextDetailed":
+      "Accident points are clustered within a {radius} radius. Severity % is a weighted share of fatal and serious-injury outcomes, adjusted conservatively for small samples and the trend period setting ({trendYears} years).",
     "factsheet.limitations": "Limitations",
     "factsheet.limitationsText": "Coordinates are generalized source accident locations, not surveyed junction geometry. No traffic-volume exposure data is available, so high counts may also reflect high traffic volumes. Road-user counts use involvement flags and one accident can involve multiple user types.",
     "factsheet.mapNote": "OpenStreetMap base map with source accident coordinates; marker positions are based on generalized source coordinates.",
@@ -387,7 +393,7 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "trend.aria": "Selected intersection trend",
     "trend.latest": "{count} latest",
     "trend.legend.accidents": "Accidents",
-    "trend.note": "Selected years with no accidents count as zero.",
+    "trend.note": "Chart shows selected years; trend label uses the latest configured years. Years with no accidents count as zero.",
     "trend.chartAria": "Accident trend, {direction}",
     "trend.dotTitle": "{year}: {count} accidents",
     "trend.falling": "Falling",
@@ -488,6 +494,7 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "settings.fatalWeight": "Gewicht tödlicher Unfälle",
     "settings.seriousWeight": "Gewicht schwerer Unfälle",
     "settings.fullSample": "Volle Stichprobengröße",
+    "settings.trendYears": "Trendzeitraum (Jahre)",
     "settings.trendDeadZone": "Trend-Toleranzzone (%/Jahr)",
     "settings.trendFullSignal": "Volles Trendsignal (%/Jahr)",
     "settings.maxTrendAdjustment": "Maximale Trendanpassung (%)",
@@ -502,7 +509,7 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "settings.whatMeasuresText":
       "Schweregrad % ist der gewichtete Anteil schwerer Folgen an einer abgeleiteten Kreuzung. Standardmäßig gilt: <code>(tödlich + schwer / 2) / gesamt</code>. Tödliche Unfälle zählen einfach, Unfälle mit Schwerverletzten halb, und alle Unfälle an der Kreuzung bilden den Nenner. In der Rohformel bedeutet 100% Schweregrad, dass die gewichtete Anzahl schwerer Folgen der Gesamtzahl der Unfälle entspricht; mit den Standardgewichten heißt das, dass jeder bekannte Datensatz an der Kreuzung tödlich war. Der angezeigte Wert kann ebenfalls 100% erreichen, wenn die Trendanpassung einen hohen Rohwert bis zur Metrik-Obergrenze anhebt.",
     "settings.discountText":
-      "Niedrige Unfallzahlen werden konservativ gewichtet, und der Unfalltrend passt das Ergebnis schrittweise an, sobald die jährliche Veränderung deutlich genug ist, um den Wert zu beeinflussen.",
+      "Niedrige Unfallzahlen werden konservativ gewichtet, und der Unfalltrend passt das Ergebnis schrittweise anhand der neuesten ausgewählten Jahre an.",
     "settings.whyFocus": "Warum dieser Fokus",
     "settings.whyFocusText1":
       "Wir haben keine verlässlichen Verkehrsstärkedaten für jede Kreuzung. Kreuzungen mit vielen registrierten Vorfällen sind deshalb nicht automatisch die Orte mit dem höchsten Schweregrad; sie können auch sehr stark belastet sein.",
@@ -571,6 +578,7 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "records.recordId": "Datensatz-ID",
     "records.source": "Quelle",
     "records.unknownYear": "Unbekanntes Jahr",
+    "records.dayNotProvided": "Tag nicht enthalten",
     "records.unknownCode": "Unbekannter Code",
     "records.noRoadUserFields": "Keine Verkehrsteilnehmerfelder",
     "records.yes": "ja",
@@ -608,8 +616,12 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "factsheet.license": "Lizenz: Datenlizenz Deutschland - Namensnennung - Version 2.0.",
     "factsheet.publicationUnknown": "Ein formales Veröffentlichungsdatum ist in den gebündelten CSV-Metadaten nicht enthalten.",
     "factsheet.latestBundleDate": "Neuester gebündelter Dateizeitstempel: {date}.",
+    "factsheet.trendSummary":
+      "{trend}. Trendzeitraum-Einstellung: {setting} Jahre; Trend berechnet aus den ausgewählten Jahren {trendYears}. Die Grafik zeigt die ausgewählten Jahre {chartYears}. Jahre ohne Unfälle zählen als null.",
     "factsheet.methodology": "Methodischer Hinweis",
-    "factsheet.methodologyText": "Unfallpunkte werden innerhalb des eingestellten Radius geclustert. Schweregrad % ist der gewichtete Anteil tödlicher und schwerer Unfallfolgen, mit konservativer Anpassung für kleine Stichproben und Trend.",
+    "factsheet.methodologyText": "Unfallpunkte werden innerhalb des eingestellten Radius geclustert. Schweregrad % ist der gewichtete Anteil tödlicher und schwerer Unfallfolgen, mit konservativer Anpassung für kleine Stichproben und den ausgewählten Trendzeitraum.",
+    "factsheet.methodologyTextDetailed":
+      "Unfallpunkte werden innerhalb eines Radius von {radius} geclustert. Schweregrad % ist der gewichtete Anteil tödlicher und schwerer Unfallfolgen, mit konservativer Anpassung für kleine Stichproben und die Trendzeitraum-Einstellung ({trendYears} Jahre).",
     "factsheet.limitations": "Einschränkungen",
     "factsheet.limitationsText": "Koordinaten sind generalisierte Unfallorte aus den Quelldaten, keine vermessene Kreuzungsgeometrie. Verkehrsstärkedaten fehlen, daher können hohe Unfallzahlen auch hohe Verkehrsbelastung widerspiegeln. Verkehrsteilnehmer-Zahlen nutzen Beteiligungskennzeichen; ein Unfall kann mehrere Nutzerarten betreffen.",
     "factsheet.mapNote": "OpenStreetMap-Grundkarte mit Unfallkoordinaten aus den Quelldaten; Markierungen basieren auf generalisierten Quellkoordinaten.",
@@ -666,7 +678,7 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "trend.aria": "Trend der ausgewählten Kreuzung",
     "trend.latest": "{count} zuletzt",
     "trend.legend.accidents": "Unfälle",
-    "trend.note": "Ausgewählte Jahre ohne Unfälle zählen als null.",
+    "trend.note": "Die Grafik zeigt ausgewählte Jahre; die Trendangabe nutzt die neuesten eingestellten Jahre. Jahre ohne Unfälle zählen als null.",
     "trend.chartAria": "Unfalltrend, {direction}",
     "trend.dotTitle": "{year}: {count} Unfälle",
     "trend.falling": "Fallend",
@@ -790,6 +802,7 @@ const elements = {
   fatalWeight: byId<HTMLInputElement>("fatalWeight"),
   seriousWeight: byId<HTMLInputElement>("seriousWeight"),
   severityFullSample: byId<HTMLInputElement>("severityFullSample"),
+  severityTrendYears: byId<HTMLInputElement>("severityTrendYears"),
   severityTrendDeadZone: byId<HTMLInputElement>("severityTrendDeadZone"),
   severityTrendFullSignal: byId<HTMLInputElement>("severityTrendFullSignal"),
   severityMaxTrendAdjustment: byId<HTMLInputElement>("severityMaxTrendAdjustment"),
@@ -909,6 +922,7 @@ function wireEvents(): void {
 
   wireClampedNumberInput(elements.minAccidents, markAnalysisSettingsDirty);
   wireClampedNumberInput(elements.severityFullSample, markAnalysisSettingsDirty);
+  wireClampedNumberInput(elements.severityTrendYears, markAnalysisSettingsDirty);
   severityPercentDecimalInputs().forEach((input) => wireClampedDecimalInput(input, markAnalysisSettingsDirty));
 
   elements.stateFilter.addEventListener("input", markAnalysisSettingsDirty);
@@ -1036,6 +1050,7 @@ function normalizeDecimalInput(input: HTMLInputElement): number {
 
 function normalizeSeverityPercentInputs(): void {
   normalizeNumberInput(elements.severityFullSample);
+  normalizeNumberInput(elements.severityTrendYears);
   severityPercentDecimalInputs().forEach(normalizeDecimalInput);
 }
 
@@ -1044,6 +1059,7 @@ function severityPercentInputs(): HTMLInputElement[] {
     elements.fatalWeight,
     elements.seriousWeight,
     elements.severityFullSample,
+    elements.severityTrendYears,
     elements.severityTrendDeadZone,
     elements.severityTrendFullSignal,
     elements.severityMaxTrendAdjustment,
@@ -1256,6 +1272,7 @@ function readSeverityPercentOptions(): SeverityPercentOptions {
     fatalWeight: normalizeDecimalInput(elements.fatalWeight),
     seriousWeight: normalizeDecimalInput(elements.seriousWeight),
     fullSampleAccidents: normalizeNumberInput(elements.severityFullSample),
+    trendYears: normalizeNumberInput(elements.severityTrendYears),
     trendDeadZone: trendDeadZonePercent / 100,
     trendFullSignal: trendFullSignalPercent / 100,
     maxTrendAdjustment: normalizeDecimalInput(elements.severityMaxTrendAdjustment) / 100,
@@ -2058,6 +2075,7 @@ function compareCrossingAccidents(a: CrossingAccident, b: CrossingAccident): num
   return (
     b.accident.year - a.accident.year ||
     (b.accident.month ?? 0) - (a.accident.month ?? 0) ||
+    (b.accident.day ?? 0) - (a.accident.day ?? 0) ||
     (b.accident.hour ?? -1) - (a.accident.hour ?? -1) ||
     severityOrder(a.accident) - severityOrder(b.accident) ||
     a.distanceMeters - b.distanceMeters
@@ -2101,7 +2119,7 @@ function accidentSeverityLabel(accident: AccidentRecord): string {
 function accidentTimeLabel(accident: AccidentRecord): string {
   const parts = [accident.year ? String(accident.year) : tr("records.unknownYear")];
   if (accident.month) {
-    parts.push(monthLabel(accident.month));
+    parts.push(accident.day ? `${monthLabel(accident.month)} ${formatInteger(accident.day)}` : `${monthLabel(accident.month)} (${tr("records.dayNotProvided")})`);
   }
   if (accident.weekday) {
     parts.push(weekdayLabel(accident.weekday));
@@ -2706,7 +2724,7 @@ async function drawFactsheetOverview(layout: FactsheetLayout, cluster: Intersect
   drawFactsheetTrendSection(layout, cluster);
   drawFactsheetRoadUserSection(layout, records);
   drawFactsheetSourceSection(layout);
-  drawFactsheetTextSection(layout, tr("factsheet.methodology"), tr("factsheet.methodologyText"));
+  drawFactsheetTextSection(layout, tr("factsheet.methodology"), factsheetMethodologyText(cluster));
   drawFactsheetTextSection(layout, tr("factsheet.limitations"), tr("factsheet.limitationsText"));
 }
 
@@ -2728,10 +2746,9 @@ function drawFactsheetTrendSection(layout: FactsheetLayout, cluster: Intersectio
   const trend = cluster.accidentTrend;
   const trendLabel = trendDirectionLabel(trend.direction);
   const relativeSlope = trend.relativeSlopePerYear === null ? "" : ` ${formatSignedPercent(trend.relativeSlopePerYear)}${tr("unit.perYear")}`;
-  const latestAccidents = [...series].reverse().find((point) => point.accidentCount > 0)?.accidentCount ?? 0;
   drawFactsheetParagraph(
     layout,
-    `${trendLabel}${relativeSlope} - ${trf("trend.latest", { count: formatInteger(latestAccidents) })}. ${tr("trend.note")}`,
+    factsheetTrendSummary(`${trendLabel}${relativeSlope}`, cluster, years),
     19,
     26,
     "#38454b"
@@ -2741,6 +2758,40 @@ function drawFactsheetTrendSection(layout: FactsheetLayout, cluster: Intersectio
   ensureFactsheetSpace(layout, chartHeight + 8);
   drawFactsheetTrendChart(layout, series, FACTSHEET_MARGIN, layout.y, FACTSHEET_CONTENT_WIDTH, chartHeight);
   layout.y += chartHeight + 8;
+}
+
+function factsheetTrendSummary(trendText: string, cluster: IntersectionCluster, chartYears: number[]): string {
+  const trendYears = chartYears.slice(-Math.max(0, cluster.accidentTrend.years));
+  return trf("factsheet.trendSummary", {
+    trend: trendText,
+    setting: formatInteger(factsheetTrendPeriodSetting(cluster)),
+    trendYears: formatYearSelection(trendYears),
+    chartYears: formatYearSelection(chartYears)
+  });
+}
+
+function factsheetMethodologyText(cluster: IntersectionCluster): string {
+  const radiusMeters = activeAnalysisOptions?.clusterRadiusMeters ?? Number(elements.clusterRadiusOut.value);
+  return trf("factsheet.methodologyTextDetailed", {
+    radius: formatDistance(radiusMeters),
+    trendYears: formatInteger(factsheetTrendPeriodSetting(cluster))
+  });
+}
+
+function factsheetTrendPeriodSetting(cluster: IntersectionCluster): number {
+  const configuredTrendYears = activeAnalysisOptions?.severityPercent.trendYears ?? cluster.accidentTrend.years;
+  return Math.max(2, Math.trunc(Number.isFinite(configuredTrendYears) ? configuredTrendYears : 3));
+}
+
+function formatYearSelection(years: number[]): string {
+  if (years.length === 0) {
+    return tr("trend.unknown").toLowerCase();
+  }
+  const isContinuous = years.every((year, index) => index === 0 || year === years[index - 1] + 1);
+  if (isContinuous && years.length > 1) {
+    return `${years[0]}-${years[years.length - 1]}`;
+  }
+  return years.map(String).join(", ");
 }
 
 function drawFactsheetTrendChart(

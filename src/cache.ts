@@ -229,6 +229,7 @@ function analysisOptionsKey(options: AnalysisOptions): string {
     `fatalWeight=${options.severityPercent.fatalWeight}`,
     `seriousWeight=${options.severityPercent.seriousWeight}`,
     `fullSample=${options.severityPercent.fullSampleAccidents}`,
+    `trendYears=${options.severityPercent.trendYears}`,
     `trendDead=${options.severityPercent.trendDeadZone}`,
     `trendFull=${options.severityPercent.trendFullSignal}`,
     `trendMax=${options.severityPercent.maxTrendAdjustment}`,

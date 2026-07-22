@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
     <title>Safe Intersections</title>
-    <link rel="stylesheet" href="./assets/app.css?v=c4e140936327cda6" />
+    <link rel="stylesheet" href="./assets/app.css?v=722bba299c39f96c" />
   </head>
   <body>
     <div id="appSplash" class="splash-screen" role="status" aria-live="polite" aria-busy="true">
@@ -227,6 +227,9 @@
               <label class="field-label" for="severityFullSample" data-i18n="settings.fullSample">Full sample accidents</label>
               <input id="severityFullSample" class="number-input" type="number" min="1" max="100" step="1" value="10" autocomplete="off" />
 
+              <label class="field-label" for="severityTrendYears" data-i18n="settings.trendYears">Trend period (years)</label>
+              <input id="severityTrendYears" class="number-input" type="number" min="2" max="10" step="1" value="3" autocomplete="off" />
+
               <label class="field-label" for="severityTrendDeadZone" data-i18n="settings.trendDeadZone">Trend dead zone (%/yr)</label>
               <input id="severityTrendDeadZone" class="number-input" type="number" min="0" max="100" step="1" value="5" autocomplete="off" />
 
@@ -300,6 +303,6 @@
     <script src="./assets/data-3.js"></script>
     <script src="./assets/data-4.js"></script>
     <script src="./assets/data-5.js"></script>
-    <script src="./assets/app.js?v=c4e140936327cda6"></script>
+    <script src="./assets/app.js?v=722bba299c39f96c"></script>
   </body>
 </html>

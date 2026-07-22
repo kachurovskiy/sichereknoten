@@ -69,6 +69,7 @@ export function accidentFromRecord(
     municipalityName: municipalityNameFor(stateCode, administrativeRegionCode, districtCode, municipalityCode),
     year: parseInteger(readField(fields, "UJAHR")) ?? 0,
     month: parseInteger(readField(fields, "UMONAT")),
+    day: parseInteger(readField(fields, "UTAG", "UTAGMONAT", "UMONATSTAG", "UDAY", "U_DAY")),
     hour: parseInteger(readField(fields, "USTUNDE")),
     weekday: parseInteger(readField(fields, "UWOCHENTAG")),
     category,

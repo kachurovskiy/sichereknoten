@@ -21,6 +21,7 @@ export interface AccidentRecord {
   municipalityName: string | null;
   year: number;
   month: number | null;
+  day: number | null;
   hour: number | null;
   weekday: number | null;
   category: number | null;
@@ -53,6 +54,7 @@ export interface SeverityPercentOptions {
   fatalWeight: number;
   seriousWeight: number;
   fullSampleAccidents: number;
+  trendYears: number;
   trendDeadZone: number;
   trendFullSignal: number;
   maxTrendAdjustment: number;

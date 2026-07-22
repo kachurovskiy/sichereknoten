@@ -272,7 +272,7 @@ function finalizeCluster(
   const yearlyStats = Array.from(cluster.yearStats.values())
     .sort((a, b) => a.year - b.year)
     .map(toClusterYearStat);
-  const accidentTrend = calculateAccidentTrend(cluster.yearStats, analysisYears);
+  const accidentTrend = calculateAccidentTrend(cluster.yearStats, trendAnalysisYears(analysisYears, severityPercentOptions));
 
   return {
     id: cluster.id,
@@ -392,7 +392,7 @@ function summarizeStates(
 
   return Array.from(summaries.values())
     .map((summary) => {
-      const accidentTrend = calculateAccidentTrend(summary.yearStats, analysisYears);
+      const accidentTrend = calculateAccidentTrend(summary.yearStats, trendAnalysisYears(analysisYears, severityPercentOptions));
       const { yearStats: _yearStats, ...stateSummary } = summary;
       return {
         ...stateSummary,
@@ -400,6 +400,11 @@ function summarizeStates(
       };
     })
     .sort((a, b) => b.severityPercent - a.severityPercent || b.accidentCount - a.accidentCount);
+}
+
+function trendAnalysisYears(analysisYears: number[], options: SeverityPercentOptions): number[] {
+  const trendYears = Math.max(2, Math.trunc(Number.isFinite(options.trendYears) ? options.trendYears : 3));
+  return analysisYears.slice(-trendYears);
 }
 
 function mergeSummaryYearStats(target: Map<number, ClusterYearAccumulator>, yearlyStats: ClusterYearStat[]): void {
