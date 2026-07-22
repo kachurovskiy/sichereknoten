@@ -212,9 +212,7 @@ const mobileLayout = window.matchMedia(MOBILE_LAYOUT_QUERY);
 
 resetAnalysisControlsToDefaults();
 wireEvents();
-elements.app.dataset.activeView = activeView;
-updateContextTabs();
-updateStreetViewPanel();
+setView(initialView());
 renderAll();
 void loadBundledData();
 
@@ -663,6 +661,7 @@ function handleClusterSelection(cluster: IntersectionCluster | null, reason: Sel
 
   if (reason === "user" && mobileLayout.matches) {
     map.focus(cluster);
+    setView("details");
   }
 }
 
@@ -1132,7 +1131,12 @@ function googleStreetViewEmbedUrl(cluster: IntersectionCluster): string {
 }
 
 function scheduleMapRefresh(): void {
-  window.requestAnimationFrame(() => map.refresh());
+  window.requestAnimationFrame(() => {
+    if (mobileLayout.matches && activeView !== "map") {
+      return;
+    }
+    map.refresh();
+  });
 }
 
 function renderMapServiceActions(openStreetMapUrl: string, googleMapsUrl: string): string {
@@ -1641,6 +1645,10 @@ function closeMobileMoreMenuOnEscape(event: KeyboardEvent): void {
   if (event.key === "Escape") {
     setMobileMoreMenuOpen(false);
   }
+}
+
+function initialView(): ViewKey {
+  return mobileLayout.matches ? "explore" : "map";
 }
 
 function updateRangeOutputs(): void {

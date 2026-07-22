@@ -54,9 +54,15 @@
             <button id="detailsTab" class="tab-button mobile-pane-tab" role="tab" type="button" aria-selected="false" disabled>Details</button>
             <button id="streetTab" class="tab-button mobile-pane-tab" role="tab" type="button" aria-selected="false" disabled>
               <span class="tab-label tab-label-full">Street View</span>
-              <span class="tab-label tab-label-short">Street</span>
+              <span class="tab-label tab-label-short">Street View</span>
             </button>
-            <button id="moreTab" class="tab-button mobile-more-tab" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="mobileMoreMenu">More</button>
+            <button id="moreTab" class="tab-button mobile-more-tab" type="button" aria-label="More views" title="More views" aria-haspopup="menu" aria-expanded="false" aria-controls="mobileMoreMenu">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="5" cy="12" r="1.8"></circle>
+                <circle cx="12" cy="12" r="1.8"></circle>
+                <circle cx="19" cy="12" r="1.8"></circle>
+              </svg>
+            </button>
             <button id="stateTab" class="tab-button secondary-tab" role="tab" type="button" aria-selected="false">Bundesland</button>
             <button id="tableTab" class="tab-button secondary-tab" role="tab" type="button" aria-selected="false">Intersections</button>
             <button id="settingsTab" class="tab-button secondary-tab" role="tab" type="button" aria-selected="false">Settings</button>
