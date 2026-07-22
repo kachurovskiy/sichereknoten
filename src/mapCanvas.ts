@@ -122,6 +122,11 @@ export class MapCanvas {
     this.onSelect(cluster, reason);
   }
 
+  focus(point: { lon: number; lat: number }): void {
+    this.centerOn(point);
+    this.draw();
+  }
+
   setUserLocation(location: UserLocation, focus = true): void {
     this.userLocation = location;
     if (focus) {
@@ -544,6 +549,7 @@ export class MapCanvas {
   }
 
   private centerOn(point: { lon: number; lat: number }): void {
+    this.resizeToDisplaySize();
     const projected = project(point.lon, point.lat);
     this.scale = Math.max(this.scale, 4_000_000);
     this.offsetX = this.canvas.width / 2 - projected.x * this.scale;
@@ -629,8 +635,12 @@ export class MapCanvas {
     const width = Math.max(1, Math.floor(rect.width * window.devicePixelRatio));
     const height = Math.max(1, Math.floor(rect.height * window.devicePixelRatio));
     if (this.canvas.width !== width || this.canvas.height !== height) {
+      const deltaX = width - this.canvas.width;
+      const deltaY = height - this.canvas.height;
       this.canvas.width = width;
       this.canvas.height = height;
+      this.offsetX += deltaX / 2;
+      this.offsetY += deltaY / 2;
     }
   }
 

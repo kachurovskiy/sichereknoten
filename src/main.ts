@@ -652,7 +652,7 @@ function renderAll(): void {
   }
 }
 
-function handleClusterSelection(cluster: IntersectionCluster | null, _reason: SelectionReason): void {
+function handleClusterSelection(cluster: IntersectionCluster | null, reason: SelectionReason): void {
   selectedCluster = cluster;
   renderSelection(cluster);
   renderExplore();
@@ -661,6 +661,9 @@ function handleClusterSelection(cluster: IntersectionCluster | null, _reason: Se
     return;
   }
 
+  if (reason === "user" && mobileLayout.matches) {
+    map.focus(cluster);
+  }
 }
 
 function applySeverityFilter(): void {
@@ -747,10 +750,10 @@ function renderTables(): void {
       <td>${formatFatalPercent(summary)}</td>
       <td>${summary.topCluster ? clusterLocation(summary.topCluster) : ""}</td>
     `;
-    if (summary.topCluster) {
+    const topCluster = summary.topCluster;
+    if (topCluster) {
       row.addEventListener("click", () => {
-        setView("map");
-        map.select(summary.topCluster, true);
+        selectClusterOnMap(topCluster);
       });
     }
     elements.stateTableBody.append(row);
@@ -770,13 +773,11 @@ function renderTables(): void {
       <td>${formatFatalPercent(cluster)}</td>
     `;
     row.addEventListener("click", () => {
-      setView("map");
-      map.select(cluster, true);
+      selectClusterOnMap(cluster);
     });
     row.addEventListener("keydown", (event) => {
       if (event.key === "Enter") {
-        setView("map");
-        map.select(cluster, true);
+        selectClusterOnMap(cluster);
       }
     });
     elements.clusterTableBody.append(row);
@@ -970,8 +971,7 @@ function hotspotButton(
     </span>
   `;
   button.addEventListener("click", () => {
-    setView("map");
-    map.select(cluster, true);
+    selectClusterOnMap(cluster);
   });
   return button;
 }
@@ -1005,9 +1005,15 @@ function selectNearestCluster(): { cluster: IntersectionCluster; distanceMeters:
     setView("map");
     return null;
   }
-  setView("map");
-  map.select(nearest.cluster, true);
+  selectClusterOnMap(nearest.cluster);
   return nearest;
+}
+
+function selectClusterOnMap(cluster: IntersectionCluster): void {
+  setView("map");
+  window.requestAnimationFrame(() => {
+    map.select(cluster, true);
+  });
 }
 
 function visibleSeverityClusters(): IntersectionCluster[] {
