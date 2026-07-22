@@ -22,6 +22,12 @@ interface UserLocation {
   accuracyMeters: number | null;
 }
 
+interface IncidentPoint {
+  lat: number;
+  lon: number;
+  label: string;
+}
+
 interface SeverityFilters {
   fatal: boolean;
   serious: boolean;
@@ -54,11 +60,17 @@ interface TileRecord {
   lastUsed: number;
 }
 
+interface ProjectedIncidentPoint {
+  projected: ProjectedPoint;
+  label: string;
+}
+
 export class MapCanvas {
   private readonly context: CanvasRenderingContext2D;
   private clusters: IntersectionCluster[] = [];
   private projectedClusters: ProjectedCluster[] = [];
   private selected: IntersectionCluster | null = null;
+  private selectedIncidentPoints: ProjectedIncidentPoint[] = [];
   private userLocation: UserLocation | null = null;
   private maxFatalPercent = 0.01;
   private severityFilters: SeverityFilters = { fatal: true, serious: true, other: false };
@@ -99,6 +111,7 @@ export class MapCanvas {
       .map((cluster) => ({ cluster, projected: project(cluster.lon, cluster.lat) }))
       .sort((a, b) => drawPriority(a.cluster) - drawPriority(b.cluster));
     this.selected = null;
+    this.selectedIncidentPoints = [];
     this.fit();
     this.draw();
     this.onSelect(null, "auto");
@@ -108,13 +121,18 @@ export class MapCanvas {
     this.severityFilters = filters;
     if (this.selected && !this.shouldShowCluster(this.selected)) {
       this.selected = null;
+      this.selectedIncidentPoints = [];
       this.onSelect(null, "auto");
     }
     this.draw();
   }
 
   select(cluster: IntersectionCluster | null, focus = false, reason: SelectionReason = "program"): void {
+    const selectedChanged = this.selected?.id !== cluster?.id;
     this.selected = cluster;
+    if (!cluster || selectedChanged) {
+      this.selectedIncidentPoints = [];
+    }
     if (cluster && focus) {
       this.centerOn(cluster);
     }
@@ -132,6 +150,14 @@ export class MapCanvas {
     if (focus) {
       this.centerOn(location);
     }
+    this.draw();
+  }
+
+  setSelectedIncidentPoints(points: IncidentPoint[]): void {
+    this.selectedIncidentPoints = points.map((point) => ({
+      projected: project(point.lon, point.lat),
+      label: point.label
+    }));
     this.draw();
   }
 
@@ -446,6 +472,7 @@ export class MapCanvas {
 
     this.drawClusterPoints(visibleClusters, visualScale);
     this.drawSelectedCluster(zoomLevel);
+    this.drawSelectedIncidentPoints(zoomLevel);
   }
 
   private drawClusterPoints(visibleClusters: VisibleClusterPoint[], visualScale: VisualScale): void {
@@ -471,6 +498,47 @@ export class MapCanvas {
       ctx.arc(selected.x, selected.y, (8 + zoomLevel * 9) * window.devicePixelRatio, 0, Math.PI * 2);
       ctx.fill();
     }
+  }
+
+  private drawSelectedIncidentPoints(zoomLevel: number): void {
+    if (!this.selected || !this.shouldShowCluster(this.selected) || this.selectedIncidentPoints.length === 0) {
+      return;
+    }
+
+    const ctx = this.context;
+    const dpr = window.devicePixelRatio;
+    const fontSize = lerp(9, 11, zoomLevel) * dpr;
+    const markerPadding = lerp(3.5, 4.5, zoomLevel) * dpr;
+    const minRadius = lerp(7, 9, zoomLevel) * dpr;
+    ctx.save();
+    ctx.font = `700 ${fontSize}px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+
+    for (const incident of this.selectedIncidentPoints) {
+      const point = this.screenFromProjected(incident.projected);
+      if (!this.isVisible(point)) {
+        continue;
+      }
+
+      const textWidth = ctx.measureText(incident.label).width;
+      const radius = Math.max(minRadius, textWidth / 2 + markerPadding);
+      ctx.fillStyle = "rgba(255, 255, 255, 0.9)";
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.95)";
+      ctx.lineWidth = 3 * dpr;
+      ctx.beginPath();
+      ctx.arc(point.x, point.y, radius + 1.5 * dpr, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = "#050505";
+      ctx.beginPath();
+      ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#ffffff";
+      ctx.fillText(incident.label, point.x, point.y + 0.3 * dpr);
+    }
+
+    ctx.restore();
   }
 
   private drawUserLocation(): void {

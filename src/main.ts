@@ -209,6 +209,7 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "records.title": "Known accident records",
     "records.countOf": "{shown} of {total}",
     "records.empty": "No matching source accident records were found near this intersection.",
+    "records.incidentNumber": "Incident {number}",
     "records.category": "Category",
     "records.kind": "Kind",
     "records.type": "Type",
@@ -449,6 +450,7 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "records.title": "Bekannte Unfalldatensätze",
     "records.countOf": "{shown} von {total}",
     "records.empty": "In der Nähe dieser Kreuzung wurden keine passenden Quelldatensätze gefunden.",
+    "records.incidentNumber": "Unfall {number}",
     "records.category": "Kategorie",
     "records.kind": "Art",
     "records.type": "Typ",
@@ -1600,6 +1602,7 @@ function renderSelection(cluster: IntersectionCluster | null): void {
     elements.selectedAside.hidden = true;
     elements.mapView.classList.remove("has-selection");
     elements.selectionDetails.textContent = tr("details.none");
+    map.setSelectedIncidentPoints([]);
     updateContextTabs();
     if (activeView === "details") {
       setView("map");
@@ -1617,7 +1620,15 @@ function renderSelection(cluster: IntersectionCluster | null): void {
   const googleMapsUrl = `https://www.google.com/maps/search/?api=1&query=${lat},${lon}`;
   const streetViewUrl = googleStreetViewUrl(cluster);
   const trendPanel = renderTrendPanel(cluster);
-  const recordPanel = renderSidebarAccidentRecords(clusterAccidentRecords(cluster), cluster.accidentCount);
+  const accidentRecords = clusterAccidentRecords(cluster);
+  const recordPanel = renderSidebarAccidentRecords(accidentRecords, cluster.accidentCount);
+  map.setSelectedIncidentPoints(
+    accidentRecords.map(({ accident }, index) => ({
+      lat: accident.lat,
+      lon: accident.lon,
+      label: String(index + 1)
+    }))
+  );
 
   elements.selectionDetails.innerHTML = `
     <dl>
@@ -1728,14 +1739,16 @@ function renderSidebarAccidentRecords(records: CrossingAccident[], totalCount: n
   }
 
   const items = records
-    .map(({ accident, distanceMeters }) => {
+    .map(({ accident, distanceMeters }, index) => {
       const severity = accidentSeverity(accident);
+      const recordNumber = String(index + 1);
       const rows = accidentRecordRows(accident, distanceMeters)
         .map((row) => `<div><dt>${escapeHtml(row.label)}</dt><dd>${escapeHtml(row.value)}</dd></div>`)
         .join("");
       return `
         <li class="accident-record-item">
           <div class="accident-record-topline">
+            <span class="accident-record-number" aria-label="${escapeHtml(trf("records.incidentNumber", { number: recordNumber }))}">${recordNumber}</span>
             <span class="severity-pill severity-${severity}">${accidentSeverityLabel(accident)}</span>
             <strong>${escapeHtml(accidentTimeLabel(accident))}</strong>
           </div>
