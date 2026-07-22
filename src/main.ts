@@ -1009,10 +1009,22 @@ function selectNearestCluster(): { cluster: IntersectionCluster; distanceMeters:
 }
 
 function selectClusterOnMap(cluster: IntersectionCluster): void {
+  ensureClusterSeverityVisible(cluster);
   setView("map");
   window.requestAnimationFrame(() => {
     map.select(cluster, true);
   });
+}
+
+function ensureClusterSeverityVisible(cluster: IntersectionCluster): void {
+  const severity = clusterSeverity(cluster);
+  const input =
+    severity === "fatal" ? elements.showFatalPoints : severity === "serious" ? elements.showSeriousPoints : elements.showOtherPoints;
+  if (input.checked) {
+    return;
+  }
+  input.checked = true;
+  applySeverityFilter();
 }
 
 function visibleSeverityClusters(): IntersectionCluster[] {
