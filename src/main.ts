@@ -24,6 +24,8 @@ const BUNDLED_CSV_FILES = [
   "data/csv/Unfallorte_2025_LR_BasisDLM.csv"
 ];
 const TABLE_ROWS_PER_STATE = 10;
+const STATE_BROWSE_MIN_SEVERITY_PERCENT = 0.1;
+const STATE_BROWSE_MAX_INTERSECTIONS = 100;
 
 interface EmbeddedDataFile {
   path: string;
@@ -1465,8 +1467,8 @@ function renderStateHotspotList(): void {
     stateCode === "all"
       ? topClusterByState()
       : (result?.clusters ?? [])
-          .filter((cluster) => cluster.stateCode === stateCode)
-          .slice(0, 8);
+          .filter((cluster) => cluster.stateCode === stateCode && cluster.severityPercent >= STATE_BROWSE_MIN_SEVERITY_PERCENT)
+          .slice(0, STATE_BROWSE_MAX_INTERSECTIONS);
 
   if (clusters.length === 0) {
     elements.stateHotspotList.append(emptyHotspotMessage(tr("status.noAnalysisMatches")));
@@ -1483,7 +1485,7 @@ function renderStateHotspotList(): void {
 function topClusterByState(): IntersectionCluster[] {
   return (result?.stateSummaries ?? [])
     .flatMap((summary) => (summary.topCluster ? [summary.topCluster] : []))
-    .sort((a, b) => a.stateName.localeCompare(b.stateName, "de", { sensitivity: "base" }));
+    .sort(compareClusterCoreMetric);
 }
 
 function hotspotButton(
