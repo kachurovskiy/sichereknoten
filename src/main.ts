@@ -2802,7 +2802,7 @@ function factsheetMethodologyText(cluster: IntersectionCluster): string {
 
 function factsheetTrendPeriodSetting(cluster: IntersectionCluster): number {
   const configuredTrendYears = activeAnalysisOptions?.severityPercent.trendYears ?? cluster.accidentTrend.years;
-  return Math.max(2, Math.trunc(Number.isFinite(configuredTrendYears) ? configuredTrendYears : 3));
+  return Math.max(2, Math.trunc(Number.isFinite(configuredTrendYears) ? configuredTrendYears : 4));
 }
 
 function formatYearSelection(years: number[]): string {

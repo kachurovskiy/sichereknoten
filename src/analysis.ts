@@ -407,7 +407,7 @@ function summarizeStates(
 }
 
 function trendAnalysisYears(analysisYears: number[], options: SeverityPercentOptions): number[] {
-  const trendYears = Math.max(2, Math.trunc(Number.isFinite(options.trendYears) ? options.trendYears : 3));
+  const trendYears = Math.max(2, Math.trunc(Number.isFinite(options.trendYears) ? options.trendYears : 4));
   return analysisYears.slice(-trendYears);
 }
 
