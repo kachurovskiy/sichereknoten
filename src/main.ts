@@ -44,10 +44,11 @@ type ClusterSortKey = "state" | "location" | "accidents" | "fatal" | "serious" |
 type SortDirection = "asc" | "desc";
 type LoadingStepKey = "cache" | "parse" | "analyze";
 type SeverityFilterKey = "fatal" | "serious" | "other";
-type ViewKey = "map" | "state" | "table" | "settings";
+type ViewKey = "explore" | "map" | "details" | "street" | "state" | "table" | "settings";
 type SelectionReason = "auto" | "program" | "user";
 type HotspotMetricPlacement = "header" | "stats";
 const LOADING_STEP_ORDER: LoadingStepKey[] = ["cache", "parse", "analyze"];
+const MOBILE_LAYOUT_QUERY = "(max-width: 640px)";
 const APP_CACHE_VERSION =
   typeof __SICHERE_KNOTEN_APP_VERSION__ === "string" ? __SICHERE_KNOTEN_APP_VERSION__ : "dev-parallel-analysis";
 const STREET_VIEW_OPEN_STORAGE_KEY = "sichere-knoten:street-view-open";
@@ -137,8 +138,10 @@ let activeAnalysisOptions: AnalysisOptions | null = null;
 let crossingAccidentIndexCache: AccidentIndexCache | null = null;
 let accidentKeyLookupCache: AccidentKeyLookupCache | null = null;
 let isStreetViewOpen = readStoredStreetViewOpen();
+let activeView: ViewKey = "map";
 
 const elements = {
+  app: byId<HTMLDivElement>("app"),
   splash: byId<HTMLDivElement>("appSplash"),
   splashLoadingTitle: byId<HTMLHeadingElement>("splashLoadingTitle"),
   splashLoadingStatus: byId<HTMLParagraphElement>("splashLoadingStatus"),
@@ -175,7 +178,10 @@ const elements = {
   stateHotspotList: byId<HTMLDivElement>("stateHotspotList"),
   stateTableBody: byId<HTMLTableSectionElement>("stateTableBody"),
   clusterTableBody: byId<HTMLTableSectionElement>("clusterTableBody"),
+  exploreTab: byId<HTMLButtonElement>("exploreTab"),
   mapTab: byId<HTMLButtonElement>("mapTab"),
+  detailsTab: byId<HTMLButtonElement>("detailsTab"),
+  streetTab: byId<HTMLButtonElement>("streetTab"),
   stateTab: byId<HTMLButtonElement>("stateTab"),
   tableTab: byId<HTMLButtonElement>("tableTab"),
   settingsTab: byId<HTMLButtonElement>("settingsTab"),
@@ -197,9 +203,12 @@ const elements = {
 };
 
 const map = new MapCanvas(elements.mapCanvas, handleClusterSelection);
+const mobileLayout = window.matchMedia(MOBILE_LAYOUT_QUERY);
 
 resetAnalysisControlsToDefaults();
 wireEvents();
+elements.app.dataset.activeView = activeView;
+updateContextTabs();
 updateStreetViewPanel();
 renderAll();
 void loadBundledData();
@@ -239,10 +248,20 @@ function wireEvents(): void {
   elements.streetViewToggle.addEventListener("click", toggleStreetViewPanel);
   elements.browseState.addEventListener("change", renderExplore);
 
+  elements.exploreTab.addEventListener("click", () => setView("explore"));
   elements.mapTab.addEventListener("click", () => setView("map"));
+  elements.detailsTab.addEventListener("click", () => setView("details"));
+  elements.streetTab.addEventListener("click", () => setView("street"));
   elements.stateTab.addEventListener("click", () => setView("state"));
   elements.tableTab.addEventListener("click", () => setView("table"));
   elements.settingsTab.addEventListener("click", () => setView("settings"));
+  mobileLayout.addEventListener("change", () => {
+    if (!mobileLayout.matches && isMobilePaneView(activeView)) {
+      setView("map");
+      return;
+    }
+    scheduleMapRefresh();
+  });
 
   for (const button of clusterSortButtons()) {
     button.addEventListener("click", () => {
@@ -1011,7 +1030,12 @@ function renderSelection(cluster: IntersectionCluster | null): void {
     elements.selectedMapActions.innerHTML = "";
     elements.mapView.classList.remove("has-selection");
     elements.selectionDetails.textContent = "No intersection selected.";
-    updateStreetViewPanel();
+    updateContextTabs();
+    if (activeView === "details" || activeView === "street") {
+      setView("map");
+    } else {
+      updateStreetViewPanel();
+    }
     return;
   }
 
@@ -1039,6 +1063,7 @@ function renderSelection(cluster: IntersectionCluster | null): void {
     ${trendPanel}
     ${recordPanel}
   `;
+  updateContextTabs();
   updateStreetViewPanel();
 }
 
@@ -1051,7 +1076,7 @@ function toggleStreetViewPanel(): void {
 function updateStreetViewPanel(): void {
   const cluster = selectedCluster;
   const hasSelection = cluster !== null;
-  const isExpanded = hasSelection && isStreetViewOpen;
+  const isExpanded = hasSelection && (isStreetViewOpen || activeView === "street");
 
   elements.streetViewPanel.hidden = !hasSelection;
   elements.mapColumn.classList.toggle("street-view-open", isExpanded);
@@ -1516,19 +1541,48 @@ function trendClassName(direction: AccidentTrendDirection): string {
 }
 
 function setView(view: ViewKey): void {
-  const entries = [
-    { key: "map", tab: elements.mapTab, panel: elements.mapView },
-    { key: "state", tab: elements.stateTab, panel: elements.stateView },
-    { key: "table", tab: elements.tableTab, panel: elements.tableView },
-    { key: "settings", tab: elements.settingsTab, panel: elements.settingsView }
+  if ((view === "details" || view === "street") && !selectedCluster) {
+    setStatus("Select an intersection first.", 100);
+    view = "map";
+  }
+
+  activeView = view;
+  elements.app.dataset.activeView = view;
+
+  const tabs = [
+    { key: "explore", tab: elements.exploreTab },
+    { key: "map", tab: elements.mapTab },
+    { key: "details", tab: elements.detailsTab },
+    { key: "street", tab: elements.streetTab },
+    { key: "state", tab: elements.stateTab },
+    { key: "table", tab: elements.tableTab },
+    { key: "settings", tab: elements.settingsTab }
   ] as const;
 
-  for (const entry of entries) {
+  for (const entry of tabs) {
     const active = entry.key === view;
     entry.tab.classList.toggle("active", active);
     entry.tab.setAttribute("aria-selected", String(active));
-    entry.panel.classList.toggle("active", active);
   }
+
+  elements.mapView.classList.toggle("active", view === "map" || view === "details" || view === "street");
+  elements.stateView.classList.toggle("active", view === "state");
+  elements.tableView.classList.toggle("active", view === "table");
+  elements.settingsView.classList.toggle("active", view === "settings");
+
+  updateContextTabs();
+  updateStreetViewPanel();
+  scheduleMapRefresh();
+}
+
+function updateContextTabs(): void {
+  const hasSelection = selectedCluster !== null;
+  elements.detailsTab.disabled = !hasSelection;
+  elements.streetTab.disabled = !hasSelection;
+}
+
+function isMobilePaneView(view: ViewKey): boolean {
+  return view === "explore" || view === "details" || view === "street";
 }
 
 function updateRangeOutputs(): void {

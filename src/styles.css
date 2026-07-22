@@ -424,6 +424,15 @@ select {
   color: #ffffff;
 }
 
+.tab-button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.mobile-pane-tab {
+  display: none;
+}
+
 .toggle-control {
   display: inline-flex;
   align-items: center;
@@ -1271,11 +1280,15 @@ tbody tr:focus {
 
 @media (max-width: 640px) {
   body {
+    overflow: hidden;
     min-height: 100dvh;
   }
 
   .app-shell {
-    min-height: 100dvh;
+    grid-template-rows: auto minmax(0, 1fr);
+    height: 100dvh;
+    min-height: 0;
+    overflow: hidden;
   }
 
   .workspace,
@@ -1283,11 +1296,31 @@ tbody tr:focus {
     padding: 12px;
   }
 
+  .workspace {
+    order: -1;
+    grid-template-rows: auto minmax(0, 1fr);
+    gap: 10px;
+    height: 100dvh;
+    overflow: hidden;
+  }
+
   .control-panel {
-    max-height: 42dvh;
+    display: none;
+    min-height: 0;
+    max-height: none;
     gap: 12px;
     overflow-y: auto;
     overscroll-behavior: contain;
+    border-bottom: 0;
+  }
+
+  .app-shell[data-active-view="explore"] .workspace {
+    grid-template-rows: auto;
+    height: auto;
+  }
+
+  .app-shell[data-active-view="explore"] .control-panel {
+    display: flex;
   }
 
   .brand-block h1 {
@@ -1316,6 +1349,10 @@ tbody tr:focus {
     align-items: stretch;
   }
 
+  .mobile-pane-tab {
+    display: inline-flex;
+  }
+
   .tabs,
   .toolbar-actions {
     width: 100%;
@@ -1324,6 +1361,14 @@ tbody tr:focus {
   .tabs {
     overflow-x: auto;
     padding-bottom: 2px;
+  }
+
+  .toolbar-actions {
+    display: none;
+  }
+
+  .app-shell[data-active-view="map"] .toolbar-actions {
+    display: flex;
   }
 
   .toolbar-actions {
@@ -1350,18 +1395,72 @@ tbody tr:focus {
     flex: 0 0 auto;
   }
 
+  .view.active {
+    min-height: 0;
+    height: 100%;
+  }
+
+  #mapView.active,
+  #mapView.active.has-selection {
+    grid-template-columns: 1fr;
+    min-height: 0;
+    height: 100%;
+  }
+
+  .app-shell[data-active-view="explore"] .view {
+    display: none;
+  }
+
   .map-column {
-    height: 58dvh;
-    min-height: 390px;
+    grid-template-rows: minmax(0, 1fr);
+    height: 100%;
+    min-height: 0;
   }
 
   .map-column.street-view-open {
-    grid-template-rows: minmax(170px, 1fr) minmax(170px, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .app-shell[data-active-view="map"] .street-view-panel {
+    display: none;
+  }
+
+  .app-shell[data-active-view="details"] .map-column,
+  .app-shell[data-active-view="street"] .map-wrap,
+  .app-shell[data-active-view="map"] .selected-aside,
+  .app-shell[data-active-view="street"] .selected-aside {
+    display: none;
+  }
+
+  .app-shell[data-active-view="street"] .map-column {
+    display: grid;
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .app-shell[data-active-view="street"] .street-view-panel {
+    display: grid;
+    grid-template-rows: minmax(0, 1fr);
+    height: 100%;
+  }
+
+  .app-shell[data-active-view="street"] .street-view-toggle {
+    display: none;
+  }
+
+  .app-shell[data-active-view="street"] .street-view-body {
+    border-top: 0;
   }
 
   .selected-aside {
-    max-height: 58dvh;
+    height: 100%;
+    max-height: none;
     overflow-y: auto;
+  }
+
+  #stateView.active,
+  #tableView.active,
+  .settings-view.active {
+    overflow: auto;
   }
 
   .map-locate-button {
@@ -1390,5 +1489,57 @@ tbody tr:focus {
 
   .details dl div {
     grid-template-columns: 96px minmax(0, 1fr);
+  }
+
+  .hotspot-button {
+    min-height: 42px;
+    padding: 8px 10px;
+  }
+
+  .hotspot-main {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .hotspot-heading {
+    display: flex;
+    flex: 1 1 auto;
+    min-width: 0;
+    align-items: center;
+  }
+
+  .hotspot-title {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .hotspot-heading .hotspot-stat {
+    flex: 0 0 auto;
+    justify-self: auto;
+  }
+
+  .hotspot-stats {
+    flex: 0 0 auto;
+    flex-wrap: nowrap;
+    gap: 4px;
+    padding-top: 0;
+  }
+
+  .hotspot-stats .hotspot-stat:not(.hotspot-stat-total):not(.hotspot-stat-metric) {
+    display: none;
+  }
+
+  .hotspot-stat {
+    min-height: 22px;
+    padding: 2px 6px;
+    font-size: 0.74rem;
+  }
+
+  .hotspot-stat strong {
+    font-size: 0.8rem;
   }
 }
