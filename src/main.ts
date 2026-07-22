@@ -52,6 +52,21 @@ type SelectionReason = "auto" | "program" | "user";
 type HotspotMetricPlacement = "header" | "stats";
 type AppLocale = "en" | "de";
 type LoadingStatusKind = "normal" | "problem" | "idle";
+type RoadUserKey = "car" | "pedestrian" | "bicycle" | "motorcycle" | "truck" | "other";
+
+interface RoadUserDefinition {
+  key: RoadUserKey;
+  labelKey: string;
+  read: (accident: AccidentRecord) => boolean | null;
+}
+
+interface RoadUserSummaryItem {
+  definition: RoadUserDefinition;
+  label: string;
+  count: number;
+  share: number;
+}
+
 const LOADING_STEP_ORDER: LoadingStepKey[] = ["cache", "parse", "analyze"];
 const MOBILE_LAYOUT_QUERY = "(max-width: 640px)";
 const APP_CACHE_VERSION =
@@ -246,6 +261,9 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "roadUser.car": "Passenger car",
     "roadUser.truck": "Goods road vehicle",
     "roadUser.other": "Other means of transport",
+    "roadUsers.title": "Road users",
+    "roadUsers.summaryAria": "Road-user distribution for selected intersection",
+    "roadUsers.segmentLabel": "{label}: {count} involved, {percent}",
     "accident.category.killed": "Accident with persons killed",
     "accident.category.seriouslyInjured": "Accident with seriously injured",
     "accident.category.slightlyInjured": "Accident with slightly injured",
@@ -492,6 +510,9 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "roadUser.car": "Pkw",
     "roadUser.truck": "Güterkraftfahrzeug",
     "roadUser.other": "Sonstiges Verkehrsmittel",
+    "roadUsers.title": "Verkehrsteilnehmer",
+    "roadUsers.summaryAria": "Verteilung der Verkehrsteilnehmer dieser Kreuzung",
+    "roadUsers.segmentLabel": "{label}: {count} beteiligt, {percent}",
     "accident.category.killed": "Unfall mit Getöteten",
     "accident.category.seriouslyInjured": "Unfall mit Schwerverletzten",
     "accident.category.slightlyInjured": "Unfall mit Leichtverletzten",
@@ -594,6 +615,14 @@ const PLAUSIBILITY_LEVEL_LABELS: Record<number, string> = {
   1: "accident.plausibility.regular",
   2: "accident.plausibility.bicycle"
 };
+const ROAD_USER_DEFINITIONS: RoadUserDefinition[] = [
+  { key: "car", labelKey: "roadUser.car", read: (accident) => accident.involvesCar },
+  { key: "pedestrian", labelKey: "roadUser.pedestrian", read: (accident) => accident.involvesPedestrian },
+  { key: "bicycle", labelKey: "roadUser.bicycle", read: (accident) => accident.involvesBike },
+  { key: "motorcycle", labelKey: "roadUser.motorcycle", read: (accident) => accident.involvesMotorcycle },
+  { key: "truck", labelKey: "roadUser.truck", read: (accident) => accident.involvesTruck },
+  { key: "other", labelKey: "roadUser.other", read: (accident) => accident.involvesOther }
+];
 
 interface ClusterTableSort {
   key: ClusterSortKey;
@@ -1618,8 +1647,8 @@ function renderSelection(cluster: IntersectionCluster | null): void {
   const openStreetMapUrl = `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lon}#map=18/${lat}/${lon}`;
   const googleMapsUrl = `https://www.google.com/maps/search/?api=1&query=${lat},${lon}`;
   const streetViewUrl = googleStreetViewUrl(cluster);
-  const trendPanel = renderTrendPanel(cluster);
   const accidentRecords = clusterAccidentRecords(cluster);
+  const trendPanel = renderTrendPanel(cluster, accidentRecords);
   const recordPanel = renderSidebarAccidentRecords(accidentRecords, cluster.accidentCount);
   map.setSelectedIncidentPoints(
     accidentRecords.map(({ accident }, index) => ({
@@ -1984,14 +2013,10 @@ function codeLabel(value: number | null | undefined, labels: Record<number, stri
 }
 
 function roadUsersLabel(accident: AccidentRecord): string {
-  const flags: Array<[string, boolean | null]> = [
-    [tr("roadUser.pedestrian"), accident.involvesPedestrian],
-    [tr("roadUser.bicycle"), accident.involvesBike],
-    [tr("roadUser.motorcycle"), accident.involvesMotorcycle],
-    [tr("roadUser.car"), accident.involvesCar],
-    [tr("roadUser.truck"), accident.involvesTruck],
-    [tr("roadUser.other"), accident.involvesOther]
-  ];
+  const flags: Array<[string, boolean | null]> = ROAD_USER_DEFINITIONS.map((definition) => [
+    tr(definition.labelKey),
+    definition.read(accident)
+  ]);
   const knownFlags = flags.filter((entry): entry is [string, boolean] => entry[1] !== null);
   if (knownFlags.length === 0) {
     return tr("records.noRoadUserFields");
@@ -2054,7 +2079,7 @@ function accidentKey(accident: AccidentRecord): string {
   return `${accident.source}\0${accident.id}`;
 }
 
-function renderTrendPanel(cluster: IntersectionCluster): string {
+function renderTrendPanel(cluster: IntersectionCluster, accidentRecords: CrossingAccident[]): string {
   const years = result?.years.length ? result.years : cluster.years;
   const series = clusterTrendSeries(cluster, years);
   const trend = cluster.accidentTrend;
@@ -2073,9 +2098,127 @@ function renderTrendPanel(cluster: IntersectionCluster): string {
       <div class="trend-legend">
         <span class="legend-accidents">${escapeHtml(tr("trend.legend.accidents"))}</span>
       </div>
+      ${renderRoadUserDistribution(accidentRecords)}
       <p class="trend-note">${escapeHtml(tr("trend.note"))}</p>
     </section>
   `;
+}
+
+function renderRoadUserDistribution(records: CrossingAccident[]): string {
+  const items = roadUserSummaryItems(records);
+  if (items.length === 0) {
+    return "";
+  }
+
+  const topItem = items[0];
+  const segments = items
+    .map((item) => {
+      const percent = formatSharePercent(item.share);
+      const label = trf("roadUsers.segmentLabel", {
+        label: item.label,
+        count: formatInteger(item.count),
+        percent
+      });
+      return `
+        <span
+          class="road-user-segment road-user-${item.definition.key}"
+          style="--road-user-count: ${item.count}"
+          role="listitem"
+          aria-label="${escapeHtml(label)}"
+          title="${escapeHtml(label)}"
+        >${roadUserIcon(item.definition.key)}</span>
+      `;
+    })
+    .join("");
+  const legend = items
+    .map(
+      (item) => `
+        <span class="road-user-legend-item road-user-${item.definition.key}">
+          ${roadUserIcon(item.definition.key)}
+          <span class="road-user-legend-label">${escapeHtml(item.label)}</span>
+          <strong>${formatInteger(item.count)}</strong>
+        </span>
+      `
+    )
+    .join("");
+
+  return `
+    <div class="road-user-summary" aria-label="${escapeHtml(tr("roadUsers.summaryAria"))}">
+      <div class="road-user-heading">
+        <span>${escapeHtml(tr("roadUsers.title"))}</span>
+        <strong>${escapeHtml(topItem.label)} ${formatSharePercent(topItem.share)}</strong>
+      </div>
+      <div class="road-user-strip" role="list">${segments}</div>
+      <div class="road-user-legend">${legend}</div>
+    </div>
+  `;
+}
+
+function roadUserSummaryItems(records: CrossingAccident[]): RoadUserSummaryItem[] {
+  const counts = new Map<RoadUserKey, number>(ROAD_USER_DEFINITIONS.map((definition) => [definition.key, 0]));
+  for (const { accident } of records) {
+    for (const definition of ROAD_USER_DEFINITIONS) {
+      if (definition.read(accident) === true) {
+        counts.set(definition.key, (counts.get(definition.key) ?? 0) + 1);
+      }
+    }
+  }
+
+  const total = [...counts.values()].reduce((sum, count) => sum + count, 0);
+  if (total === 0) {
+    return [];
+  }
+
+  return ROAD_USER_DEFINITIONS.map((definition) => {
+    const count = counts.get(definition.key) ?? 0;
+    return {
+      definition,
+      label: tr(definition.labelKey),
+      count,
+      share: count / total
+    };
+  })
+    .filter((item) => item.count > 0)
+    .sort(compareRoadUserSummaryItems);
+}
+
+function compareRoadUserSummaryItems(a: RoadUserSummaryItem, b: RoadUserSummaryItem): number {
+  return b.count - a.count || roadUserOrder(a.definition.key) - roadUserOrder(b.definition.key);
+}
+
+function roadUserOrder(key: RoadUserKey): number {
+  return ROAD_USER_DEFINITIONS.findIndex((definition) => definition.key === key);
+}
+
+function roadUserIcon(key: RoadUserKey): string {
+  switch (key) {
+    case "car":
+      return svgRoadUserIcon(
+        '<path d="M5 16h14l-1.4-5.2A2.4 2.4 0 0 0 15.3 9H8.7a2.4 2.4 0 0 0-2.3 1.8L5 16Z"></path><path d="M7 16v2m10-2v2"></path><circle cx="8" cy="16" r="1.2"></circle><circle cx="16" cy="16" r="1.2"></circle><path d="M7.2 12h9.6"></path>'
+      );
+    case "pedestrian":
+      return svgRoadUserIcon(
+        '<circle cx="12" cy="5" r="2"></circle><path d="M12 7v6m0 0-4 7m4-7 4 7m-5-9-4 2m5-2 4 2"></path>'
+      );
+    case "bicycle":
+      return svgRoadUserIcon(
+        '<circle cx="6" cy="17" r="3"></circle><circle cx="18" cy="17" r="3"></circle><path d="M8.5 17 11 11h3l2 6m-5-6-2-3m5 3 3-2m-6 2 5 6"></path>'
+      );
+    case "motorcycle":
+      return svgRoadUserIcon(
+        '<circle cx="6" cy="17" r="3"></circle><circle cx="18" cy="17" r="3"></circle><path d="M7 17h5l2.5-4H18l2 4m-8-4-2-3h3m2 0h3"></path>'
+      );
+    case "truck":
+      return svgRoadUserIcon(
+        '<path d="M3 8h11v8H3Z"></path><path d="M14 11h4l3 3v2h-7Z"></path><circle cx="7" cy="17" r="1.5"></circle><circle cx="17" cy="17" r="1.5"></circle>'
+      );
+    case "other":
+      return svgRoadUserIcon('<path d="M12 3 21 8v8l-9 5-9-5V8l9-5Z"></path><path d="M12 9v3"></path><path d="M12 16h.01"></path>');
+  }
+}
+
+function svgRoadUserIcon(paths: string): string {
+  return `<svg class="road-user-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">${paths}</svg>`;
 }
 
 function clusterTrendSeries(cluster: IntersectionCluster, years: number[]): ClusterYearStat[] {
@@ -2098,14 +2241,28 @@ function renderTrendChart(series: ClusterYearStat[], direction: AccidentTrendDir
     return "";
   }
 
-  const chart = { left: 24, top: 12, width: 232, height: 80, bottom: 92 };
+  const chart = { left: 38, top: 12, width: 218, height: 80, bottom: 92 };
   const maxAccidents = Math.max(1, ...series.map((point) => point.accidentCount));
+  const yAxisTicks = uniqueNumbers([0, Math.ceil(maxAccidents / 2), maxAccidents]).sort((a, b) => b - a);
 
   const plotted = series.map((point, index): TrendSeriesPoint => {
     const x = series.length === 1 ? chart.left + chart.width / 2 : chart.left + (index / (series.length - 1)) * chart.width;
     const accidentY = chart.bottom - (point.accidentCount / maxAccidents) * chart.height;
     return { ...point, x, accidentY };
   });
+  const yAxisGrid = yAxisTicks
+    .filter((value) => value > 0)
+    .map((value) => {
+      const y = chart.bottom - (value / maxAccidents) * chart.height;
+      return `<line class="chart-grid" x1="${chart.left}" y1="${round(y, 1)}" x2="${chart.left + chart.width}" y2="${round(y, 1)}"></line>`;
+    })
+    .join("");
+  const yAxisLabels = yAxisTicks
+    .map((value) => {
+      const y = chart.bottom - (value / maxAccidents) * chart.height;
+      return `<text class="chart-y-label" x="${chart.left - 7}" y="${round(y, 1)}" dy="0.35em">${escapeHtml(formatInteger(value))}</text>`;
+    })
+    .join("");
   const accidentPath = linePath(plotted.map((point) => ({ x: point.x, y: point.accidentY })));
   const yearLabels = plotted
     .map((point) => `<text class="chart-year" x="${round(point.x, 1)}" y="126">${point.year}</text>`)
@@ -2123,14 +2280,19 @@ function renderTrendChart(series: ClusterYearStat[], direction: AccidentTrendDir
     <svg class="trend-chart" viewBox="0 0 280 136" role="img" aria-label="${escapeHtml(
       trf("trend.chartAria", { direction: trendDirectionLabel(direction).toLowerCase() })
     )}">
-      <line class="chart-grid" x1="24" y1="12" x2="256" y2="12"></line>
-      <line class="chart-grid" x1="24" y1="52" x2="256" y2="52"></line>
-      <line class="chart-axis" x1="24" y1="92" x2="256" y2="92"></line>
+      ${yAxisGrid}
+      <line class="chart-axis" x1="${chart.left}" y1="${chart.top}" x2="${chart.left}" y2="${chart.bottom}"></line>
+      <line class="chart-axis" x1="${chart.left}" y1="${chart.bottom}" x2="${chart.left + chart.width}" y2="${chart.bottom}"></line>
+      ${yAxisLabels}
       ${accidentPath ? `<path class="chart-line chart-line-accidents" d="${accidentPath}"></path>` : ""}
       ${accidentDots}
       ${yearLabels}
     </svg>
   `;
+}
+
+function uniqueNumbers(values: number[]): number[] {
+  return [...new Set(values)];
 }
 
 function linePath(points: Array<{ x: number; y: number }>): string {
@@ -2546,6 +2708,10 @@ function formatNumber(value: number): string {
 
 function formatSignedPercent(value: number): string {
   return `${value > 0 ? "+" : ""}${new Intl.NumberFormat(NUMBER_LOCALE, { maximumFractionDigits: 1 }).format(value * 100)}%`;
+}
+
+function formatSharePercent(value: number): string {
+  return `${new Intl.NumberFormat(NUMBER_LOCALE, { maximumFractionDigits: 0 }).format(value * 100)}%`;
 }
 
 function formatSeverityPercent(source: SeverityPercentSource): string {

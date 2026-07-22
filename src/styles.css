@@ -1182,6 +1182,12 @@ select {
   text-anchor: middle;
 }
 
+.chart-y-label {
+  fill: #53636d;
+  font-size: 10px;
+  text-anchor: end;
+}
+
 .trend-legend {
   display: flex;
   flex-wrap: wrap;
@@ -1211,6 +1217,113 @@ select {
 .trend-note {
   margin: 0;
   line-height: 1.35;
+}
+
+.road-user-summary {
+  display: grid;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.road-user-heading {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.road-user-heading span {
+  color: #53636d;
+  font-size: 0.82rem;
+}
+
+.road-user-heading strong {
+  color: #172126;
+  font-size: 0.86rem;
+}
+
+.road-user-strip {
+  display: flex;
+  height: 34px;
+  overflow: hidden;
+  border: 1px solid #d7ddd7;
+  border-radius: 7px;
+  background: #eef2ef;
+}
+
+.road-user-segment {
+  display: grid;
+  flex: var(--road-user-count) 1 0;
+  min-width: 26px;
+  place-items: center;
+  border-right: 1px solid rgba(255, 255, 255, 0.56);
+  background: var(--road-user-color);
+  color: #ffffff;
+}
+
+.road-user-segment:last-child {
+  border-right: 0;
+}
+
+.road-user-icon {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
+.road-user-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+}
+
+.road-user-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #53636d;
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+.road-user-legend-item .road-user-icon {
+  width: 15px;
+  height: 15px;
+  color: var(--road-user-color);
+}
+
+.road-user-legend-item strong {
+  color: #172126;
+  font-size: 0.78rem;
+}
+
+.road-user-car {
+  --road-user-color: #425b70;
+}
+
+.road-user-pedestrian {
+  --road-user-color: #7c4d12;
+}
+
+.road-user-bicycle {
+  --road-user-color: #166b6d;
+}
+
+.road-user-motorcycle {
+  --road-user-color: #8b3f7a;
+}
+
+.road-user-truck {
+  --road-user-color: #b9392b;
+}
+
+.road-user-other {
+  --road-user-color: #53636d;
 }
 
 .table-shell {
