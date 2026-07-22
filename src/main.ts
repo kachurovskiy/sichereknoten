@@ -103,6 +103,7 @@ const FACTSHEET_PAGE_HEIGHT = 1754;
 const FACTSHEET_MARGIN = 64;
 const FACTSHEET_BOTTOM_MARGIN = 96;
 const FACTSHEET_CONTENT_WIDTH = FACTSHEET_PAGE_WIDTH - FACTSHEET_MARGIN * 2;
+const FACTSHEET_INCIDENT_LINK_TOP_GAP = 18;
 const OSM_TILE_URL_TEMPLATE = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
 const PROJECT_REPOSITORY_URL = "https://github.com/kachurovskiy/sichereknoten";
 const PROJECT_REPOSITORY_LABEL = "kachurovskiy/sichereknoten";
@@ -1928,11 +1929,7 @@ function pressSearchUrlForCluster(cluster: IntersectionCluster, records: Crossin
     "Unfall",
     cluster.fatalCount > 0 ? "toedlicher Unfall" : cluster.seriousCount > 0 ? "schwer verletzt" : "Verkehrsunfall",
     latestRecord ? accidentSearchDateLabel(latestRecord) : null,
-    clusterLocationText(cluster),
-    cluster.districtName,
-    cluster.administrativeRegionName,
-    cluster.stateName,
-    `${cluster.lat.toFixed(5)}, ${cluster.lon.toFixed(5)}`
+    pressSearchPlaceName(cluster)
   ].filter((part): part is string => Boolean(part));
   return googleSearchUrl(queryParts);
 }
@@ -1942,16 +1939,22 @@ function pressSearchUrlForAccident(accident: AccidentRecord): string {
     "Unfall",
     pressSeveritySearchTerm(accident),
     accidentSearchDateLabel(accident),
-    accident.municipalityName,
-    accident.districtName,
-    accident.stateName,
-    roadUserSearchTerms(accident)
+    pressSearchPlaceName(accident)
   ].filter((part): part is string => Boolean(part));
   return googleSearchUrl(queryParts);
 }
 
 function googleSearchUrl(queryParts: string[]): string {
   return `https://www.google.com/search?q=${encodeURIComponent(queryParts.join(" "))}`;
+}
+
+function pressSearchPlaceName(location: {
+  municipalityName: string | null;
+  districtName: string | null;
+  administrativeRegionName: string | null;
+  stateName: string;
+}): string {
+  return location.municipalityName ?? location.districtName ?? location.administrativeRegionName ?? location.stateName;
 }
 
 function accidentSearchDateLabel(accident: AccidentRecord): string {
@@ -1975,17 +1978,6 @@ function pressSeveritySearchTerm(accident: AccidentRecord): string {
     default:
       return "Verkehrsunfall";
   }
-}
-
-function roadUserSearchTerms(accident: AccidentRecord): string | null {
-  const terms = [
-    accident.involvesCar ? "Pkw" : null,
-    accident.involvesPedestrian ? "Fussgaenger" : null,
-    accident.involvesBike ? "Fahrrad" : null,
-    accident.involvesMotorcycle ? "Motorrad" : null,
-    accident.involvesTruck ? "Lkw" : null
-  ].filter((term): term is string => Boolean(term));
-  return terms.length ? terms.join(" ") : null;
 }
 
 function scheduleMapRefresh(): void {
@@ -3142,6 +3134,7 @@ function drawFactsheetAccidentDetails(layout: FactsheetLayout, records: Crossing
       layout,
       accidentRecordRows(accident, distanceMeters).map((row) => [row.label, row.value])
     );
+    layout.y += FACTSHEET_INCIDENT_LINK_TOP_GAP;
     drawFactsheetLinkRow(layout, tr("press.label"), pressSearchUrlForAccident(accident), tr("press.searchIncident"));
     layout.y += 16;
   });
