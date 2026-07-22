@@ -271,9 +271,11 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "map.openOsm": "Open in OpenStreetMap",
     "map.openGoogleMaps": "Open in Google Maps",
     "map.openStreetView": "Open Street View",
+    "map.searchResponsibleAuthority": "Search responsible authority",
     "map.labelOsm": "OpenStreetMap",
     "map.labelGoogleMaps": "Google Maps",
     "map.labelStreetView": "Street View",
+    "map.labelResponsibleAuthority": "Authority",
     "records.title": "Known accident records",
     "records.countOf": "{shown} of {total}",
     "records.empty": "No matching source accident records were found near this intersection.",
@@ -559,9 +561,11 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "map.openOsm": "In OpenStreetMap öffnen",
     "map.openGoogleMaps": "In Google Maps öffnen",
     "map.openStreetView": "Street View öffnen",
+    "map.searchResponsibleAuthority": "Zuständige Behörde suchen",
     "map.labelOsm": "OpenStreetMap",
     "map.labelGoogleMaps": "Google Maps",
     "map.labelStreetView": "Street View",
+    "map.labelResponsibleAuthority": "Behörde",
     "records.title": "Bekannte Unfalldatensätze",
     "records.countOf": "{shown} von {total}",
     "records.empty": "In der Nähe dieser Kreuzung wurden keine passenden Quelldatensätze gefunden.",
@@ -1785,6 +1789,7 @@ function renderSelection(cluster: IntersectionCluster | null): void {
   const openStreetMapUrl = openStreetMapUrlForCluster(cluster);
   const googleMapsUrl = googleMapsUrlForCluster(cluster);
   const streetViewUrl = googleStreetViewUrl(cluster);
+  const authoritySearchUrl = responsibleAuthoritySearchUrlForCluster(cluster);
   const accidentRecords = clusterAccidentRecords(cluster);
   const trendPanel = renderTrendPanel(cluster, accidentRecords);
   const recordPanel = renderSidebarAccidentRecords(accidentRecords, cluster.accidentCount);
@@ -1809,7 +1814,7 @@ function renderSelection(cluster: IntersectionCluster | null): void {
       <div><dt>${escapeHtml(tr("details.severityPercent"))}</dt><dd>${formatSeverityPercent(cluster)}</dd></div>
       <div><dt>${escapeHtml(tr("details.vulnerableUsers"))}</dt><dd>${formatInteger(cluster.vulnerableCount)}</dd></div>
     </dl>
-    ${renderMapServiceActions(openStreetMapUrl, googleMapsUrl, streetViewUrl)}
+    ${renderMapServiceActions(openStreetMapUrl, googleMapsUrl, streetViewUrl, authoritySearchUrl)}
     ${trendPanel}
     ${recordPanel}
   `;
@@ -1881,6 +1886,22 @@ function googleStreetViewUrl(cluster: IntersectionCluster): string {
   return `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${lat},${lon}`;
 }
 
+function responsibleAuthoritySearchUrlForCluster(cluster: IntersectionCluster): string {
+  const queryParts = [
+    "zuständige Straßenverkehrsbehörde",
+    "Unfallkommission",
+    "Verkehrssicherheit",
+    "Unfallhäufungsstelle",
+    "Kreuzung",
+    cluster.municipalityName,
+    cluster.districtName,
+    cluster.administrativeRegionName,
+    cluster.stateName,
+    `${cluster.lat.toFixed(5)}, ${cluster.lon.toFixed(5)}`
+  ].filter((part): part is string => Boolean(part));
+  return `https://www.google.com/search?q=${encodeURIComponent(queryParts.join(" "))}`;
+}
+
 function scheduleMapRefresh(): void {
   window.requestAnimationFrame(() => {
     if (mobileLayout.matches && activeView !== "map") {
@@ -1890,12 +1911,18 @@ function scheduleMapRefresh(): void {
   });
 }
 
-function renderMapServiceActions(openStreetMapUrl: string, googleMapsUrl: string, streetViewUrl: string): string {
+function renderMapServiceActions(
+  openStreetMapUrl: string,
+  googleMapsUrl: string,
+  streetViewUrl: string,
+  authoritySearchUrl: string
+): string {
   return `
     <div class="selected-map-actions" aria-label="${escapeHtml(tr("aria.openMapServices"))}">
       ${mapServiceLink(openStreetMapUrl, tr("map.openOsm"), tr("map.labelOsm"))}
       ${mapServiceLink(googleMapsUrl, tr("map.openGoogleMaps"), tr("map.labelGoogleMaps"))}
       ${mapServiceLink(streetViewUrl, tr("map.openStreetView"), tr("map.labelStreetView"))}
+      ${mapServiceLink(authoritySearchUrl, tr("map.searchResponsibleAuthority"), tr("map.labelResponsibleAuthority"))}
     </div>
   `;
 }
