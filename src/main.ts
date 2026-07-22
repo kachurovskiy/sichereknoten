@@ -619,6 +619,7 @@ let accidentKeyLookupCache: AccidentKeyLookupCache | null = null;
 let isStreetViewOpen = readStoredStreetViewOpen();
 let activeView: ViewKey = "map";
 let loadingStatusKind: LoadingStatusKind = "normal";
+let mobileStreetViewWasBackgrounded = false;
 
 const elements = {
   app: byId<HTMLDivElement>("app"),
@@ -793,6 +794,10 @@ function wireEvents(): void {
   elements.mobileSettingsTab.addEventListener("click", () => setView("settings"));
   document.addEventListener("click", closeMobileMoreMenuOnOutsideClick);
   document.addEventListener("keydown", closeMobileMoreMenuOnEscape);
+  document.addEventListener("visibilitychange", handleVisibilityChange);
+  window.addEventListener("pagehide", markMobileStreetViewBackgrounded);
+  window.addEventListener("pageshow", handlePageShow);
+  window.addEventListener("focus", handleWindowFocus);
   mobileLayout.addEventListener("change", () => {
     if (!mobileLayout.matches && isMobilePaneView(activeView)) {
       setView("map");
@@ -1638,6 +1643,46 @@ function toggleStreetViewPanel(): void {
   isStreetViewOpen = !isStreetViewOpen;
   writeStoredStreetViewOpen(isStreetViewOpen);
   updateStreetViewPanel();
+}
+
+function handleVisibilityChange(): void {
+  if (document.visibilityState === "hidden") {
+    markMobileStreetViewBackgrounded();
+    return;
+  }
+  restoreMobileStreetViewReturn();
+}
+
+function handlePageShow(): void {
+  restoreMobileStreetViewReturn();
+}
+
+function handleWindowFocus(): void {
+  restoreMobileStreetViewReturn();
+}
+
+function markMobileStreetViewBackgrounded(): void {
+  if (mobileLayout.matches && activeView === "street") {
+    mobileStreetViewWasBackgrounded = true;
+  }
+}
+
+function restoreMobileStreetViewReturn(): void {
+  if (!mobileStreetViewWasBackgrounded || !mobileLayout.matches || activeView !== "street") {
+    mobileStreetViewWasBackgrounded = false;
+    return;
+  }
+
+  mobileStreetViewWasBackgrounded = false;
+  if (!selectedCluster) {
+    setView("map");
+    return;
+  }
+
+  isStreetViewOpen = false;
+  writeStoredStreetViewOpen(false);
+  clearStreetViewFrame();
+  setView("details");
 }
 
 function updateStreetViewPanel(): void {
