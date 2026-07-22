@@ -47,50 +47,529 @@ type SeverityFilterKey = "fatal" | "serious" | "other";
 type ViewKey = "explore" | "map" | "details" | "street" | "state" | "table" | "settings";
 type SelectionReason = "auto" | "program" | "user";
 type HotspotMetricPlacement = "header" | "stats";
+type AppLocale = "en" | "de";
+type LoadingStatusKind = "normal" | "problem" | "idle";
 const LOADING_STEP_ORDER: LoadingStepKey[] = ["cache", "parse", "analyze"];
 const MOBILE_LAYOUT_QUERY = "(max-width: 640px)";
 const APP_CACHE_VERSION =
   typeof __SICHERE_KNOTEN_APP_VERSION__ === "string" ? __SICHERE_KNOTEN_APP_VERSION__ : "dev-parallel-analysis";
 const STREET_VIEW_OPEN_STORAGE_KEY = "sichere-knoten:street-view-open";
+const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
+  en: {
+    "document.title": "Sichere Knoten",
+    "loading.preparing": "Preparing data",
+    "loading.checkingBundled": "Checking bundled accident data.",
+    "loading.bundle": "Automatic offline bundle",
+    "loading.step.cache": "Cache",
+    "loading.step.parse": "Parse",
+    "loading.step.analyze": "Analyze",
+    "loading.title.problem": "Data load issue",
+    "loading.title.idle": "No results yet",
+    "loading.title.noMatches": "No matching intersections",
+    "loading.title.ready": "Analysis ready",
+    "loading.title.cache": "Checking data cache",
+    "loading.title.parse": "Parsing accident records",
+    "loading.title.analyze": "Analyzing intersections",
+    "aria.sidebar": "Application sidebar",
+    "aria.toolbar": "Workspace toolbar",
+    "aria.views": "Views",
+    "aria.mapControls": "Map display controls",
+    "aria.map": "Dangerous intersections map",
+    "aria.selectedDetails": "Selected intersection details",
+    "aria.openMapServices": "Open selected intersection in map services",
+    "aria.loadingSteps": "Loading steps",
+    "brand.description": "Explore German accident data to identify high-risk intersections by severity, location, and year.",
+    "browse.title": "Browse by state",
+    "field.state": "State",
+    "field.accidentOutcome": "Accident outcome",
+    "option.allStates": "All states",
+    "tab.browse": "Browse",
+    "tab.map": "Map",
+    "tab.details": "Details",
+    "tab.streetView": "Street View",
+    "tab.moreViews": "More views",
+    "tab.state": "State",
+    "tab.intersections": "Intersections",
+    "tab.settings": "Settings",
+    "severity.fatal": "Fatal",
+    "severity.serious": "Serious",
+    "severity.light": "Light",
+    "severity.other": "Other",
+    "severity.unknown": "Unknown",
+    "action.findNearby": "Find nearby intersections",
+    "action.centerLocation": "Center map on your location",
+    "action.show": "Show",
+    "action.hide": "Hide",
+    "action.reloadData": "Reload data",
+    "action.clear": "Clear",
+    "action.exportCsv": "Export CSV",
+    "action.analyze": "Analyze",
+    "action.analyzeChanges": "Analyze changes",
+    "streetView.title": "Google Street View",
+    "streetView.empty": "Select an intersection to show Street View.",
+    "streetView.near": "Google Street View near {lat}, {lon}",
+    "details.title": "Selected intersection",
+    "details.none": "No intersection selected.",
+    "details.selectFirst": "Select an intersection first.",
+    "details.state": "State",
+    "details.coordinates": "Coordinates",
+    "details.years": "Years",
+    "details.accidents": "Accidents",
+    "details.fatalSerious": "Fatal / serious",
+    "details.harmPercent": "Harm %",
+    "details.vulnerableUsers": "Vulnerable users",
+    "metric.harmPercent": "Harm %",
+    "metric.harm": "Harm",
+    "unit.perYear": "/yr",
+    "table.state": "State",
+    "table.accidents": "Accidents",
+    "table.clusters": "Clusters",
+    "table.topCluster": "Top cluster",
+    "table.location": "Location",
+    "table.sorted": "{label} sorted {direction}",
+    "table.sort.asc": "ascending",
+    "table.sort.desc": "descending",
+    "table.sort.none": "none",
+    "settings.data": "Data",
+    "settings.dataNote": "Bundled CSV accident data loads automatically from the offline data bundle.",
+    "settings.accidentData": "Accident data:",
+    "settings.statsOffices": "/ Federal and state statistical offices.",
+    "settings.reusedUnder": "Reused under",
+    "settings.licenseNote": "/ dl-de/by-2-0. Source data is processed, clustered, and analyzed by this app.",
+    "settings.repository": "Project repository:",
+    "settings.metricTitle": "Harm % metric",
+    "settings.fatalWeight": "Fatal accident weight",
+    "settings.seriousWeight": "Serious accident weight",
+    "settings.fullSample": "Full sample accidents",
+    "settings.trendDeadZone": "Trend dead zone (%/yr)",
+    "settings.trendFullSignal": "Full trend signal (%/yr)",
+    "settings.maxTrendAdjustment": "Max trend adjustment (%)",
+    "settings.metricCap": "Metric cap (%)",
+    "settings.analysis": "Analysis",
+    "settings.clusterRadius": "Cluster radius (m)",
+    "settings.clusterRadiusMeters": "Cluster radius in meters",
+    "settings.minAccidents": "Minimum accidents",
+    "settings.topRows": "Top rows",
+    "settings.yearFilters": "Year filters",
+    "settings.aboutHarm": "About Harm %",
+    "settings.whatMeasures": "What it measures",
+    "settings.whatMeasuresText":
+      "Harm % is a weighted share of severe outcomes at an inferred intersection. By default: <code>(fatal + serious / 2) / total</code>. Fatal accidents count once, serious-injury accidents count as half, and all accidents at the intersection form the denominator.",
+    "settings.discountText":
+      "Low accident totals are discounted, and the accident trend adjusts the result gradually once the yearly change is large enough to matter.",
+    "settings.whyFocus": "Why this focus",
+    "settings.whyFocusText1":
+      "We do not have reliable traffic volume data for each intersection. Intersections with many recorded incidents are therefore not automatically the worst places; they may simply be very highly loaded.",
+    "settings.whyFocusText2":
+      "The metric focuses on dangerous intersections where potential harm is higher, using fatal and serious-injury outcomes to separate severe locations from merely busy ones.",
+    "status.settingsChanged": "Settings changed. Click Analyze to update results.",
+    "status.checkingParsedCache": "Checking parsed data cache.",
+    "status.loadingCachedAccidents": "Loading cached accidents {current}/{total}.",
+    "status.cacheMissParsingBundled": "Cache miss. Parsing bundled CSV files.",
+    "status.parsingLabel": "Parsing {label}",
+    "status.accidentsLoadedFromCache": "{count} accidents loaded from cache.",
+    "status.accidentRecordsLoaded": "{count} accident records loaded.",
+    "status.parsedDataCached": "Parsed data cached for future refreshes.",
+    "status.cachingParsedAccidents": "Caching parsed accidents {current}/{total}.",
+    "status.parsedDataCacheWriteSkipped": "Parsed data loaded. Cache write skipped: {error}",
+    "status.loadDataFirst": "Load accident data first.",
+    "status.checkingAnalysisCache": "Checking analysis cache.",
+    "status.intersectionClustersLoadedFromCache": "{count} intersection clusters loaded from cache.",
+    "status.analyzingIntersections": "Analyzing intersections.",
+    "status.cachingAnalysisResult": "Caching analysis result.",
+    "status.intersectionClustersAnalyzed": "{count} intersection clusters analyzed.",
+    "status.geolocationUnavailable": "Browser geolocation is not available on this page.",
+    "status.requestingLocation": "Requesting your browser location.",
+    "status.nearestIntersection":
+      "Showing nearest visible dangerous intersection ({distance} away, {accuracy} m location accuracy).",
+    "status.centeredNoMatch":
+      "Centered map on your location ({accuracy} m accuracy). No visible dangerous intersection matched the active filters.",
+    "status.centeredLocation": "Centered map on your location ({accuracy} m accuracy).",
+    "status.locationDenied": "Location permission was denied.",
+    "status.locationUnavailable": "Your location is currently unavailable.",
+    "status.locationTimedOut": "Location request timed out.",
+    "status.locationFailed": "Could not get your location.",
+    "status.noSeverityNearby": "No intersections match the active severity filters near this location.",
+    "status.stateHotspotsPending": "State hotspots will appear after the data loads.",
+    "status.noAnalysisMatches": "No intersections match the active analysis settings.",
+    "status.dataCleared": "Data cleared. Use Reload data to load bundled files again.",
+    "status.noClustersToExport": "No analyzed clusters to export.",
+    "status.bundleLoadFailed":
+      "Could not load {path}. The docs/data files must sit next to docs/index.html. Some browsers block automatic file:// reads; GitHub Pages or any static host will work. {errors}",
+    "status.localReadBlocked": "local read blocked",
+    "label.away": "{distance} away",
+    "noun.accident.one": "accident",
+    "noun.accident.other": "accidents",
+    "map.openOsm": "Open in OpenStreetMap",
+    "map.openGoogleMaps": "Open in Google Maps",
+    "records.title": "Known accident records",
+    "records.countOf": "{shown} of {total}",
+    "records.empty": "No matching source accident records were found near this intersection.",
+    "records.category": "Category",
+    "records.kind": "Kind",
+    "records.type": "Type",
+    "records.light": "Light",
+    "records.surface": "Surface",
+    "records.roadUsers": "Road users",
+    "records.area": "Area",
+    "records.coordinates": "Coordinates",
+    "records.locationCheck": "Location check",
+    "records.distance": "Distance",
+    "records.recordId": "Record ID",
+    "records.source": "Source",
+    "records.unknownYear": "Unknown year",
+    "records.unknownCode": "Unknown code",
+    "records.noRoadUserFields": "No road-user fields",
+    "records.yes": "yes",
+    "records.no": "no",
+    "records.adminRegion": "administrative region {code}",
+    "records.district": "district {code}",
+    "records.municipality": "municipality {code}",
+    "records.serial": "serial {serial}",
+    "records.categoryNumber": "Category {category}",
+    "roadUser.pedestrian": "Pedestrian",
+    "roadUser.bicycle": "Bicycle",
+    "roadUser.motorcycle": "Motorcycle",
+    "roadUser.car": "Passenger car",
+    "roadUser.truck": "Goods road vehicle",
+    "roadUser.other": "Other means of transport",
+    "accident.category.killed": "Accident with persons killed",
+    "accident.category.seriouslyInjured": "Accident with seriously injured",
+    "accident.category.slightlyInjured": "Accident with slightly injured",
+    "accident.kind.other": "Accident of another kind",
+    "accident.kind.startsStopsStationary": "Collision with another vehicle which starts, stops, or is stationary",
+    "accident.kind.movingAheadWaiting": "Collision with another vehicle moving ahead or waiting",
+    "accident.kind.lateralSameDirection": "Collision with another vehicle moving laterally in the same direction",
+    "accident.kind.oncoming": "Collision with another oncoming vehicle",
+    "accident.kind.turnsOrCrosses": "Collision with another vehicle which turns into or crosses a road",
+    "accident.kind.pedestrian": "Collision between vehicle and pedestrian",
+    "accident.kind.obstacle": "Collision with an obstacle in the carriageway",
+    "accident.kind.leavingRight": "Leaving the carriageway to the right",
+    "accident.kind.leavingLeft": "Leaving the carriageway to the left",
+    "accident.type.driving": "Driving accident",
+    "accident.type.turningOff": "Accident caused by turning off the road",
+    "accident.type.turningIntoCrossing": "Accident caused by turning into a road or by crossing it",
+    "accident.type.crossingRoad": "Accident caused by crossing the road",
+    "accident.type.stationaryTraffic": "Accident involving stationary traffic",
+    "accident.type.sameCarriageway": "Accident between vehicles moving along in carriageway",
+    "accident.type.other": "Other accident",
+    "accident.light.daylight": "Daylight",
+    "accident.light.twilight": "Twilight",
+    "accident.light.darkness": "Darkness",
+    "accident.surface.dry": "Dry",
+    "accident.surface.wet": "Wet, damp, or slippery",
+    "accident.surface.winter": "Slippery, winter conditions",
+    "accident.plausibility.regular": "Successful location check, regular proceedings",
+    "accident.plausibility.bicycle": "Successful location check, advanced bicycle proceedings",
+    "month.1": "Jan",
+    "month.2": "Feb",
+    "month.3": "Mar",
+    "month.4": "Apr",
+    "month.5": "May",
+    "month.6": "Jun",
+    "month.7": "Jul",
+    "month.8": "Aug",
+    "month.9": "Sep",
+    "month.10": "Oct",
+    "month.11": "Nov",
+    "month.12": "Dec",
+    "weekday.1": "Sunday",
+    "weekday.2": "Monday",
+    "weekday.3": "Tuesday",
+    "weekday.4": "Wednesday",
+    "weekday.5": "Thursday",
+    "weekday.6": "Friday",
+    "weekday.7": "Saturday",
+    "trend.title": "Accident trend",
+    "trend.aria": "Selected intersection trend",
+    "trend.latest": "{count} latest",
+    "trend.legend.accidents": "Accidents",
+    "trend.note": "Selected years with no accidents count as zero.",
+    "trend.chartAria": "Accident trend, {direction}",
+    "trend.dotTitle": "{year}: {count} accidents",
+    "trend.falling": "Falling",
+    "trend.rising": "Rising",
+    "trend.stable": "Stable",
+    "trend.unknown": "No trend"
+  },
+  de: {
+    "document.title": "Sichere Knoten",
+    "loading.preparing": "Daten werden vorbereitet",
+    "loading.checkingBundled": "Gebündelte Unfalldaten werden geprüft.",
+    "loading.bundle": "Automatisches Offline-Paket",
+    "loading.step.cache": "Cache",
+    "loading.step.parse": "Einlesen",
+    "loading.step.analyze": "Analyse",
+    "loading.title.problem": "Problem beim Laden",
+    "loading.title.idle": "Noch keine Ergebnisse",
+    "loading.title.noMatches": "Keine passenden Kreuzungen",
+    "loading.title.ready": "Analyse bereit",
+    "loading.title.cache": "Datencache wird geprüft",
+    "loading.title.parse": "Unfalldatensätze werden eingelesen",
+    "loading.title.analyze": "Kreuzungen werden analysiert",
+    "aria.sidebar": "Anwendungsseitenleiste",
+    "aria.toolbar": "Arbeitsbereich-Werkzeugleiste",
+    "aria.views": "Ansichten",
+    "aria.mapControls": "Kartendarstellung",
+    "aria.map": "Karte gefährlicher Kreuzungen",
+    "aria.selectedDetails": "Details zur ausgewählten Kreuzung",
+    "aria.openMapServices": "Ausgewählte Kreuzung in Kartendiensten öffnen",
+    "aria.loadingSteps": "Ladeschritte",
+    "brand.description": "Erkunde deutsche Unfalldaten, um gefährliche Kreuzungen nach Schwere, Ort und Jahr zu erkennen.",
+    "browse.title": "Nach Bundesland suchen",
+    "field.state": "Bundesland",
+    "field.accidentOutcome": "Unfallfolge",
+    "option.allStates": "Alle Bundesländer",
+    "tab.browse": "Suche",
+    "tab.map": "Karte",
+    "tab.details": "Details",
+    "tab.streetView": "Street View",
+    "tab.moreViews": "Weitere Ansichten",
+    "tab.state": "Bundesland",
+    "tab.intersections": "Kreuzungen",
+    "tab.settings": "Einstellungen",
+    "severity.fatal": "Tödlich",
+    "severity.serious": "Schwer",
+    "severity.light": "Leicht",
+    "severity.other": "Andere",
+    "severity.unknown": "Unbekannt",
+    "action.findNearby": "Kreuzungen in der Nähe finden",
+    "action.centerLocation": "Karte auf deinen Standort zentrieren",
+    "action.show": "Anzeigen",
+    "action.hide": "Ausblenden",
+    "action.reloadData": "Daten neu laden",
+    "action.clear": "Leeren",
+    "action.exportCsv": "CSV exportieren",
+    "action.analyze": "Analysieren",
+    "action.analyzeChanges": "Änderungen analysieren",
+    "streetView.title": "Google Street View",
+    "streetView.empty": "Wähle eine Kreuzung aus, um Street View anzuzeigen.",
+    "streetView.near": "Google Street View nahe {lat}, {lon}",
+    "details.title": "Ausgewählte Kreuzung",
+    "details.none": "Keine Kreuzung ausgewählt.",
+    "details.selectFirst": "Wähle zuerst eine Kreuzung aus.",
+    "details.state": "Bundesland",
+    "details.coordinates": "Koordinaten",
+    "details.years": "Jahre",
+    "details.accidents": "Unfälle",
+    "details.fatalSerious": "Tödlich / schwer",
+    "details.harmPercent": "Harm %",
+    "details.vulnerableUsers": "Ungeschützte Verkehrsteilnehmer",
+    "metric.harmPercent": "Harm %",
+    "metric.harm": "Harm",
+    "unit.perYear": "/Jahr",
+    "table.state": "Bundesland",
+    "table.accidents": "Unfälle",
+    "table.clusters": "Cluster",
+    "table.topCluster": "Größter Cluster",
+    "table.location": "Ort",
+    "table.sorted": "{label} sortiert {direction}",
+    "table.sort.asc": "aufsteigend",
+    "table.sort.desc": "absteigend",
+    "table.sort.none": "nicht",
+    "settings.data": "Daten",
+    "settings.dataNote": "Gebündelte CSV-Unfalldaten werden automatisch aus dem Offline-Datenpaket geladen.",
+    "settings.accidentData": "Unfalldaten:",
+    "settings.statsOffices": "/ Statistische Ämter des Bundes und der Länder.",
+    "settings.reusedUnder": "Weiterverwendet unter",
+    "settings.licenseNote": "/ dl-de/by-2-0. Die Quelldaten werden von dieser App verarbeitet, geclustert und analysiert.",
+    "settings.repository": "Projekt-Repository:",
+    "settings.metricTitle": "Harm-%-Metrik",
+    "settings.fatalWeight": "Gewicht tödlicher Unfälle",
+    "settings.seriousWeight": "Gewicht schwerer Unfälle",
+    "settings.fullSample": "Volle Stichprobengröße",
+    "settings.trendDeadZone": "Trend-Toleranzzone (%/Jahr)",
+    "settings.trendFullSignal": "Volles Trendsignal (%/Jahr)",
+    "settings.maxTrendAdjustment": "Maximale Trendanpassung (%)",
+    "settings.metricCap": "Metrik-Obergrenze (%)",
+    "settings.analysis": "Analyse",
+    "settings.clusterRadius": "Cluster-Radius (m)",
+    "settings.clusterRadiusMeters": "Cluster-Radius in Metern",
+    "settings.minAccidents": "Mindestanzahl Unfälle",
+    "settings.topRows": "Top-Zeilen",
+    "settings.yearFilters": "Jahresfilter",
+    "settings.aboutHarm": "Über Harm %",
+    "settings.whatMeasures": "Was gemessen wird",
+    "settings.whatMeasuresText":
+      "Harm % ist der gewichtete Anteil schwerer Folgen an einer abgeleiteten Kreuzung. Standardmäßig gilt: <code>(tödlich + schwer / 2) / gesamt</code>. Tödliche Unfälle zählen einfach, Unfälle mit Schwerverletzten halb, und alle Unfälle an der Kreuzung bilden den Nenner.",
+    "settings.discountText":
+      "Niedrige Unfallzahlen werden abgeschwächt, und der Unfalltrend passt das Ergebnis erst dann schrittweise an, wenn die jährliche Veränderung groß genug ist.",
+    "settings.whyFocus": "Warum dieser Fokus",
+    "settings.whyFocusText1":
+      "Wir haben keine verlässlichen Verkehrsstärkedaten für jede Kreuzung. Kreuzungen mit vielen registrierten Vorfällen sind deshalb nicht automatisch die gefährlichsten Orte; sie können einfach sehr stark belastet sein.",
+    "settings.whyFocusText2":
+      "Die Metrik fokussiert gefährliche Kreuzungen mit höherem Schadenspotenzial und nutzt tödliche sowie schwere Unfallfolgen, um schwere Orte von nur stark befahrenen Orten zu trennen.",
+    "status.settingsChanged": "Einstellungen geändert. Klicke auf Analysieren, um die Ergebnisse zu aktualisieren.",
+    "status.checkingParsedCache": "Cache mit eingelesenen Daten wird geprüft.",
+    "status.loadingCachedAccidents": "Unfälle aus dem Cache werden geladen {current}/{total}.",
+    "status.cacheMissParsingBundled": "Kein Cachetreffer. Gebündelte CSV-Dateien werden eingelesen.",
+    "status.parsingLabel": "{label} wird eingelesen",
+    "status.accidentsLoadedFromCache": "{count} Unfälle aus dem Cache geladen.",
+    "status.accidentRecordsLoaded": "{count} Unfalldatensätze geladen.",
+    "status.parsedDataCached": "Eingelesene Daten wurden für spätere Aktualisierungen gespeichert.",
+    "status.cachingParsedAccidents": "Eingelesene Unfälle werden gespeichert {current}/{total}.",
+    "status.parsedDataCacheWriteSkipped": "Daten wurden eingelesen. Cache-Schreiben übersprungen: {error}",
+    "status.loadDataFirst": "Lade zuerst Unfalldaten.",
+    "status.checkingAnalysisCache": "Analysecache wird geprüft.",
+    "status.intersectionClustersLoadedFromCache": "{count} Kreuzungscluster aus dem Cache geladen.",
+    "status.analyzingIntersections": "Kreuzungen werden analysiert.",
+    "status.cachingAnalysisResult": "Analyseergebnis wird gespeichert.",
+    "status.intersectionClustersAnalyzed": "{count} Kreuzungscluster analysiert.",
+    "status.geolocationUnavailable": "Browser-Geolokalisierung ist auf dieser Seite nicht verfügbar.",
+    "status.requestingLocation": "Browser-Standort wird angefragt.",
+    "status.nearestIntersection": "Nächste sichtbare gefährliche Kreuzung wird angezeigt ({distance} entfernt, {accuracy} m Standortgenauigkeit).",
+    "status.centeredNoMatch":
+      "Karte auf deinen Standort zentriert ({accuracy} m Genauigkeit). Keine sichtbare gefährliche Kreuzung passt zu den aktiven Filtern.",
+    "status.centeredLocation": "Karte auf deinen Standort zentriert ({accuracy} m Genauigkeit).",
+    "status.locationDenied": "Standortberechtigung wurde verweigert.",
+    "status.locationUnavailable": "Dein Standort ist derzeit nicht verfügbar.",
+    "status.locationTimedOut": "Standortanfrage hat zu lange gedauert.",
+    "status.locationFailed": "Standort konnte nicht ermittelt werden.",
+    "status.noSeverityNearby": "Keine Kreuzungen in der Nähe passen zu den aktiven Unfallfolge-Filtern.",
+    "status.stateHotspotsPending": "Bundesland-Hotspots erscheinen, sobald die Daten geladen sind.",
+    "status.noAnalysisMatches": "Keine Kreuzungen passen zu den aktiven Analyse-Einstellungen.",
+    "status.dataCleared": "Daten geleert. Nutze Daten neu laden, um die gebündelten Dateien erneut zu laden.",
+    "status.noClustersToExport": "Keine analysierten Cluster zum Exportieren.",
+    "status.bundleLoadFailed":
+      "{path} konnte nicht geladen werden. Die docs/data-Dateien müssen neben docs/index.html liegen. Einige Browser blockieren automatische file://-Zugriffe; GitHub Pages oder jeder statische Host funktioniert. {errors}",
+    "status.localReadBlocked": "lokaler Lesezugriff blockiert",
+    "label.away": "{distance} entfernt",
+    "noun.accident.one": "Unfall",
+    "noun.accident.other": "Unfälle",
+    "map.openOsm": "In OpenStreetMap öffnen",
+    "map.openGoogleMaps": "In Google Maps öffnen",
+    "records.title": "Bekannte Unfalldatensätze",
+    "records.countOf": "{shown} von {total}",
+    "records.empty": "In der Nähe dieser Kreuzung wurden keine passenden Quelldatensätze gefunden.",
+    "records.category": "Kategorie",
+    "records.kind": "Art",
+    "records.type": "Typ",
+    "records.light": "Licht",
+    "records.surface": "Oberfläche",
+    "records.roadUsers": "Verkehrsteilnehmer",
+    "records.area": "Gebiet",
+    "records.coordinates": "Koordinaten",
+    "records.locationCheck": "Lageprüfung",
+    "records.distance": "Entfernung",
+    "records.recordId": "Datensatz-ID",
+    "records.source": "Quelle",
+    "records.unknownYear": "Unbekanntes Jahr",
+    "records.unknownCode": "Unbekannter Code",
+    "records.noRoadUserFields": "Keine Verkehrsteilnehmerfelder",
+    "records.yes": "ja",
+    "records.no": "nein",
+    "records.adminRegion": "Regierungsbezirk {code}",
+    "records.district": "Kreis {code}",
+    "records.municipality": "Gemeinde {code}",
+    "records.serial": "laufende Nummer {serial}",
+    "records.categoryNumber": "Kategorie {category}",
+    "roadUser.pedestrian": "Fußgänger",
+    "roadUser.bicycle": "Fahrrad",
+    "roadUser.motorcycle": "Motorrad",
+    "roadUser.car": "Pkw",
+    "roadUser.truck": "Güterkraftfahrzeug",
+    "roadUser.other": "Sonstiges Verkehrsmittel",
+    "accident.category.killed": "Unfall mit Getöteten",
+    "accident.category.seriouslyInjured": "Unfall mit Schwerverletzten",
+    "accident.category.slightlyInjured": "Unfall mit Leichtverletzten",
+    "accident.kind.other": "Unfall anderer Art",
+    "accident.kind.startsStopsStationary": "Zusammenstoß mit anfahrendem, anhaltendem oder ruhendem Fahrzeug",
+    "accident.kind.movingAheadWaiting": "Zusammenstoß mit vorausfahrendem oder wartendem Fahrzeug",
+    "accident.kind.lateralSameDirection": "Zusammenstoß mit seitlich in gleicher Richtung fahrendem Fahrzeug",
+    "accident.kind.oncoming": "Zusammenstoß mit entgegenkommendem Fahrzeug",
+    "accident.kind.turnsOrCrosses": "Zusammenstoß mit einbiegendem oder kreuzendem Fahrzeug",
+    "accident.kind.pedestrian": "Zusammenstoß zwischen Fahrzeug und Fußgänger",
+    "accident.kind.obstacle": "Aufprall auf ein Hindernis auf der Fahrbahn",
+    "accident.kind.leavingRight": "Abkommen von der Fahrbahn nach rechts",
+    "accident.kind.leavingLeft": "Abkommen von der Fahrbahn nach links",
+    "accident.type.driving": "Fahrunfall",
+    "accident.type.turningOff": "Abbiegeunfall",
+    "accident.type.turningIntoCrossing": "Einbiegen-/Kreuzen-Unfall",
+    "accident.type.crossingRoad": "Überschreiten-Unfall",
+    "accident.type.stationaryTraffic": "Unfall durch ruhenden Verkehr",
+    "accident.type.sameCarriageway": "Unfall im Längsverkehr",
+    "accident.type.other": "Sonstiger Unfall",
+    "accident.light.daylight": "Tageslicht",
+    "accident.light.twilight": "Dämmerung",
+    "accident.light.darkness": "Dunkelheit",
+    "accident.surface.dry": "Trocken",
+    "accident.surface.wet": "Nass, feucht oder glatt",
+    "accident.surface.winter": "Glatt, winterliche Bedingungen",
+    "accident.plausibility.regular": "Erfolgreiche Lageprüfung, Standardverfahren",
+    "accident.plausibility.bicycle": "Erfolgreiche Lageprüfung, erweitertes Radverkehrsverfahren",
+    "month.1": "Jan",
+    "month.2": "Feb",
+    "month.3": "Mär",
+    "month.4": "Apr",
+    "month.5": "Mai",
+    "month.6": "Jun",
+    "month.7": "Jul",
+    "month.8": "Aug",
+    "month.9": "Sep",
+    "month.10": "Okt",
+    "month.11": "Nov",
+    "month.12": "Dez",
+    "weekday.1": "Sonntag",
+    "weekday.2": "Montag",
+    "weekday.3": "Dienstag",
+    "weekday.4": "Mittwoch",
+    "weekday.5": "Donnerstag",
+    "weekday.6": "Freitag",
+    "weekday.7": "Samstag",
+    "trend.title": "Unfalltrend",
+    "trend.aria": "Trend der ausgewählten Kreuzung",
+    "trend.latest": "{count} zuletzt",
+    "trend.legend.accidents": "Unfälle",
+    "trend.note": "Ausgewählte Jahre ohne Unfälle zählen als null.",
+    "trend.chartAria": "Unfalltrend, {direction}",
+    "trend.dotTitle": "{year}: {count} Unfälle",
+    "trend.falling": "Fallend",
+    "trend.rising": "Steigend",
+    "trend.stable": "Stabil",
+    "trend.unknown": "Kein Trend"
+  }
+};
+const ACTIVE_LOCALE: AppLocale = detectLocale();
+const NUMBER_LOCALE = ACTIVE_LOCALE === "de" ? "de-DE" : "en-US";
 const ACCIDENT_CATEGORY_LABELS: Record<number, string> = {
-  1: "Accident with persons killed",
-  2: "Accident with seriously injured",
-  3: "Accident with slightly injured"
+  1: "accident.category.killed",
+  2: "accident.category.seriouslyInjured",
+  3: "accident.category.slightlyInjured"
 };
 const ACCIDENT_KIND_LABELS: Record<number, string> = {
-  0: "Accident of another kind",
-  1: "Collision with another vehicle which starts, stops, or is stationary",
-  2: "Collision with another vehicle moving ahead or waiting",
-  3: "Collision with another vehicle moving laterally in the same direction",
-  4: "Collision with another oncoming vehicle",
-  5: "Collision with another vehicle which turns into or crosses a road",
-  6: "Collision between vehicle and pedestrian",
-  7: "Collision with an obstacle in the carriageway",
-  8: "Leaving the carriageway to the right",
-  9: "Leaving the carriageway to the left"
+  0: "accident.kind.other",
+  1: "accident.kind.startsStopsStationary",
+  2: "accident.kind.movingAheadWaiting",
+  3: "accident.kind.lateralSameDirection",
+  4: "accident.kind.oncoming",
+  5: "accident.kind.turnsOrCrosses",
+  6: "accident.kind.pedestrian",
+  7: "accident.kind.obstacle",
+  8: "accident.kind.leavingRight",
+  9: "accident.kind.leavingLeft"
 };
 const ACCIDENT_TYPE_LABELS: Record<number, string> = {
-  1: "Driving accident",
-  2: "Accident caused by turning off the road",
-  3: "Accident caused by turning into a road or by crossing it",
-  4: "Accident caused by crossing the road",
-  5: "Accident involving stationary traffic",
-  6: "Accident between vehicles moving along in carriageway",
-  7: "Other accident"
+  1: "accident.type.driving",
+  2: "accident.type.turningOff",
+  3: "accident.type.turningIntoCrossing",
+  4: "accident.type.crossingRoad",
+  5: "accident.type.stationaryTraffic",
+  6: "accident.type.sameCarriageway",
+  7: "accident.type.other"
 };
 const LIGHT_CONDITION_LABELS: Record<number, string> = {
-  0: "Daylight",
-  1: "Twilight",
-  2: "Darkness"
+  0: "accident.light.daylight",
+  1: "accident.light.twilight",
+  2: "accident.light.darkness"
 };
 const ROAD_SURFACE_LABELS: Record<number, string> = {
-  0: "Dry",
-  1: "Wet, damp, or slippery",
-  2: "Slippery, winter conditions"
+  0: "accident.surface.dry",
+  1: "accident.surface.wet",
+  2: "accident.surface.winter"
 };
 const PLAUSIBILITY_LEVEL_LABELS: Record<number, string> = {
-  1: "Successful location check, regular proceedings",
-  2: "Successful location check, advanced bicycle proceedings"
+  1: "accident.plausibility.regular",
+  2: "accident.plausibility.bicycle"
 };
 
 interface ClusterTableSort {
@@ -139,6 +618,7 @@ let crossingAccidentIndexCache: AccidentIndexCache | null = null;
 let accidentKeyLookupCache: AccidentKeyLookupCache | null = null;
 let isStreetViewOpen = readStoredStreetViewOpen();
 let activeView: ViewKey = "map";
+let loadingStatusKind: LoadingStatusKind = "normal";
 
 const elements = {
   app: byId<HTMLDivElement>("app"),
@@ -210,11 +690,60 @@ const elements = {
 const map = new MapCanvas(elements.mapCanvas, handleClusterSelection);
 const mobileLayout = window.matchMedia(MOBILE_LAYOUT_QUERY);
 
+applyStaticTranslations();
 resetAnalysisControlsToDefaults();
 wireEvents();
 setView(initialView());
 renderAll();
 void loadBundledData();
+
+function detectLocale(): AppLocale {
+  const languages = navigator.languages?.length ? navigator.languages : [navigator.language];
+  for (const language of languages) {
+    const languageCode = language.toLowerCase().split("-")[0];
+    if (languageCode === "de" || languageCode === "en") {
+      return languageCode;
+    }
+  }
+  return "en";
+}
+
+function tr(key: string): string {
+  return TRANSLATIONS[ACTIVE_LOCALE][key] ?? TRANSLATIONS.en[key] ?? key;
+}
+
+function trf(key: string, values: Record<string, string | number>): string {
+  return tr(key).replace(/\{(\w+)\}/g, (match, name) => String(values[name] ?? match));
+}
+
+function applyStaticTranslations(): void {
+  document.documentElement.lang = ACTIVE_LOCALE;
+  document.title = tr("document.title");
+  document.querySelectorAll<HTMLElement>("[data-i18n]").forEach((element) => {
+    const key = element.dataset.i18n;
+    if (key) {
+      element.textContent = tr(key);
+    }
+  });
+  document.querySelectorAll<HTMLElement>("[data-i18n-html]").forEach((element) => {
+    const key = element.dataset.i18nHtml;
+    if (key) {
+      element.innerHTML = tr(key);
+    }
+  });
+  document.querySelectorAll<HTMLElement>("[data-i18n-aria-label]").forEach((element) => {
+    const key = element.dataset.i18nAriaLabel;
+    if (key) {
+      element.setAttribute("aria-label", tr(key));
+    }
+  });
+  document.querySelectorAll<HTMLElement>("[data-i18n-title]").forEach((element) => {
+    const key = element.dataset.i18nTitle;
+    if (key) {
+      element.setAttribute("title", tr(key));
+    }
+  });
+}
 
 function wireEvents(): void {
   elements.loadBundledBtn.addEventListener("click", () => void loadBundledData());
@@ -405,7 +934,7 @@ function markAnalysisSettingsDirty(): void {
   analysisSettingsDirty = true;
   updateAnalyzeButton();
   if (result) {
-    setStatus("Settings changed. Click Analyze to update results.", 100);
+    setStatus(tr("status.settingsChanged"), 100);
   }
 }
 
@@ -426,27 +955,27 @@ async function loadBundledData(): Promise<void> {
     renderAll();
     const dataVersion = bundledDataVersion();
     activeDataVersion = dataVersion;
-    setStatus("Checking parsed data cache.", 4);
-    const cached = await readParsedDataCache(dataVersion, setStatus);
+    setStatus(tr("status.checkingParsedCache"), 4);
+    const cached = await readParsedDataCache(dataVersion, localizedCacheStatus);
     if (cached) {
       accidents = cached.accidents;
       crossingAccidentIndexCache = null;
       accidentKeyLookupCache = null;
       populateFilters();
-      setStatus(`${accidents.length.toLocaleString()} accidents loaded from cache.`, 66);
+      setStatus(trf("status.accidentsLoadedFromCache", { count: formatInteger(accidents.length) }), 66);
       analysisStarted = true;
       runAnalysis();
       return;
     }
 
-    setStatus("Cache miss. Parsing bundled CSV files.", 10);
+    setStatus(tr("status.cacheMissParsingBundled"), 10);
     const loadedAccidents: AccidentRecord[] = [];
     for (const [index, path] of BUNDLED_CSV_FILES.entries()) {
       const blob = await readBundledBlob(path);
       const file = new File([blob], path.split("/").pop() ?? "accidents.csv", { type: "text/csv" });
       const parsed = await parseAccidentCsvFiles([file], (progress) => {
         const baseProgress = 10 + index * 9;
-        setStatus(progress.message ?? `Parsing ${progress.label}`, Math.min(55, baseProgress + 8));
+        setStatus(trf("status.parsingLabel", { label: progress.label }), Math.min(55, baseProgress + 8));
       });
       loadedAccidents.push(...parsed);
       accidents = loadedAccidents;
@@ -454,18 +983,18 @@ async function loadBundledData(): Promise<void> {
       accidentKeyLookupCache = null;
       populateFilters();
     }
-    setStatus(`${accidents.length.toLocaleString()} accident records loaded.`, 60);
+    setStatus(trf("status.accidentRecordsLoaded", { count: formatInteger(accidents.length) }), 60);
 
     try {
-      await writeParsedDataCache(dataVersion, accidents, setStatus);
-      setStatus("Parsed data cached for future refreshes.", 74);
+      await writeParsedDataCache(dataVersion, accidents, localizedCacheStatus);
+      setStatus(tr("status.parsedDataCached"), 74);
     } catch (error) {
-      setStatus(`Parsed data loaded. Cache write skipped: ${errorMessage(error)}`, 74);
+      setStatus(trf("status.parsedDataCacheWriteSkipped", { error: errorMessage(error) }), 74);
     }
     analysisStarted = true;
     runAnalysis();
   } catch (error) {
-    setStatus(errorMessage(error), 0);
+    setStatus(errorMessage(error), 0, "problem");
   } finally {
     if (!analysisStarted) {
       setBusy(false);
@@ -479,7 +1008,7 @@ async function loadAccidentCsv(files: File[], replace: boolean, manageBusy = tru
   }
   try {
     const parsed = await parseAccidentCsvFiles(files, (progress) => {
-      setStatus(progress.message ?? `Parsing ${progress.label}`, progress.total ? progressValue(progress.loaded, progress.total) : 45);
+      setStatus(trf("status.parsingLabel", { label: progress.label }), progress.total ? progressValue(progress.loaded, progress.total) : 45);
     });
     accidents = replace ? parsed : accidents.concat(parsed);
     result = null;
@@ -488,10 +1017,10 @@ async function loadAccidentCsv(files: File[], replace: boolean, manageBusy = tru
     crossingAccidentIndexCache = null;
     accidentKeyLookupCache = null;
     populateFilters();
-    setStatus(`${accidents.length.toLocaleString()} accident records loaded.`, 100);
+    setStatus(trf("status.accidentRecordsLoaded", { count: formatInteger(accidents.length) }), 100);
     activeDataVersion = null;
   } catch (error) {
-    setStatus(errorMessage(error), 0);
+    setStatus(errorMessage(error), 0, "problem");
   } finally {
     if (manageBusy) {
       setBusy(false);
@@ -502,7 +1031,7 @@ async function loadAccidentCsv(files: File[], replace: boolean, manageBusy = tru
 
 function runAnalysis(): void {
   if (accidents.length === 0) {
-    setStatus("Load accident data first.", 0);
+    setStatus(tr("status.loadDataFirst"), 0, "idle");
     return;
   }
 
@@ -516,7 +1045,7 @@ function runAnalysis(): void {
 async function runAnalysisWithCache(options: AnalysisOptions, cacheContext: AnalysisCacheContext | null): Promise<void> {
   try {
     if (cacheContext) {
-      setStatus("Checking analysis cache.", 75);
+      setStatus(tr("status.checkingAnalysisCache"), 75);
       const cached = await readAnalysisCache(cacheContext.dataVersion, cacheContext.appVersion, options);
       if (cached) {
         result = cached;
@@ -526,12 +1055,12 @@ async function runAnalysisWithCache(options: AnalysisOptions, cacheContext: Anal
         accidentKeyLookupCache = null;
         analysisSettingsDirty = false;
         renderAll();
-        setStatus(`${result.clusters.length.toLocaleString()} intersection clusters loaded from cache.`, 100);
+        setStatus(trf("status.intersectionClustersLoadedFromCache", { count: formatInteger(result.clusters.length) }), 100);
         return;
       }
     }
 
-    setStatus("Analyzing intersections.", 75);
+    setStatus(tr("status.analyzingIntersections"), 75);
     await yieldToBrowser();
     result = await analyzeDangerousIntersectionsInBackground(accidents, options, updateAnalysisPlanStatus);
     selectedCluster = null;
@@ -543,23 +1072,23 @@ async function runAnalysisWithCache(options: AnalysisOptions, cacheContext: Anal
 
     if (cacheContext) {
       try {
-        setStatus("Caching analysis result.", 96);
+        setStatus(tr("status.cachingAnalysisResult"), 96);
         await writeAnalysisCache(cacheContext.dataVersion, cacheContext.appVersion, options, result);
       } catch {
         // The analysis result is already rendered; cache failures only affect later reload speed.
       }
     }
 
-    setStatus(`${result.clusters.length.toLocaleString()} intersection clusters analyzed.`, 100);
+    setStatus(trf("status.intersectionClustersAnalyzed", { count: formatInteger(result.clusters.length) }), 100);
   } catch (error) {
-    setStatus(errorMessage(error), 0);
+    setStatus(errorMessage(error), 0, "problem");
   } finally {
     setBusy(false);
   }
 }
 
 function updateAnalysisPlanStatus(): void {
-  setStatus("Analyzing intersections.", 75);
+  setStatus(tr("status.analyzingIntersections"), 75);
 }
 
 function readOptions(): AnalysisOptions {
@@ -606,8 +1135,8 @@ function cloneAnalysisOptions(options: AnalysisOptions): AnalysisOptions {
 function populateFilters(): void {
   const selectedState = elements.stateFilter.value;
   const selectedBrowseState = elements.browseState.value;
-  elements.stateFilter.innerHTML = `<option value="all">All Bundeslaender</option>`;
-  elements.browseState.innerHTML = `<option value="all">All Bundeslaender</option>`;
+  elements.stateFilter.replaceChildren(new Option(tr("option.allStates"), "all"));
+  elements.browseState.replaceChildren(new Option(tr("option.allStates"), "all"));
   const stateOptions = Object.entries(STATE_NAMES).sort((a, b) => a[1].localeCompare(b[1], "de", { sensitivity: "base" }));
   for (const [code, name] of stateOptions) {
     if (accidents.some((accident) => accident.stateCode === code)) {
@@ -676,12 +1205,12 @@ function applySeverityFilter(): void {
 
 function locateUser(options: { selectNearest: boolean }): void {
   if (!navigator.geolocation) {
-    setStatus("Browser geolocation is not available on this page.", 100);
+    setStatus(tr("status.geolocationUnavailable"), 100);
     return;
   }
 
   setLocateBusy(true);
-  setStatus("Requesting your browser location.", 100);
+  setStatus(tr("status.requestingLocation"), 100);
   navigator.geolocation.getCurrentPosition(
     (position) => {
       const { latitude, longitude, accuracy } = position.coords;
@@ -694,12 +1223,15 @@ function locateUser(options: { selectNearest: boolean }): void {
       if (options.selectNearest) {
         setStatus(
           selectedNearest
-            ? `Showing nearest visible dangerous intersection (${formatDistance(selectedNearest.distanceMeters)} away, ${Math.round(accuracy)} m location accuracy).`
-            : `Centered map on your location (${Math.round(accuracy)} m accuracy). No visible dangerous intersection matched the active filters.`,
+            ? trf("status.nearestIntersection", {
+                distance: formatDistance(selectedNearest.distanceMeters),
+                accuracy: formatInteger(Math.round(accuracy))
+              })
+            : trf("status.centeredNoMatch", { accuracy: formatInteger(Math.round(accuracy)) }),
           100
         );
       } else {
-        setStatus(`Centered map on your location (${Math.round(accuracy)} m accuracy).`, 100);
+        setStatus(trf("status.centeredLocation", { accuracy: formatInteger(Math.round(accuracy)) }), 100);
       }
     },
     (error) => {
@@ -722,13 +1254,13 @@ function setLocateBusy(isBusy: boolean): void {
 function geolocationErrorMessage(error: GeolocationPositionError): string {
   switch (error.code) {
     case error.PERMISSION_DENIED:
-      return "Location permission was denied.";
+      return tr("status.locationDenied");
     case error.POSITION_UNAVAILABLE:
-      return "Your location is currently unavailable.";
+      return tr("status.locationUnavailable");
     case error.TIMEOUT:
-      return "Location request timed out.";
+      return tr("status.locationTimedOut");
     default:
-      return "Could not get your location.";
+      return tr("status.locationFailed");
   }
 }
 
@@ -744,8 +1276,8 @@ function renderTables(): void {
     const row = document.createElement("tr");
     row.innerHTML = `
       <td>${escapeHtml(summary.stateName)}</td>
-      <td>${summary.accidentCount.toLocaleString()}</td>
-      <td>${summary.clusterCount.toLocaleString()}</td>
+      <td>${formatInteger(summary.accidentCount)}</td>
+      <td>${formatInteger(summary.clusterCount)}</td>
       <td>${formatFatalPercent(summary)}</td>
       <td>${summary.topCluster ? clusterLocation(summary.topCluster) : ""}</td>
     `;
@@ -766,9 +1298,9 @@ function renderTables(): void {
     row.innerHTML = `
       <td>${escapeHtml(cluster.stateName)}</td>
       <td>${clusterLocation(cluster)}</td>
-      <td>${cluster.accidentCount.toLocaleString()}</td>
-      <td>${cluster.fatalCount.toLocaleString()}</td>
-      <td>${cluster.seriousCount.toLocaleString()}</td>
+      <td>${formatInteger(cluster.accidentCount)}</td>
+      <td>${formatInteger(cluster.fatalCount)}</td>
+      <td>${formatInteger(cluster.seriousCount)}</td>
       <td>${formatFatalPercent(cluster)}</td>
     `;
     row.addEventListener("click", () => {
@@ -872,10 +1404,16 @@ function updateClusterSortHeaders(): void {
     const key = button.dataset.clusterSort as ClusterSortKey | undefined;
     const active = key === clusterTableSort.key;
     const indicator = button.querySelector<HTMLElement>(".sort-indicator");
-    const label = button.querySelector("span")?.textContent?.trim() ?? "Column";
+    const label = button.querySelector("span")?.textContent?.trim() ?? tr("table.location");
     const header = button.closest("th");
     button.classList.toggle("active", active);
-    button.setAttribute("aria-label", `${label} sorted ${active ? clusterTableSort.direction : "none"}`);
+    button.setAttribute(
+      "aria-label",
+      trf("table.sorted", {
+        label,
+        direction: active ? tr(clusterTableSort.direction === "asc" ? "table.sort.asc" : "table.sort.desc") : tr("table.sort.none")
+      })
+    );
     if (indicator) {
       indicator.textContent = active ? (clusterTableSort.direction === "asc" ? "^" : "v") : "";
     }
@@ -904,19 +1442,19 @@ function renderNearbyList(): void {
 
   const nearby = nearbyClusters(6);
   if (nearby.length === 0) {
-    elements.nearbyList.append(emptyHotspotMessage("No intersections match the active severity filters near this location."));
+    elements.nearbyList.append(emptyHotspotMessage(tr("status.noSeverityNearby")));
     return;
   }
 
   nearby.forEach((entry) => {
-    elements.nearbyList.append(hotspotButton(entry.cluster, `${formatDistance(entry.distanceMeters)} away`));
+    elements.nearbyList.append(hotspotButton(entry.cluster, trf("label.away", { distance: formatDistance(entry.distanceMeters) })));
   });
 }
 
 function renderStateHotspotList(): void {
   elements.stateHotspotList.innerHTML = "";
   if (!result) {
-    elements.stateHotspotList.append(emptyHotspotMessage("State hotspots will appear after the data loads."));
+    elements.stateHotspotList.append(emptyHotspotMessage(tr("status.stateHotspotsPending")));
     return;
   }
 
@@ -929,7 +1467,7 @@ function renderStateHotspotList(): void {
           .slice(0, 8);
 
   if (clusters.length === 0) {
-    elements.stateHotspotList.append(emptyHotspotMessage("No intersections match the active analysis settings."));
+    elements.stateHotspotList.append(emptyHotspotMessage(tr("status.noAnalysisMatches")));
     return;
   }
 
@@ -954,7 +1492,7 @@ function hotspotButton(
   button.className = "hotspot-button";
   button.classList.toggle("selected", selectedCluster?.id === cluster.id);
   const metricPlacement = options.metricPlacement ?? "stats";
-  const metricStat = `<span class="hotspot-stat hotspot-stat-metric"><strong>${formatFatalPercent(cluster)}</strong> Harm</span>`;
+  const metricStat = `<span class="hotspot-stat hotspot-stat-metric"><strong>${formatFatalPercent(cluster)}</strong> ${escapeHtml(tr("metric.harm"))}</span>`;
   button.innerHTML = `
     <span class="hotspot-main">
       <span class="hotspot-heading">
@@ -963,9 +1501,9 @@ function hotspotButton(
       </span>
       <span class="hotspot-stats">
         ${metricPlacement === "stats" ? metricStat : ""}
-        <span class="hotspot-stat hotspot-stat-total"><strong>${cluster.accidentCount.toLocaleString()}</strong> ${pluralNoun(cluster.accidentCount, "accident")}</span>
-        <span class="hotspot-stat"><strong>${cluster.fatalCount.toLocaleString()}</strong> fatal</span>
-        <span class="hotspot-stat"><strong>${cluster.seriousCount.toLocaleString()}</strong> serious</span>
+        <span class="hotspot-stat hotspot-stat-total"><strong>${formatInteger(cluster.accidentCount)}</strong> ${escapeHtml(accidentCountNoun(cluster.accidentCount))}</span>
+        <span class="hotspot-stat"><strong>${formatInteger(cluster.fatalCount)}</strong> ${escapeHtml(tr("severity.fatal").toLowerCase())}</span>
+        <span class="hotspot-stat"><strong>${formatInteger(cluster.seriousCount)}</strong> ${escapeHtml(tr("severity.serious").toLowerCase())}</span>
       </span>
     </span>
   `;
@@ -975,8 +1513,8 @@ function hotspotButton(
   return button;
 }
 
-function pluralNoun(count: number, singular: string, plural = `${singular}s`): string {
-  return count === 1 ? singular : plural;
+function accidentCountNoun(count: number): string {
+  return tr(count === 1 ? "noun.accident.one" : "noun.accident.other");
 }
 
 function emptyHotspotMessage(message: string): HTMLParagraphElement {
@@ -1058,7 +1596,7 @@ function renderSelection(cluster: IntersectionCluster | null): void {
     elements.selectedMapActions.hidden = true;
     elements.selectedMapActions.innerHTML = "";
     elements.mapView.classList.remove("has-selection");
-    elements.selectionDetails.textContent = "No intersection selected.";
+    elements.selectionDetails.textContent = tr("details.none");
     updateContextTabs();
     if (activeView === "details" || activeView === "street") {
       setView("map");
@@ -1081,13 +1619,13 @@ function renderSelection(cluster: IntersectionCluster | null): void {
   elements.selectedMapActions.innerHTML = renderMapServiceActions(openStreetMapUrl, googleMapsUrl);
   elements.selectionDetails.innerHTML = `
     <dl>
-      <div><dt>Bundesland</dt><dd>${escapeHtml(cluster.stateName)}</dd></div>
-      <div><dt>Coordinates</dt><dd>${cluster.lat.toFixed(5)}, ${cluster.lon.toFixed(5)}</dd></div>
-      <div><dt>Years</dt><dd>${cluster.years.join(", ")}</dd></div>
-      <div><dt>Accidents</dt><dd>${cluster.accidentCount.toLocaleString()}</dd></div>
-      <div><dt>Fatal / serious</dt><dd>${cluster.fatalCount} / ${cluster.seriousCount}</dd></div>
-      <div><dt>Harm %</dt><dd>${formatFatalPercent(cluster)}</dd></div>
-      <div><dt>Vulnerable users</dt><dd>${cluster.vulnerableCount.toLocaleString()}</dd></div>
+      <div><dt>${escapeHtml(tr("details.state"))}</dt><dd>${escapeHtml(cluster.stateName)}</dd></div>
+      <div><dt>${escapeHtml(tr("details.coordinates"))}</dt><dd>${cluster.lat.toFixed(5)}, ${cluster.lon.toFixed(5)}</dd></div>
+      <div><dt>${escapeHtml(tr("details.years"))}</dt><dd>${cluster.years.join(", ")}</dd></div>
+      <div><dt>${escapeHtml(tr("details.accidents"))}</dt><dd>${formatInteger(cluster.accidentCount)}</dd></div>
+      <div><dt>${escapeHtml(tr("details.fatalSerious"))}</dt><dd>${formatInteger(cluster.fatalCount)} / ${formatInteger(cluster.seriousCount)}</dd></div>
+      <div><dt>${escapeHtml(tr("details.harmPercent"))}</dt><dd>${formatFatalPercent(cluster)}</dd></div>
+      <div><dt>${escapeHtml(tr("details.vulnerableUsers"))}</dt><dd>${formatInteger(cluster.vulnerableCount)}</dd></div>
     </dl>
     ${trendPanel}
     ${recordPanel}
@@ -1110,7 +1648,7 @@ function updateStreetViewPanel(): void {
   elements.streetViewPanel.hidden = !hasSelection;
   elements.mapColumn.classList.toggle("street-view-open", isExpanded);
   elements.streetViewToggle.setAttribute("aria-expanded", String(isExpanded));
-  elements.streetViewToggleText.textContent = isExpanded ? "Hide" : "Show";
+  elements.streetViewToggleText.textContent = isExpanded ? tr("action.hide") : tr("action.show");
   elements.streetViewBody.hidden = !isExpanded;
 
   if (!hasSelection || !isExpanded) {
@@ -1124,7 +1662,7 @@ function updateStreetViewPanel(): void {
     elements.streetViewFrame.src = streetViewUrl;
     elements.streetViewFrame.dataset.src = streetViewUrl;
   }
-  elements.streetViewFrame.title = `Google Street View near ${cluster.lat.toFixed(5)}, ${cluster.lon.toFixed(5)}`;
+  elements.streetViewFrame.title = trf("streetView.near", { lat: cluster.lat.toFixed(5), lon: cluster.lon.toFixed(5) });
   elements.streetViewFrame.hidden = false;
   elements.streetViewEmpty.hidden = true;
   scheduleMapRefresh();
@@ -1152,15 +1690,17 @@ function scheduleMapRefresh(): void {
 }
 
 function renderMapServiceActions(openStreetMapUrl: string, googleMapsUrl: string): string {
+  const openStreetMapLabel = escapeHtml(tr("map.openOsm"));
+  const googleMapsLabel = escapeHtml(tr("map.openGoogleMaps"));
   return `
-    <a class="map-service-icon" href="${openStreetMapUrl}" target="_blank" rel="noopener noreferrer" aria-label="Open in OpenStreetMap" title="Open in OpenStreetMap">
+    <a class="map-service-icon" href="${openStreetMapUrl}" target="_blank" rel="noopener noreferrer" aria-label="${openStreetMapLabel}" title="${openStreetMapLabel}">
       <svg viewBox="0 0 24 24" aria-hidden="true">
         <path d="M3 6.5 9 4l6 2.5 6-2.5v13.5L15 20l-6-2.5L3 20V6.5z" />
         <path d="M9 4v13.5" />
         <path d="M15 6.5V20" />
       </svg>
     </a>
-    <a class="map-service-icon" href="${googleMapsUrl}" target="_blank" rel="noopener noreferrer" aria-label="Open in Google Maps" title="Open in Google Maps">
+    <a class="map-service-icon" href="${googleMapsUrl}" target="_blank" rel="noopener noreferrer" aria-label="${googleMapsLabel}" title="${googleMapsLabel}">
       <svg viewBox="0 0 24 24" aria-hidden="true">
         <path d="M12 21s6-5.4 6-11a6 6 0 0 0-12 0c0 5.6 6 11 6 11z" />
         <path d="M12 12.2a2.2 2.2 0 1 0 0-4.4 2.2 2.2 0 0 0 0 4.4z" />
@@ -1170,15 +1710,15 @@ function renderMapServiceActions(openStreetMapUrl: string, googleMapsUrl: string
 }
 
 function renderSidebarAccidentRecords(records: CrossingAccident[], totalCount: number): string {
-  const countText = `${records.length.toLocaleString()} of ${totalCount.toLocaleString()}`;
+  const countText = trf("records.countOf", { shown: formatInteger(records.length), total: formatInteger(totalCount) });
   if (records.length === 0) {
     return `
       <section class="sidebar-accident-records">
         <div class="section-heading-row">
-          <h3>Known accident records</h3>
+          <h3>${escapeHtml(tr("records.title"))}</h3>
           <span>${countText}</span>
         </div>
-        <p class="hotspot-empty">No matching source accident records were found near this intersection.</p>
+        <p class="hotspot-empty">${escapeHtml(tr("records.empty"))}</p>
       </section>
     `;
   }
@@ -1204,7 +1744,7 @@ function renderSidebarAccidentRecords(records: CrossingAccident[], totalCount: n
   return `
     <section class="sidebar-accident-records">
       <div class="section-heading-row">
-        <h3>Known accident records</h3>
+        <h3>${escapeHtml(tr("records.title"))}</h3>
         <span>${countText}</span>
       </div>
       <ol class="accident-record-list">${items}</ol>
@@ -1214,19 +1754,19 @@ function renderSidebarAccidentRecords(records: CrossingAccident[], totalCount: n
 
 function accidentRecordRows(accident: AccidentRecord, distanceMeters: number): Array<{ label: string; value: string }> {
   const rows: Array<{ label: string; value: string }> = [];
-  addRecordRow(rows, "Category", codeLabel(accident.category, ACCIDENT_CATEGORY_LABELS));
-  addRecordRow(rows, "Kind", codeLabel(accident.accidentKind, ACCIDENT_KIND_LABELS));
-  addRecordRow(rows, "Type", codeLabel(accident.accidentType, ACCIDENT_TYPE_LABELS));
-  addRecordRow(rows, "Light", codeLabel(accident.lightCondition, LIGHT_CONDITION_LABELS));
-  addRecordRow(rows, "Surface", codeLabel(accident.roadSurface, ROAD_SURFACE_LABELS));
-  addRecordRow(rows, "Road users", roadUsersLabel(accident));
-  addRecordRow(rows, "Area", administrativeAreaLabel(accident));
-  addRecordRow(rows, "Coordinates", `${accident.lat.toFixed(6)}, ${accident.lon.toFixed(6)}`);
+  addRecordRow(rows, tr("records.category"), codeLabel(accident.category, ACCIDENT_CATEGORY_LABELS));
+  addRecordRow(rows, tr("records.kind"), codeLabel(accident.accidentKind, ACCIDENT_KIND_LABELS));
+  addRecordRow(rows, tr("records.type"), codeLabel(accident.accidentType, ACCIDENT_TYPE_LABELS));
+  addRecordRow(rows, tr("records.light"), codeLabel(accident.lightCondition, LIGHT_CONDITION_LABELS));
+  addRecordRow(rows, tr("records.surface"), codeLabel(accident.roadSurface, ROAD_SURFACE_LABELS));
+  addRecordRow(rows, tr("records.roadUsers"), roadUsersLabel(accident));
+  addRecordRow(rows, tr("records.area"), administrativeAreaLabel(accident));
+  addRecordRow(rows, tr("records.coordinates"), `${accident.lat.toFixed(6)}, ${accident.lon.toFixed(6)}`);
   addRecordRow(rows, "LINREF", linRefLabel(accident));
-  addRecordRow(rows, "Location check", codeLabel(accident.plausibilityLevel, PLAUSIBILITY_LEVEL_LABELS));
-  addRecordRow(rows, "Distance", `${Math.round(distanceMeters)} m`);
-  addRecordRow(rows, "Record ID", recordIdLabel(accident));
-  addRecordRow(rows, "Source", accident.source);
+  addRecordRow(rows, tr("records.locationCheck"), codeLabel(accident.plausibilityLevel, PLAUSIBILITY_LEVEL_LABELS));
+  addRecordRow(rows, tr("records.distance"), `${formatInteger(Math.round(distanceMeters))} m`);
+  addRecordRow(rows, tr("records.recordId"), recordIdLabel(accident));
+  addRecordRow(rows, tr("records.source"), accident.source);
   return rows;
 }
 
@@ -1384,19 +1924,19 @@ function accidentSeverity(accident: AccidentRecord): SeverityFilterKey {
 
 function accidentSeverityLabel(accident: AccidentRecord): string {
   if (accident.category === 1) {
-    return "Fatal";
+    return tr("severity.fatal");
   }
   if (accident.category === 2) {
-    return "Serious";
+    return tr("severity.serious");
   }
   if (accident.category === 3) {
-    return "Light";
+    return tr("severity.light");
   }
-  return accident.category === null ? "Unknown" : `Category ${accident.category}`;
+  return accident.category === null ? tr("severity.unknown") : trf("records.categoryNumber", { category: accident.category });
 }
 
 function accidentTimeLabel(accident: AccidentRecord): string {
-  const parts = [accident.year ? String(accident.year) : "Unknown year"];
+  const parts = [accident.year ? String(accident.year) : tr("records.unknownYear")];
   if (accident.month) {
     parts.push(monthLabel(accident.month));
   }
@@ -1410,48 +1950,46 @@ function accidentTimeLabel(accident: AccidentRecord): string {
 }
 
 function monthLabel(month: number): string {
-  const labels = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-  return labels[month - 1] ?? `Month ${month}`;
+  return tr(`month.${month}`);
 }
 
 function weekdayLabel(weekday: number): string {
-  const labels = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-  return labels[weekday - 1] ?? `Weekday ${weekday}`;
+  return tr(`weekday.${weekday}`);
 }
 
 function codeLabel(value: number | null | undefined, labels: Record<number, string>): string | null {
   if (typeof value !== "number") {
     return null;
   }
-  return `${value} - ${labels[value] ?? "Unknown code"}`;
+  return `${value} - ${labels[value] ? tr(labels[value]) : tr("records.unknownCode")}`;
 }
 
 function roadUsersLabel(accident: AccidentRecord): string {
   const flags: Array<[string, boolean | null]> = [
-    ["Pedestrian", accident.involvesPedestrian],
-    ["Bicycle", accident.involvesBike],
-    ["Motorcycle", accident.involvesMotorcycle],
-    ["Passenger car", accident.involvesCar],
-    ["Goods road vehicle", accident.involvesTruck],
-    ["Other means of transport", accident.involvesOther]
+    [tr("roadUser.pedestrian"), accident.involvesPedestrian],
+    [tr("roadUser.bicycle"), accident.involvesBike],
+    [tr("roadUser.motorcycle"), accident.involvesMotorcycle],
+    [tr("roadUser.car"), accident.involvesCar],
+    [tr("roadUser.truck"), accident.involvesTruck],
+    [tr("roadUser.other"), accident.involvesOther]
   ];
   const knownFlags = flags.filter((entry): entry is [string, boolean] => entry[1] !== null);
   if (knownFlags.length === 0) {
-    return "No road-user fields";
+    return tr("records.noRoadUserFields");
   }
-  return knownFlags.map(([label, value]) => `${label}: ${value ? "yes" : "no"}`).join("; ");
+  return knownFlags.map(([label, value]) => `${label}: ${value ? tr("records.yes") : tr("records.no")}`).join("; ");
 }
 
 function administrativeAreaLabel(accident: AccidentRecord): string {
   const parts = [`${accident.stateName} (${accident.stateCode})`];
   if (accident.administrativeRegionCode) {
-    parts.push(`administrative region ${accident.administrativeRegionCode}`);
+    parts.push(trf("records.adminRegion", { code: accident.administrativeRegionCode }));
   }
   if (accident.districtCode) {
-    parts.push(`district ${accident.districtCode}`);
+    parts.push(trf("records.district", { code: accident.districtCode }));
   }
   if (accident.municipalityCode) {
-    parts.push(`municipality ${accident.municipalityCode}`);
+    parts.push(trf("records.municipality", { code: accident.municipalityCode }));
   }
   return parts.join(", ");
 }
@@ -1466,7 +2004,7 @@ function linRefLabel(accident: AccidentRecord): string | null {
 function recordIdLabel(accident: AccidentRecord): string {
   const parts = [accident.id];
   if (accident.serialNumber && accident.serialNumber !== accident.id) {
-    parts.push(`serial ${accident.serialNumber}`);
+    parts.push(trf("records.serial", { serial: accident.serialNumber }));
   }
   return parts.join(", ");
 }
@@ -1480,21 +2018,21 @@ function renderTrendPanel(cluster: IntersectionCluster): string {
   const series = clusterTrendSeries(cluster, years);
   const trend = cluster.accidentTrend;
   const trendLabel = trendDirectionLabel(trend.direction);
-  const relativeSlope = trend.relativeSlopePerYear === null ? "" : ` ${formatSignedPercent(trend.relativeSlopePerYear)}/yr`;
+  const relativeSlope = trend.relativeSlopePerYear === null ? "" : ` ${formatSignedPercent(trend.relativeSlopePerYear)}${tr("unit.perYear")}`;
   const latestAccidents = [...series].reverse().find((point) => point.accidentCount > 0)?.accidentCount ?? 0;
 
   return `
-    <section class="trend-panel" aria-label="Selected intersection trend">
+    <section class="trend-panel" aria-label="${escapeHtml(tr("trend.aria"))}">
       <div class="trend-summary">
-        <span>Accident trend</span>
+        <span>${escapeHtml(tr("trend.title"))}</span>
         <strong class="trend-value ${trendClassName(trend.direction)}">${trendLabel}${relativeSlope}</strong>
-        <small>${latestAccidents.toLocaleString()} latest</small>
+        <small>${escapeHtml(trf("trend.latest", { count: formatInteger(latestAccidents) }))}</small>
       </div>
       ${renderTrendChart(series, trend.direction)}
       <div class="trend-legend">
-        <span class="legend-accidents">Accidents</span>
+        <span class="legend-accidents">${escapeHtml(tr("trend.legend.accidents"))}</span>
       </div>
-      <p class="trend-note">Selected years with no accidents count as zero.</p>
+      <p class="trend-note">${escapeHtml(tr("trend.note"))}</p>
     </section>
   `;
 }
@@ -1534,12 +2072,16 @@ function renderTrendChart(series: ClusterYearStat[], direction: AccidentTrendDir
   const accidentDots = plotted
     .map(
       (point) =>
-        `<circle class="chart-dot chart-dot-accident" cx="${round(point.x, 1)}" cy="${round(point.accidentY, 1)}" r="2.6"><title>${point.year}: ${point.accidentCount} accidents</title></circle>`
+        `<circle class="chart-dot chart-dot-accident" cx="${round(point.x, 1)}" cy="${round(point.accidentY, 1)}" r="2.6"><title>${escapeHtml(
+          trf("trend.dotTitle", { year: point.year, count: formatInteger(point.accidentCount) })
+        )}</title></circle>`
     )
     .join("");
 
   return `
-    <svg class="trend-chart" viewBox="0 0 280 136" role="img" aria-label="Accident trend, ${trendDirectionLabel(direction).toLowerCase()}">
+    <svg class="trend-chart" viewBox="0 0 280 136" role="img" aria-label="${escapeHtml(
+      trf("trend.chartAria", { direction: trendDirectionLabel(direction).toLowerCase() })
+    )}">
       <line class="chart-grid" x1="24" y1="12" x2="256" y2="12"></line>
       <line class="chart-grid" x1="24" y1="52" x2="256" y2="52"></line>
       <line class="chart-axis" x1="24" y1="92" x2="256" y2="92"></line>
@@ -1560,13 +2102,13 @@ function linePath(points: Array<{ x: number; y: number }>): string {
 function trendDirectionLabel(direction: AccidentTrendDirection): string {
   switch (direction) {
     case "falling":
-      return "Falling";
+      return tr("trend.falling");
     case "rising":
-      return "Rising";
+      return tr("trend.rising");
     case "stable":
-      return "Stable";
+      return tr("trend.stable");
     case "unknown":
-      return "No trend";
+      return tr("trend.unknown");
   }
 }
 
@@ -1576,7 +2118,7 @@ function trendClassName(direction: AccidentTrendDirection): string {
 
 function setView(view: ViewKey): void {
   if ((view === "details" || view === "street") && !selectedCluster) {
-    setStatus("Select an intersection first.", 100);
+    setStatus(tr("details.selectFirst"), 100);
     view = "map";
   }
 
@@ -1679,12 +2221,12 @@ function clearData(): void {
   populateFilters();
   renderAll();
   updateAnalyzeButton();
-  setStatus("Data cleared. Use Reload data to load bundled files again.", 0);
+  setStatus(tr("status.dataCleared"), 0, "idle");
 }
 
 function exportClusters(): void {
   if (!result || result.clusters.length === 0) {
-    setStatus("No analyzed clusters to export.", 0);
+    setStatus(tr("status.noClustersToExport"), 0, "idle");
     return;
   }
 
@@ -1756,23 +2298,20 @@ function setAnalysisControlsDisabled(isDisabled: boolean): void {
 }
 
 function updateAnalyzeButton(): void {
-  elements.analyzeBtn.textContent = analysisSettingsDirty ? "Analyze changes" : "Analyze";
+  elements.analyzeBtn.textContent = analysisSettingsDirty ? tr("action.analyzeChanges") : tr("action.analyze");
   elements.analyzeBtn.classList.toggle("dirty", analysisSettingsDirty);
 }
 
-function setStatus(message: string, progress: number): void {
+function setStatus(message: string, progress: number, kind: LoadingStatusKind = "normal"): void {
+  loadingStatusKind = kind;
   const normalizedProgress = Math.max(0, Math.min(100, progress));
   updateLoadingPanels(message, normalizedProgress);
 }
 
 function updateLoadingPanels(message: string, progress: number): void {
-  const lowerMessage = message.toLowerCase();
-  const isProblem =
-    (lowerMessage.includes("could not") || lowerMessage.includes("failed") || lowerMessage.includes("error") || lowerMessage.includes("blocked")) &&
-    !lowerMessage.includes("cache write skipped");
-  const isIdle =
-    lowerMessage.startsWith("data cleared") || lowerMessage.startsWith("load accident data") || lowerMessage.startsWith("no analyzed");
-  const hasNoClusters = lowerMessage.startsWith("0 intersection clusters analyzed");
+  const isProblem = loadingStatusKind === "problem";
+  const isIdle = loadingStatusKind === "idle";
+  const hasNoClusters = Boolean(result && result.clusters.length === 0 && progress >= 100);
   const activeStep = loadingStepForProgress(progress);
   const title = loadingTitle(activeStep, progress, isProblem, isIdle, hasNoClusters);
 
@@ -1805,24 +2344,24 @@ function loadingStepForProgress(progress: number): LoadingStepKey {
 
 function loadingTitle(step: LoadingStepKey, progress: number, isProblem: boolean, isIdle: boolean, hasNoClusters: boolean): string {
   if (isProblem) {
-    return "Data load issue";
+    return tr("loading.title.problem");
   }
   if (isIdle) {
-    return "No results yet";
+    return tr("loading.title.idle");
   }
   if (hasNoClusters) {
-    return "No matching intersections";
+    return tr("loading.title.noMatches");
   }
   if (progress >= 100) {
-    return "Analysis ready";
+    return tr("loading.title.ready");
   }
   switch (step) {
     case "cache":
-      return "Checking data cache";
+      return tr("loading.title.cache");
     case "parse":
-      return "Parsing accident records";
+      return tr("loading.title.parse");
     case "analyze":
-      return "Analyzing intersections";
+      return tr("loading.title.analyze");
   }
 }
 
@@ -1866,7 +2405,7 @@ async function readBundledBlob(path: string): Promise<Blob> {
   }
 
   throw new Error(
-    `Could not load ${path}. The docs/data files must sit next to docs/index.html. Some browsers block automatic file:// reads; GitHub Pages or any static host will work. ${errors.join(" ")}`
+    trf("status.bundleLoadFailed", { path, errors: errors.join(" ") })
   );
 }
 
@@ -1926,21 +2465,43 @@ function readBlobWithXhr(url: string): Promise<Blob> {
         reject(new Error(`HTTP ${request.status}`));
       }
     };
-    request.onerror = () => reject(new Error("local read blocked"));
+    request.onerror = () => reject(new Error(tr("status.localReadBlocked")));
     request.send();
   });
+}
+
+function localizedCacheStatus(message: string, progress: number): void {
+  setStatus(translateCacheStatus(message), progress);
+}
+
+function translateCacheStatus(message: string): string {
+  const loadingCached = /^Loading cached accidents (\d+)\/(\d+)\.$/.exec(message);
+  if (loadingCached) {
+    return trf("status.loadingCachedAccidents", { current: loadingCached[1], total: loadingCached[2] });
+  }
+
+  const cachingParsed = /^Caching parsed accidents (\d+)\/(\d+)\.$/.exec(message);
+  if (cachingParsed) {
+    return trf("status.cachingParsedAccidents", { current: cachingParsed[1], total: cachingParsed[2] });
+  }
+
+  return message;
 }
 
 function progressValue(loaded = 0, total = 1): number {
   return Math.round((loaded / Math.max(total, 1)) * 100);
 }
 
+function formatInteger(value: number): string {
+  return new Intl.NumberFormat(NUMBER_LOCALE, { maximumFractionDigits: 0 }).format(value);
+}
+
 function formatNumber(value: number): string {
-  return new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(value);
+  return new Intl.NumberFormat(NUMBER_LOCALE, { maximumFractionDigits: 2 }).format(value);
 }
 
 function formatSignedPercent(value: number): string {
-  return `${value > 0 ? "+" : ""}${new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 }).format(value * 100)}%`;
+  return `${value > 0 ? "+" : ""}${new Intl.NumberFormat(NUMBER_LOCALE, { maximumFractionDigits: 1 }).format(value * 100)}%`;
 }
 
 function formatFatalPercent(source: FatalPercentSource): string {
@@ -1956,9 +2517,9 @@ function formatDistance(valueMeters: number): string {
     return `${formatNumber(valueMeters / 1000)} km`;
   }
   if (valueMeters >= 1000) {
-    return `${new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 }).format(valueMeters / 1000)} km`;
+    return `${new Intl.NumberFormat(NUMBER_LOCALE, { maximumFractionDigits: 1 }).format(valueMeters / 1000)} km`;
   }
-  return `${Math.round(valueMeters)} m`;
+  return `${formatInteger(Math.round(valueMeters))} m`;
 }
 
 function distanceMeters(a: { lat: number; lon: number }, b: { lat: number; lon: number }): number {
