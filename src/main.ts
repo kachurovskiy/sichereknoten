@@ -160,6 +160,7 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "action.clear": "Clear",
     "action.exportCsv": "Export CSV",
     "action.downloadFactsheet": "Download factsheet",
+    "action.labelFactsheet": "PDF",
     "action.analyze": "Analyze",
     "action.analyzeChanges": "Analyze changes",
     "streetView.title": "Google Street View",
@@ -276,6 +277,9 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "map.labelGoogleMaps": "Google Maps",
     "map.labelStreetView": "Street View",
     "map.labelResponsibleAuthority": "Authority",
+    "press.label": "Press",
+    "press.searchIntersection": "Search press coverage",
+    "press.searchIncident": "Search press coverage for this incident",
     "records.title": "Known accident records",
     "records.countOf": "{shown} of {total}",
     "records.empty": "No matching source accident records were found near this intersection.",
@@ -451,6 +455,7 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "action.clear": "Leeren",
     "action.exportCsv": "CSV exportieren",
     "action.downloadFactsheet": "Faktenblatt herunterladen",
+    "action.labelFactsheet": "PDF",
     "action.analyze": "Analysieren",
     "action.analyzeChanges": "Änderungen analysieren",
     "streetView.title": "Google Street View",
@@ -566,6 +571,9 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "map.labelGoogleMaps": "Google Maps",
     "map.labelStreetView": "Street View",
     "map.labelResponsibleAuthority": "Behörde",
+    "press.label": "Presse",
+    "press.searchIntersection": "Presseberichte suchen",
+    "press.searchIncident": "Presseberichte zu diesem Unfall suchen",
     "records.title": "Bekannte Unfalldatensätze",
     "records.countOf": "{shown} von {total}",
     "records.empty": "In der Nähe dieser Kreuzung wurden keine passenden Quelldatensätze gefunden.",
@@ -847,8 +855,7 @@ const elements = {
   streetViewBody: byId<HTMLDivElement>("streetViewBody"),
   streetViewFrame: byId<HTMLIFrameElement>("streetViewFrame"),
   streetViewEmpty: byId<HTMLParagraphElement>("streetViewEmpty"),
-  exportBtn: byId<HTMLButtonElement>("exportBtn"),
-  downloadFactsheetBtn: byId<HTMLButtonElement>("downloadFactsheetBtn")
+  exportBtn: byId<HTMLButtonElement>("exportBtn")
 };
 
 const map = new MapCanvas(elements.mapCanvas, handleClusterSelection);
@@ -914,7 +921,7 @@ function wireEvents(): void {
   elements.clearBtn.addEventListener("click", clearData);
   elements.analyzeBtn.addEventListener("click", () => runAnalysis());
   elements.exportBtn.addEventListener("click", exportClusters);
-  elements.downloadFactsheetBtn.addEventListener("click", () => void downloadSelectedFactsheet());
+  elements.selectionDetails.addEventListener("click", handleSelectionDetailsClick);
 
   wireLinkedNumberRange(elements.clusterRadius, elements.clusterRadiusOut, markAnalysisSettingsDirty);
 
@@ -968,6 +975,17 @@ function wireEvents(): void {
           : { key, direction: defaultClusterSortDirection(key) };
       renderTables();
     });
+  }
+}
+
+function handleSelectionDetailsClick(event: MouseEvent): void {
+  if (!(event.target instanceof Element)) {
+    return;
+  }
+
+  const factsheetButton = event.target.closest<HTMLButtonElement>("[data-selected-action='factsheet']");
+  if (factsheetButton) {
+    void downloadSelectedFactsheet();
   }
 }
 
@@ -1791,6 +1809,7 @@ function renderSelection(cluster: IntersectionCluster | null): void {
   const streetViewUrl = googleStreetViewUrl(cluster);
   const authoritySearchUrl = responsibleAuthoritySearchUrlForCluster(cluster);
   const accidentRecords = clusterAccidentRecords(cluster);
+  const pressSearchUrl = pressSearchUrlForCluster(cluster, accidentRecords);
   const trendPanel = renderTrendPanel(cluster, accidentRecords);
   const recordPanel = renderSidebarAccidentRecords(accidentRecords, cluster.accidentCount);
   map.setSelectedIncidentPoints(
@@ -1814,7 +1833,8 @@ function renderSelection(cluster: IntersectionCluster | null): void {
       <div><dt>${escapeHtml(tr("details.severityPercent"))}</dt><dd>${formatSeverityPercent(cluster)}</dd></div>
       <div><dt>${escapeHtml(tr("details.vulnerableUsers"))}</dt><dd>${formatInteger(cluster.vulnerableCount)}</dd></div>
     </dl>
-    ${renderMapServiceActions(openStreetMapUrl, googleMapsUrl, streetViewUrl, authoritySearchUrl)}
+    ${renderMapServiceActions(openStreetMapUrl, googleMapsUrl, streetViewUrl)}
+    ${renderSelectedWorkflowActions(authoritySearchUrl, pressSearchUrl)}
     ${trendPanel}
     ${recordPanel}
   `;
@@ -1902,6 +1922,72 @@ function responsibleAuthoritySearchUrlForCluster(cluster: IntersectionCluster): 
   return `https://www.google.com/search?q=${encodeURIComponent(queryParts.join(" "))}`;
 }
 
+function pressSearchUrlForCluster(cluster: IntersectionCluster, records: CrossingAccident[]): string {
+  const latestRecord = records[0]?.accident ?? null;
+  const queryParts = [
+    "Unfall",
+    cluster.fatalCount > 0 ? "toedlicher Unfall" : cluster.seriousCount > 0 ? "schwer verletzt" : "Verkehrsunfall",
+    latestRecord ? accidentSearchDateLabel(latestRecord) : null,
+    clusterLocationText(cluster),
+    cluster.districtName,
+    cluster.administrativeRegionName,
+    cluster.stateName,
+    `${cluster.lat.toFixed(5)}, ${cluster.lon.toFixed(5)}`
+  ].filter((part): part is string => Boolean(part));
+  return googleSearchUrl(queryParts);
+}
+
+function pressSearchUrlForAccident(accident: AccidentRecord): string {
+  const queryParts = [
+    "Unfall",
+    pressSeveritySearchTerm(accident),
+    accidentSearchDateLabel(accident),
+    accident.municipalityName,
+    accident.districtName,
+    accident.stateName,
+    roadUserSearchTerms(accident)
+  ].filter((part): part is string => Boolean(part));
+  return googleSearchUrl(queryParts);
+}
+
+function googleSearchUrl(queryParts: string[]): string {
+  return `https://www.google.com/search?q=${encodeURIComponent(queryParts.join(" "))}`;
+}
+
+function accidentSearchDateLabel(accident: AccidentRecord): string {
+  if (accident.year && accident.month && accident.day) {
+    return `${String(accident.day).padStart(2, "0")}.${String(accident.month).padStart(2, "0")}.${accident.year}`;
+  }
+  if (accident.year && accident.month) {
+    return `${String(accident.month).padStart(2, "0")}.${accident.year}`;
+  }
+  return accident.year ? String(accident.year) : "";
+}
+
+function pressSeveritySearchTerm(accident: AccidentRecord): string {
+  switch (accident.category) {
+    case 1:
+      return "toedlicher Unfall";
+    case 2:
+      return "schwer verletzt";
+    case 3:
+      return "leicht verletzt";
+    default:
+      return "Verkehrsunfall";
+  }
+}
+
+function roadUserSearchTerms(accident: AccidentRecord): string | null {
+  const terms = [
+    accident.involvesCar ? "Pkw" : null,
+    accident.involvesPedestrian ? "Fussgaenger" : null,
+    accident.involvesBike ? "Fahrrad" : null,
+    accident.involvesMotorcycle ? "Motorrad" : null,
+    accident.involvesTruck ? "Lkw" : null
+  ].filter((term): term is string => Boolean(term));
+  return terms.length ? terms.join(" ") : null;
+}
+
 function scheduleMapRefresh(): void {
   window.requestAnimationFrame(() => {
     if (mobileLayout.matches && activeView !== "map") {
@@ -1914,15 +2000,13 @@ function scheduleMapRefresh(): void {
 function renderMapServiceActions(
   openStreetMapUrl: string,
   googleMapsUrl: string,
-  streetViewUrl: string,
-  authoritySearchUrl: string
+  streetViewUrl: string
 ): string {
   return `
     <div class="selected-map-actions" aria-label="${escapeHtml(tr("aria.openMapServices"))}">
       ${mapServiceLink(openStreetMapUrl, tr("map.openOsm"), tr("map.labelOsm"))}
       ${mapServiceLink(googleMapsUrl, tr("map.openGoogleMaps"), tr("map.labelGoogleMaps"))}
       ${mapServiceLink(streetViewUrl, tr("map.openStreetView"), tr("map.labelStreetView"))}
-      ${mapServiceLink(authoritySearchUrl, tr("map.searchResponsibleAuthority"), tr("map.labelResponsibleAuthority"))}
     </div>
   `;
 }
@@ -1930,6 +2014,28 @@ function renderMapServiceActions(
 function mapServiceLink(url: string, accessibleLabel: string, visibleLabel: string): string {
   const label = escapeHtml(accessibleLabel);
   return `<a class="map-service-link" href="${url}" target="_blank" rel="noopener noreferrer" aria-label="${label}" title="${label}">${escapeHtml(visibleLabel)}</a>`;
+}
+
+function renderSelectedWorkflowActions(authoritySearchUrl: string, pressSearchUrl: string): string {
+  return `
+    <div class="selected-workflow-actions">
+      <button class="map-service-link factsheet-button" type="button" data-selected-action="factsheet" aria-label="${escapeHtml(tr("action.downloadFactsheet"))}" title="${escapeHtml(tr("action.downloadFactsheet"))}">
+        ${escapeHtml(tr("action.labelFactsheet"))}
+      </button>
+      ${mapServiceLink(authoritySearchUrl, tr("map.searchResponsibleAuthority"), tr("map.labelResponsibleAuthority"))}
+      ${mapServiceLink(pressSearchUrl, tr("press.searchIntersection"), tr("press.label"))}
+    </div>
+  `;
+}
+
+function renderAccidentActionLinks(accident: AccidentRecord): string {
+  return `
+    <div class="accident-record-actions">
+      <a href="${escapeHtml(pressSearchUrlForAccident(accident))}" target="_blank" rel="noopener noreferrer" aria-label="${escapeHtml(tr("press.searchIncident"))}" title="${escapeHtml(tr("press.searchIncident"))}">
+        ${escapeHtml(tr("press.label"))}
+      </a>
+    </div>
+  `;
 }
 
 function renderSidebarAccidentRecords(records: CrossingAccident[], totalCount: number): string {
@@ -1950,6 +2056,7 @@ function renderSidebarAccidentRecords(records: CrossingAccident[], totalCount: n
     .map(({ accident, distanceMeters }, index) => {
       const severity = accidentSeverity(accident);
       const recordNumber = String(index + 1);
+      const actionLinks = renderAccidentActionLinks(accident);
       const rows = accidentRecordRows(accident, distanceMeters)
         .map((row) => `<div><dt>${escapeHtml(row.label)}</dt><dd>${escapeHtml(row.value)}</dd></div>`)
         .join("");
@@ -1959,6 +2066,7 @@ function renderSidebarAccidentRecords(records: CrossingAccident[], totalCount: n
             <span class="accident-record-number" aria-label="${escapeHtml(trf("records.incidentNumber", { number: recordNumber }))}">${recordNumber}</span>
             <span class="severity-pill severity-${severity}">${accidentSeverityLabel(accident)}</span>
             <strong>${escapeHtml(accidentTimeLabel(accident))}</strong>
+            ${actionLinks}
           </div>
           <dl class="accident-record-fields">${rows}</dl>
         </li>
@@ -2658,7 +2766,10 @@ async function downloadSelectedFactsheet(): Promise<void> {
     return;
   }
 
-  elements.downloadFactsheetBtn.disabled = true;
+  const factsheetButtons = selectedFactsheetButtons();
+  factsheetButtons.forEach((button) => {
+    button.disabled = true;
+  });
   setStatus(tr("status.factsheetCreating"), 100);
   try {
     const records = clusterAccidentRecords(cluster);
@@ -2673,8 +2784,14 @@ async function downloadSelectedFactsheet(): Promise<void> {
   } catch (error) {
     setStatus(trf("status.factsheetFailed", { error: errorMessage(error) }), 100, "problem");
   } finally {
-    elements.downloadFactsheetBtn.disabled = false;
+    factsheetButtons.forEach((button) => {
+      button.disabled = false;
+    });
   }
+}
+
+function selectedFactsheetButtons(): HTMLButtonElement[] {
+  return Array.from(elements.selectionDetails.querySelectorAll<HTMLButtonElement>("[data-selected-action='factsheet']"));
 }
 
 async function createFactsheetPdf(cluster: IntersectionCluster, records: CrossingAccident[]): Promise<Blob> {
@@ -3025,6 +3142,7 @@ function drawFactsheetAccidentDetails(layout: FactsheetLayout, records: Crossing
       layout,
       accidentRecordRows(accident, distanceMeters).map((row) => [row.label, row.value])
     );
+    drawFactsheetLinkRow(layout, tr("press.label"), pressSearchUrlForAccident(accident), tr("press.searchIncident"));
     layout.y += 16;
   });
 }

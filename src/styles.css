@@ -925,6 +925,14 @@ select {
   margin: 12px 0 16px;
 }
 
+.selected-workflow-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin: -4px 0 16px;
+}
+
 .map-service-link {
   display: inline-flex;
   align-items: center;
@@ -939,6 +947,11 @@ select {
   font-weight: 600;
   line-height: 1;
   text-decoration: none;
+}
+
+button.map-service-link {
+  cursor: pointer;
+  font-family: inherit;
 }
 
 .map-service-link:hover,
@@ -1048,9 +1061,11 @@ select {
 }
 
 .accident-record-topline strong {
-  margin-left: auto;
+  flex: 1 1 150px;
+  min-width: 0;
   color: #172126;
   font-size: 0.86rem;
+  line-height: 1.25;
 }
 
 .accident-record-fields {
@@ -1080,6 +1095,35 @@ select {
 .accident-record-fields dd span {
   color: #53636d;
   font-size: 0.76rem;
+}
+
+.accident-record-actions {
+  display: flex;
+  flex-wrap: wrap;
+  flex: 0 0 auto;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.accident-record-actions a {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  padding: 0 9px;
+  border: 1px solid #cbd4ce;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #0b5d87;
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.accident-record-actions a:hover,
+.accident-record-actions a:focus {
+  border-color: #166b6d;
+  color: #166b6d;
+  outline: none;
 }
 
 .severity-pill {
