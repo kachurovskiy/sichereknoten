@@ -265,7 +265,7 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "status.factsheetDownloaded": "Factsheet downloaded.",
     "status.factsheetFailed": "Could not create factsheet: {error}",
     "status.bundleLoadFailed":
-      "Could not load {path}. The docs/data files must sit next to docs/index.html. Some browsers block automatic file:// reads; GitHub Pages or any static host will work. {errors}",
+      "Could not load {path}. The embedded data bundle should be present in docs/assets; when running without generated data scripts, serve source CSV files from data/csv. Re-run npm run build after data changes. {errors}",
     "status.localReadBlocked": "local read blocked",
     "label.away": "{distance} away",
     "noun.accident.one": "accident",
@@ -559,7 +559,7 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "status.factsheetDownloaded": "Faktenblatt heruntergeladen.",
     "status.factsheetFailed": "Faktenblatt konnte nicht erstellt werden: {error}",
     "status.bundleLoadFailed":
-      "{path} konnte nicht geladen werden. Die docs/data-Dateien müssen neben docs/index.html liegen. Einige Browser blockieren automatische file://-Zugriffe; GitHub Pages oder jeder statische Host funktioniert. {errors}",
+      "{path} konnte nicht geladen werden. Das eingebettete Datenpaket sollte in docs/assets liegen; beim Betrieb ohne generierte Datenskripte müssen die Quell-CSV-Dateien aus data/csv bereitgestellt werden. Führe nach Datenänderungen npm run build aus. {errors}",
     "status.localReadBlocked": "lokaler Lesezugriff blockiert",
     "label.away": "{distance} entfernt",
     "noun.accident.one": "Unfall",

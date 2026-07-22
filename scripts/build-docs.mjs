@@ -7,7 +7,7 @@ import path from "node:path";
 const root = process.cwd();
 const docsDir = path.join(root, "docs");
 const assetsDir = path.join(docsDir, "assets");
-const dataDir = path.join(docsDir, "data");
+const sourceDataDir = path.join(root, "data");
 
 await mkdir(assetsDir, { recursive: true });
 await rm(assetsDir, { recursive: true, force: true });
@@ -134,7 +134,7 @@ async function sourceFiles(dir) {
 }
 
 async function csvFiles() {
-  const csvDir = path.join(dataDir, "csv");
+  const csvDir = path.join(sourceDataDir, "csv");
   const entries = await readdir(csvDir);
   const files = [];
 

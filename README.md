@@ -14,16 +14,17 @@ Open `docs/index.html` from the build output, serve the built app locally with `
 
 The app supports:
 
-- accident CSV files from `docs/data/csv`
+- accident CSV files from `data/csv`, bundled into `docs/assets/data-*.js`
+- municipality source workbook from `data/AuszugGV2QAktuell.xlsx`, generated into `src/municipalities.ts`
 - map view with local canvas rendering and an OpenStreetMap basemap
 - Bundesland summaries and top intersection tables
 - CSV export of analyzed intersection clusters with Fatal %
 
-The app automatically loads the bundled CSV files from `docs/data/csv`. Raw SHP/DBF Unfallatlas downloads are not required in the repository because the bundled CSV files already contain the accident coordinates and attributes used by the browser analysis.
+The app automatically loads the compressed data scripts in `docs/assets`. Source data files live under `data/` and are not required in the deployed `docs/` folder. Raw SHP/DBF Unfallatlas downloads are not required in the repository because the bundled CSV files already contain the accident coordinates and attributes used by the browser analysis.
 
 The map draws grayscale OpenStreetMap tiles behind the accident markers and loads only the visible tiles for the current viewport. OpenStreetMap tiles require a browser `Referer` header, so direct `file://` use may show partial or blocked tiles; use `npm run serve:docs` or GitHub Pages for complete tiles.
 
-For direct `file://` use, the build also writes compressed data scripts in `docs/assets/data-*.js`. Re-run `npm run build` after changing files in `docs/data`.
+For direct `file://` use, the build writes compressed data scripts in `docs/assets/data-*.js`. Re-run `npm run build` after changing files in `data/csv`.
 
 After the first successful load, parsed records are cached in IndexedDB under the generated data version, so normal refreshes skip CSV parsing. Analysis results are also cached per data version, app build, and analysis settings, so reloads with the same controls skip the clustering stage. The cache invalidates automatically after `npm run build` changes the data version or app build fingerprint.
 

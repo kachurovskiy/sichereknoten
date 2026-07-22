@@ -4,12 +4,14 @@ This project is a static browser app. There is no backend processing step at run
 
 ## Source Files
 
-Default inputs live under `docs/data`:
+Build-time source inputs live under `data`:
 
-- `docs/data/csv/*.csv`: accident records used by the app by default.
+- `data/csv/*.csv`: accident records bundled into the app.
+- `data/AuszugGV2QAktuell.xlsx`: Destatis municipality directory extract used to generate `src/municipalities.ts`.
 
-The default CSV list is defined in `src/main.ts` as `BUNDLED_CSV_FILES`.
-Raw SHP/DBF Unfallatlas downloads are intentionally excluded from `docs/data`: the DBF files are very large, are not loaded by the current app, and would duplicate the same accident records already represented by the CSV inputs.
+The default public CSV paths are defined in `src/main.ts` as `BUNDLED_CSV_FILES`. `scripts/build-docs.mjs` maps those public paths to source files in `data/csv` and writes compressed data scripts into `docs/assets`.
+`scripts/generate-municipalities.mjs` reads `data/AuszugGV2QAktuell.xlsx` and writes the compact lookup source used at runtime.
+Raw SHP/DBF Unfallatlas downloads are intentionally excluded from the repository: the DBF files are very large, are not loaded by the current app, and would duplicate the same accident records already represented by the CSV inputs.
 
 ## Source Acknowledgements And License
 
@@ -35,7 +37,7 @@ tsc --noEmit && node scripts/build-docs.mjs
    - `docs/assets/data-manifest.js`
    - `docs/assets/data-1.js`, `data-2.js`, etc.
 
-Each data script contains one source CSV file from `docs/data/csv`, compressed with gzip, encoded as base64, and split into 256 KB string chunks. Splitting the bundle one file per script keeps each generated file below GitHub's 100 MB single-file limit.
+Each data script contains one source CSV file from `data/csv`, compressed with gzip, encoded as base64, and split into 256 KB string chunks. Splitting the bundle one file per script keeps each generated file below GitHub's 100 MB single-file limit.
 
 The build script also computes a SHA-256 based data version from the raw CSV file paths and bytes. `docs/assets/data-manifest.js` exposes that version as `globalThis.__SICHERE_KNOTEN_DATA__.version`. It separately computes an app build fingerprint from the source files and injects it into `app.js` for analysis-cache invalidation.
 
@@ -52,7 +54,7 @@ For each required data file, `readBundledBlob()` first checks `globalThis.__SICH
 3. Decompresses gzip with `fflate.gunzipSync`.
 4. Wraps the result in a `Blob`/`File`.
 
-If the embedded bundle is not present, the app falls back to `fetch()`/XHR from `docs/data`. That fallback is useful on a static web host, but many browsers block it from `file://`.
+If the embedded bundle is not present, the app falls back to `fetch()`/XHR from `data/csv`. That fallback is useful during local development when the project root is served by Vite, but many browsers block it from `file://`. The deployable `docs/` folder is expected to use the generated `docs/assets/data-*.js` bundle rather than raw CSV files.
 
 CSV files are decompressed and parsed sequentially to reduce peak memory use.
 
@@ -212,7 +214,7 @@ The state summary table is sorted by Fatal %.
 
 ## Updating Data
 
-When files in `docs/data` change:
+When files in `data/csv` change:
 
 ```powershell
 npm run build
@@ -226,4 +228,11 @@ This regenerates:
 - `docs/assets/data-*.js`
 - the data version in `docs/assets/data-manifest.js`
 
-Do not edit generated files in `docs/assets` by hand. Change source code under `src/` or raw data under `docs/data`, then rebuild. Existing browser caches are invalidated automatically when the generated data version changes.
+Do not edit generated files in `docs/assets` by hand. Change source code under `src/` or raw data under `data/csv`, then rebuild. Existing browser caches are invalidated automatically when the generated data version changes.
+
+When `data/AuszugGV2QAktuell.xlsx` changes:
+
+```powershell
+npm run generate:municipalities
+npm run build
+```
