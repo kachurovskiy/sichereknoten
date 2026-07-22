@@ -1,4 +1,5 @@
 import { AccidentRecord } from "../types";
+import { administrativeRegionNameFor, districtNameFor, municipalityNameFor } from "../municipalities";
 import { normalizeStateCode, stateNameFor } from "../states";
 
 export function parseNumber(value: unknown): number | null {
@@ -46,6 +47,9 @@ export function accidentFromRecord(
   }
 
   const stateCode = normalizeStateCode(readField(fields, "ULAND"));
+  const administrativeRegionCode = readOptionalString(readField(fields, "UREGBEZ"));
+  const districtCode = readOptionalString(readField(fields, "UKREIS"));
+  const municipalityCode = readOptionalString(readField(fields, "UGEMEINDE"));
   const category = parseInteger(readField(fields, "UKATEGORIE"));
   const id = readOptionalString(readField(fields, "UIDENTSTLAE", "UIDENTSTLA", "ID", "OID_")) ?? `${source}:${index}`;
   const serialNumber = readOptionalString(readField(fields, "ID", "OID_"));
@@ -57,9 +61,12 @@ export function accidentFromRecord(
     sourceType,
     stateCode,
     stateName: stateNameFor(stateCode),
-    administrativeRegionCode: readOptionalString(readField(fields, "UREGBEZ")),
-    districtCode: readOptionalString(readField(fields, "UKREIS")),
-    municipalityCode: readOptionalString(readField(fields, "UGEMEINDE")),
+    administrativeRegionCode,
+    administrativeRegionName: administrativeRegionNameFor(stateCode, administrativeRegionCode),
+    districtCode,
+    districtName: districtNameFor(stateCode, administrativeRegionCode, districtCode),
+    municipalityCode,
+    municipalityName: municipalityNameFor(stateCode, administrativeRegionCode, districtCode, municipalityCode),
     year: parseInteger(readField(fields, "UJAHR")) ?? 0,
     month: parseInteger(readField(fields, "UMONAT")),
     hour: parseInteger(readField(fields, "USTUNDE")),

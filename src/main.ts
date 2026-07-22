@@ -114,6 +114,9 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "details.none": "No intersection selected.",
     "details.selectFirst": "Select an intersection first.",
     "details.state": "State",
+    "details.adminRegion": "Administrative region",
+    "details.district": "District",
+    "details.municipality": "Municipality",
     "details.coordinates": "Coordinates",
     "details.years": "Years",
     "details.accidents": "Accidents",
@@ -135,6 +138,8 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "settings.data": "Data",
     "settings.dataNote": "Bundled CSV accident data loads automatically from the offline data bundle.",
     "settings.accidentData": "Accident data:",
+    "settings.municipalityData": "Municipality data:",
+    "settings.destatisMunicipalities": "/ Destatis municipality directory extract, 2nd quarter 2026.",
     "settings.statsOffices": "/ Federal and state statistical offices.",
     "settings.reusedUnder": "Reused under",
     "settings.licenseNote": "/ dl-de/by-2-0. Source data is processed, clustered, and analyzed by this app.",
@@ -356,6 +361,9 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "details.none": "Keine Kreuzung ausgewählt.",
     "details.selectFirst": "Wähle zuerst eine Kreuzung aus.",
     "details.state": "Bundesland",
+    "details.adminRegion": "Regierungsbezirk",
+    "details.district": "Kreis",
+    "details.municipality": "Gemeinde",
     "details.coordinates": "Koordinaten",
     "details.years": "Jahre",
     "details.accidents": "Unfälle",
@@ -377,6 +385,8 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "settings.data": "Daten",
     "settings.dataNote": "Gebündelte CSV-Unfalldaten werden automatisch aus dem Offline-Datenpaket geladen.",
     "settings.accidentData": "Unfalldaten:",
+    "settings.municipalityData": "Gemeindedaten:",
+    "settings.destatisMunicipalities": "/ Destatis-Gemeindeverzeichnis-Auszug, 2. Quartal 2026.",
     "settings.statsOffices": "/ Statistische Ämter des Bundes und der Länder.",
     "settings.reusedUnder": "Weiterverwendet unter",
     "settings.licenseNote": "/ dl-de/by-2-0. Die Quelldaten werden von dieser App verarbeitet, geclustert und analysiert.",
@@ -1464,7 +1474,9 @@ function renderStateHotspotList(): void {
   }
 
   clusters.forEach((cluster) => {
-    elements.stateHotspotList.append(hotspotButton(cluster, cluster.stateName, { metricPlacement: "header" }));
+    elements.stateHotspotList.append(
+      hotspotButton(cluster, stateCode === "all" ? cluster.stateName : clusterLocationText(cluster), { metricPlacement: "header" })
+    );
   });
 }
 
@@ -1618,6 +1630,9 @@ function renderSelection(cluster: IntersectionCluster | null): void {
   elements.selectionDetails.innerHTML = `
     <dl>
       <div><dt>${escapeHtml(tr("details.state"))}</dt><dd>${escapeHtml(cluster.stateName)}</dd></div>
+      ${cluster.administrativeRegionName ? `<div><dt>${escapeHtml(tr("details.adminRegion"))}</dt><dd>${escapeHtml(cluster.administrativeRegionName)}</dd></div>` : ""}
+      ${cluster.districtName ? `<div><dt>${escapeHtml(tr("details.district"))}</dt><dd>${escapeHtml(cluster.districtName)}</dd></div>` : ""}
+      ${cluster.municipalityName ? `<div><dt>${escapeHtml(tr("details.municipality"))}</dt><dd>${escapeHtml(cluster.municipalityName)}</dd></div>` : ""}
       <div><dt>${escapeHtml(tr("details.coordinates"))}</dt><dd>${cluster.lat.toFixed(5)}, ${cluster.lon.toFixed(5)}</dd></div>
       <div><dt>${escapeHtml(tr("details.years"))}</dt><dd>${cluster.years.join(", ")}</dd></div>
       <div><dt>${escapeHtml(tr("details.accidents"))}</dt><dd>${formatInteger(cluster.accidentCount)}</dd></div>
@@ -1985,15 +2000,37 @@ function roadUsersLabel(accident: AccidentRecord): string {
 function administrativeAreaLabel(accident: AccidentRecord): string {
   const parts = [`${accident.stateName} (${accident.stateCode})`];
   if (accident.administrativeRegionCode) {
-    parts.push(trf("records.adminRegion", { code: accident.administrativeRegionCode }));
+    parts.push(namedCodeLabel(accident.administrativeRegionName, accident.administrativeRegionCode) ?? trf("records.adminRegion", { code: accident.administrativeRegionCode }));
   }
   if (accident.districtCode) {
-    parts.push(trf("records.district", { code: accident.districtCode }));
+    parts.push(namedCodeLabel(accident.districtName, accident.districtCode) ?? trf("records.district", { code: accident.districtCode }));
   }
   if (accident.municipalityCode) {
-    parts.push(trf("records.municipality", { code: accident.municipalityCode }));
+    const municipalityLabel = namedCodeLabel(accident.municipalityName, accident.municipalityCode);
+    if (municipalityLabel && accident.municipalityName !== accident.districtName) {
+      parts.push(municipalityLabel);
+    } else if (!municipalityLabel && !hasEquivalentDistrictMunicipalityCode(accident)) {
+      parts.push(trf("records.municipality", { code: accident.municipalityCode }));
+    }
   }
   return parts.join(", ");
+}
+
+function namedCodeLabel(name: string | null, code: string | null): string | null {
+  return name && code ? `${name} (${code})` : null;
+}
+
+function hasEquivalentDistrictMunicipalityCode(accident: AccidentRecord): boolean {
+  return Boolean(
+    accident.districtName &&
+      accident.districtCode &&
+      accident.municipalityCode &&
+      normalizeCodePart(accident.municipalityCode, 3).endsWith(normalizeCodePart(accident.districtCode, 2))
+  );
+}
+
+function normalizeCodePart(value: string, width: number): string {
+  return value.trim().replace(/\D/g, "").padStart(width, "0").slice(-width);
 }
 
 function linRefLabel(accident: AccidentRecord): string | null {
@@ -2232,16 +2269,22 @@ function exportClusters(): void {
 
   const header = [
     "state",
+    "administrative_region",
+    "district",
+    "municipality",
     "lat",
     "lon",
     "accidents",
     "fatal",
     "serious",
-    "fatal_percent"
+    "severity_percent"
   ];
   const rows = result.clusters.map((cluster) =>
     [
       cluster.stateName,
+      cluster.administrativeRegionName ?? "",
+      cluster.districtName ?? "",
+      cluster.municipalityName ?? "",
       cluster.lat,
       cluster.lon,
       cluster.accidentCount,
@@ -2267,7 +2310,7 @@ function clusterLocation(cluster: IntersectionCluster): string {
 }
 
 function clusterLocationText(cluster: IntersectionCluster): string {
-  return `${cluster.lat.toFixed(5)}, ${cluster.lon.toFixed(5)}`;
+  return cluster.municipalityName ?? cluster.districtName ?? cluster.administrativeRegionName ?? `${cluster.lat.toFixed(5)}, ${cluster.lon.toFixed(5)}`;
 }
 
 function setBusy(isBusy: boolean): void {

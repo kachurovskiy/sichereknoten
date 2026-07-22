@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
+    "generate:municipalities": "node scripts/generate-municipalities.mjs",
     "build": "tsc --noEmit && node scripts/build-docs.mjs",
     "preview": "vite preview --host 127.0.0.1",
     "serve:docs": "vite docs --host 127.0.0.1"

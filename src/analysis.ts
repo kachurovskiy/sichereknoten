@@ -35,6 +35,9 @@ interface ClusterAccumulator {
   yearSet: Set<number>;
   yearStats: Map<number, ClusterYearAccumulator>;
   stateCounts: Map<string, number>;
+  administrativeRegionCounts: Map<string, number>;
+  districtCounts: Map<string, number>;
+  municipalityCounts: Map<string, number>;
 }
 
 interface StateSummaryAccumulator extends StateSummary {
@@ -144,7 +147,10 @@ function buildClusters(accidents: AccidentRecord[], radiusMeters: number): Clust
         accidentKeys: [],
         yearSet: new Set(),
         yearStats: new Map(),
-        stateCounts: new Map()
+        stateCounts: new Map(),
+        administrativeRegionCounts: new Map(),
+        districtCounts: new Map(),
+        municipalityCounts: new Map()
       };
       clusters.push(nearest);
       const bucket = buckets.get(bucketKey);
@@ -172,6 +178,18 @@ function addAccidentToCluster(cluster: ClusterAccumulator, accident: AccidentRec
   cluster.accidentKeys.push(accidentKey(accident));
   cluster.yearSet.add(accident.year);
   cluster.stateCounts.set(accident.stateCode, (cluster.stateCounts.get(accident.stateCode) ?? 0) + 1);
+  if (accident.administrativeRegionName) {
+    cluster.administrativeRegionCounts.set(
+      accident.administrativeRegionName,
+      (cluster.administrativeRegionCounts.get(accident.administrativeRegionName) ?? 0) + 1
+    );
+  }
+  if (accident.districtName) {
+    cluster.districtCounts.set(accident.districtName, (cluster.districtCounts.get(accident.districtName) ?? 0) + 1);
+  }
+  if (accident.municipalityName) {
+    cluster.municipalityCounts.set(accident.municipalityName, (cluster.municipalityCounts.get(accident.municipalityName) ?? 0) + 1);
+  }
   addAccidentToYearStats(cluster, accident);
 
   if (accident.category === 1) {
@@ -262,6 +280,9 @@ function finalizeCluster(
     lat: cluster.lat,
     stateCode,
     stateName: stateNameFromCode(stateCode),
+    administrativeRegionName: topMapEntry(cluster.administrativeRegionCounts),
+    districtName: topMapEntry(cluster.districtCounts),
+    municipalityName: topMapEntry(cluster.municipalityCounts),
     accidentCount: cluster.accidentCount,
     fatalCount: cluster.fatalCount,
     seriousCount: cluster.seriousCount,

@@ -31,7 +31,7 @@ const CHUNK_STORE = "chunks";
 const ANALYSIS_STORE = "analysis";
 const META_KEY = "active";
 const ACCIDENT_CHUNK_SIZE = 25000;
-const PARSED_DATA_SCHEMA_VERSION = 3;
+const PARSED_DATA_SCHEMA_VERSION = 6;
 
 export async function readParsedDataCache(version: string, onProgress: CacheProgress): Promise<ParsedDataCache | null> {
   if (!("indexedDB" in window)) {

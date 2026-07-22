@@ -14,8 +14,11 @@ export interface AccidentRecord {
   stateCode: string;
   stateName: string;
   administrativeRegionCode: string | null;
+  administrativeRegionName: string | null;
   districtCode: string | null;
+  districtName: string | null;
   municipalityCode: string | null;
+  municipalityName: string | null;
   year: number;
   month: number | null;
   hour: number | null;
@@ -78,6 +81,9 @@ export interface IntersectionCluster {
   lat: number;
   stateCode: string;
   stateName: string;
+  administrativeRegionName: string | null;
+  districtName: string | null;
+  municipalityName: string | null;
   accidentCount: number;
   fatalCount: number;
   seriousCount: number;
