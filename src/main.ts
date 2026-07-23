@@ -1342,7 +1342,11 @@ async function runAnalysisWithCache(
 ): Promise<void> {
   let telemetryStatus: InitializationTelemetryStatus = "done";
   try {
-    if (cacheContext) {
+    if (cacheContext && pendingParsedDataCacheWrite) {
+      recordInitializationStep(initializationTelemetry, "skip analysis cache", analysisTelemetryDetail(options), {
+        reason: "parsed data cache miss"
+      });
+    } else if (cacheContext) {
       setStatus(tr("status.checkingAnalysisCache"), 75);
       const cached = await measureInitializationStep(
         initializationTelemetry,
@@ -4367,6 +4371,20 @@ function createPostRenderCacheTelemetry(source: InitializationTelemetry | null):
     steps: [],
     logged: false
   };
+}
+
+function recordInitializationStep(
+  telemetry: InitializationTelemetry | null,
+  name: string,
+  detail: string | null,
+  metadata: InitializationTelemetryMetadata
+): void {
+  if (!telemetry) {
+    return;
+  }
+
+  const step = startInitializationStep(telemetry, name, detail);
+  finishInitializationStep(step, "done", metadata);
 }
 
 function enqueuePostRenderCacheWrites(
