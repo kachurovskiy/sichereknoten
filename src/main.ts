@@ -1,7 +1,7 @@
 import "./styles.css";
 import { gunzipSync } from "fflate";
 import { analyzeDangerousIntersectionsInBackground } from "./analysisRunner";
-import { readAnalysisCache, readParsedDataCache, writeAnalysisCache, writeParsedDataCache } from "./cache";
+import { readAnalysisCache, readParsedDataCache, resetAppStorage, writeAnalysisCache, writeParsedDataCache } from "./cache";
 import { GeoGridIndex } from "./geo";
 import { MapCanvas } from "./mapCanvas";
 import { parseAccidentCsvFiles } from "./parsers/csv";
@@ -159,8 +159,7 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "action.centerLocation": "Center map on your location",
     "action.show": "Show",
     "action.hide": "Hide",
-    "action.reloadData": "Reload data",
-    "action.clear": "Clear",
+    "action.resetApp": "Reset app",
     "action.exportCsv": "Export CSV",
     "action.downloadFactsheet": "Download factsheet",
     "action.labelFactsheet": "PDF",
@@ -265,7 +264,7 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "status.noSeverityNearby": "No intersections match the active severity filters near this location.",
     "status.stateHotspotsPending": "State hotspots will appear after the data loads.",
     "status.noAnalysisMatches": "No intersections match the active analysis settings.",
-    "status.dataCleared": "Data cleared. Use Reload data to load bundled files again.",
+    "status.resettingApp": "Resetting app storage...",
     "status.noClustersToExport": "No analyzed clusters to export.",
     "status.factsheetCreating": "Preparing factsheet PDF.",
     "status.factsheetDownloaded": "Factsheet downloaded.",
@@ -460,8 +459,7 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "action.centerLocation": "Karte auf deinen Standort zentrieren",
     "action.show": "Anzeigen",
     "action.hide": "Ausblenden",
-    "action.reloadData": "Daten neu laden",
-    "action.clear": "Leeren",
+    "action.resetApp": "App zurücksetzen",
     "action.exportCsv": "CSV exportieren",
     "action.downloadFactsheet": "Faktenblatt herunterladen",
     "action.labelFactsheet": "PDF",
@@ -565,7 +563,7 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "status.noSeverityNearby": "Keine Kreuzungen in der Nähe passen zu den aktiven Unfallfolge-Filtern.",
     "status.stateHotspotsPending": "Bundesland-Hotspots erscheinen, sobald die Daten geladen sind.",
     "status.noAnalysisMatches": "Keine Kreuzungen passen zu den aktiven Analyse-Einstellungen.",
-    "status.dataCleared": "Daten geleert. Nutze Daten neu laden, um die gebündelten Dateien erneut zu laden.",
+    "status.resettingApp": "App-Speicher wird zurückgesetzt...",
     "status.noClustersToExport": "Keine analysierten Cluster zum Exportieren.",
     "status.factsheetCreating": "Faktenblatt-PDF wird vorbereitet.",
     "status.factsheetDownloaded": "Faktenblatt heruntergeladen.",
@@ -823,8 +821,7 @@ const elements = {
   splashLoadingTitle: byId<HTMLHeadingElement>("splashLoadingTitle"),
   splashLoadingStatus: byId<HTMLParagraphElement>("splashLoadingStatus"),
   splashLoadingBar: byId<HTMLDivElement>("splashLoadingBar"),
-  loadBundledBtn: byId<HTMLButtonElement>("loadBundledBtn"),
-  clearBtn: byId<HTMLButtonElement>("clearBtn"),
+  resetAppBtn: byId<HTMLButtonElement>("resetAppBtn"),
   analyzeBtn: byId<HTMLButtonElement>("analyzeBtn"),
   clusterRadius: byId<HTMLInputElement>("clusterRadius"),
   clusterRadiusOut: byId<HTMLInputElement>("clusterRadiusOut"),
@@ -942,8 +939,7 @@ function applyStaticTranslations(): void {
 }
 
 function wireEvents(): void {
-  elements.loadBundledBtn.addEventListener("click", () => void loadBundledData());
-  elements.clearBtn.addEventListener("click", clearData);
+  elements.resetAppBtn.addEventListener("click", () => void resetApp());
   elements.analyzeBtn.addEventListener("click", () => runAnalysis());
   elements.exportBtn.addEventListener("click", exportClusters);
   elements.selectionDetails.addEventListener("click", handleSelectionDetailsClick);
@@ -2847,19 +2843,14 @@ function updateRangeOutputs(): void {
   elements.clusterRadiusOut.value = elements.clusterRadius.value;
 }
 
-function clearData(): void {
-  accidents = [];
-  result = null;
-  selectedCluster = null;
-  userLocation = null;
-  activeAnalysisOptions = null;
-  crossingAccidentIndexCache = null;
-  accidentKeyLookupCache = null;
-  analysisSettingsDirty = false;
-  populateFilters();
-  renderAll();
-  updateAnalyzeButton();
-  setStatus(tr("status.dataCleared"), 0, "idle");
+async function resetApp(): Promise<void> {
+  setBusy(true);
+  setStatus(tr("status.resettingApp"), 0);
+  try {
+    await resetAppStorage();
+  } finally {
+    window.location.reload();
+  }
 }
 
 function exportClusters(): void {
@@ -3879,7 +3870,7 @@ function clusterLocationText(cluster: IntersectionCluster): string {
 
 function setBusy(isBusy: boolean): void {
   elements.analyzeBtn.disabled = isBusy;
-  elements.loadBundledBtn.disabled = isBusy;
+  elements.resetAppBtn.disabled = isBusy;
   elements.splash.hidden = !isBusy;
   elements.splash.setAttribute("aria-busy", String(isBusy));
   setAnalysisControlsDisabled(isBusy);

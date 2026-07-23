@@ -34,6 +34,10 @@ const META_KEY = "active";
 const ACCIDENT_CHUNK_SIZE = 25000;
 const PARSED_DATA_SCHEMA_VERSION = 9;
 
+type IndexedDbFactoryWithDatabases = IDBFactory & {
+  databases?: () => Promise<Array<{ name?: string | null }>>;
+};
+
 export async function readParsedDataCache(version: string, onProgress: CacheProgress): Promise<ParsedDataCache | null> {
   if (!("indexedDB" in window)) {
     return null;
@@ -156,6 +160,13 @@ export async function writeAnalysisCache(
   }
 }
 
+export async function resetAppStorage(): Promise<void> {
+  clearWebStorage("localStorage");
+  clearWebStorage("sessionStorage");
+
+  await Promise.allSettled([deleteCacheStorage(), deleteIndexedDbStorage()]);
+}
+
 function openCacheDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
@@ -209,6 +220,61 @@ function clearStore(db: IDBDatabase, storeName: string): Promise<void> {
     transaction.oncomplete = () => resolve();
     transaction.onerror = () => reject(transaction.error ?? new Error(`Could not clear ${storeName}.`));
     transaction.onabort = () => reject(transaction.error ?? new Error(`Could not clear ${storeName}.`));
+  });
+}
+
+function clearWebStorage(storageKey: "localStorage" | "sessionStorage"): void {
+  try {
+    window[storageKey].clear();
+  } catch {
+    // Storage can be unavailable in private or embedded contexts.
+  }
+}
+
+async function deleteCacheStorage(): Promise<void> {
+  if (!("caches" in window)) {
+    return;
+  }
+
+  const cacheNames = await window.caches.keys();
+  await Promise.all(cacheNames.map((name) => window.caches.delete(name)));
+}
+
+async function deleteIndexedDbStorage(): Promise<void> {
+  if (!("indexedDB" in window)) {
+    return;
+  }
+
+  const databaseNames = new Set<string>([DB_NAME]);
+  for (const name of await indexedDbDatabaseNames()) {
+    databaseNames.add(name);
+  }
+
+  await Promise.all(Array.from(databaseNames).map(deleteIndexedDbDatabase));
+}
+
+async function indexedDbDatabaseNames(): Promise<string[]> {
+  const dbFactory = indexedDB as IndexedDbFactoryWithDatabases;
+  if (!dbFactory.databases) {
+    return [];
+  }
+
+  try {
+    const databases = await dbFactory.databases();
+    return databases
+      .map((database) => database.name)
+      .filter((name): name is string => typeof name === "string" && name.length > 0);
+  } catch {
+    return [];
+  }
+}
+
+function deleteIndexedDbDatabase(name: string): Promise<void> {
+  return new Promise((resolve) => {
+    const request = indexedDB.deleteDatabase(name);
+    request.onsuccess = () => resolve();
+    request.onerror = () => resolve();
+    request.onblocked = () => window.setTimeout(resolve, 500);
   });
 }
 
