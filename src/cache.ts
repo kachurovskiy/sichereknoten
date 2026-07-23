@@ -7,6 +7,11 @@ export interface ParsedDataCache {
 
 export type CacheProgress = (message: string, progress: number) => void;
 
+export interface ParsedDataCacheWriteOptions {
+  chunkSize?: number;
+  delayBetweenChunksMs?: number;
+}
+
 interface CacheMeta {
   key: "active";
   version: string;
@@ -31,7 +36,7 @@ const META_STORE = "meta";
 const CHUNK_STORE = "chunks";
 const ANALYSIS_STORE = "analysis";
 const META_KEY = "active";
-const ACCIDENT_CHUNK_SIZE = 25000;
+const DEFAULT_ACCIDENT_CHUNK_SIZE = 25000;
 const PARSED_DATA_SCHEMA_VERSION = 9;
 
 type IndexedDbFactoryWithDatabases = IDBFactory & {
@@ -73,25 +78,28 @@ export async function readParsedDataCache(version: string, onProgress: CacheProg
 export async function writeParsedDataCache(
   version: string,
   accidents: AccidentRecord[],
-  onProgress: CacheProgress
+  onProgress: CacheProgress,
+  options: ParsedDataCacheWriteOptions = {}
 ): Promise<void> {
   if (!("indexedDB" in window)) {
     return;
   }
 
+  const chunkSize = normalizedChunkSize(options.chunkSize);
+  const delayBetweenChunksMs = normalizedDelay(options.delayBetweenChunksMs);
   const db = await openCacheDb();
   try {
     await clearStore(db, META_STORE);
     await clearStore(db, CHUNK_STORE);
     await clearStore(db, ANALYSIS_STORE);
 
-    const accidentChunks = Math.ceil(accidents.length / ACCIDENT_CHUNK_SIZE);
+    const accidentChunks = Math.ceil(accidents.length / chunkSize);
 
     for (let index = 0; index < accidentChunks; index += 1) {
-      const chunk = accidents.slice(index * ACCIDENT_CHUNK_SIZE, (index + 1) * ACCIDENT_CHUNK_SIZE);
+      const chunk = accidents.slice(index * chunkSize, (index + 1) * chunkSize);
       await putValue(db, CHUNK_STORE, { id: chunkKey(version, "accidents", index), value: chunk });
       onProgress(`Caching parsed accidents ${index + 1}/${accidentChunks}.`, Math.min(72, 62 + Math.floor((index / accidentChunks) * 10)));
-      await yieldToBrowser();
+      await yieldToBrowser(delayBetweenChunksMs);
     }
 
     const meta: CacheMeta = {
@@ -158,6 +166,16 @@ export async function writeAnalysisCache(
   } finally {
     db.close();
   }
+}
+
+function normalizedChunkSize(value: number | undefined): number {
+  const normalized = typeof value === "number" && Number.isFinite(value) ? value : DEFAULT_ACCIDENT_CHUNK_SIZE;
+  return Math.max(1, Math.trunc(normalized));
+}
+
+function normalizedDelay(value: number | undefined): number {
+  const normalized = typeof value === "number" && Number.isFinite(value) ? value : 0;
+  return Math.max(0, Math.trunc(normalized));
 }
 
 export async function resetAppStorage(): Promise<void> {
@@ -305,6 +323,6 @@ function analysisOptionsKey(options: AnalysisOptions): string {
   ].join("|");
 }
 
-function yieldToBrowser(): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, 0));
+function yieldToBrowser(delayMs = 0): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, delayMs));
 }

@@ -104,5 +104,5 @@ function parseDelimitedLine(line: string): string[] {
 }
 
 function yieldToBrowser(): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, 0));
+  return new Promise((resolve) => globalThis.setTimeout(resolve, 0));
 }

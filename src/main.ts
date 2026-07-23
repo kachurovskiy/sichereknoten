@@ -1,7 +1,8 @@
 import "./styles.css";
 import { gunzipSync } from "fflate";
-import { analyzeDangerousIntersectionsInBackground } from "./analysisRunner";
+import { analyzeDangerousIntersectionsInBackground, type AnalysisExecutionPlan } from "./analysisRunner";
 import { readAnalysisCache, readParsedDataCache, resetAppStorage, writeAnalysisCache, writeParsedDataCache } from "./cache";
+import { parseAccidentCsvFilesInBackground, type CsvParseExecutionPlan } from "./csvParserRunner";
 import { GeoGridIndex } from "./geo";
 import { MapCanvas } from "./mapCanvas";
 import { parseAccidentCsvFiles } from "./parsers/csv";
@@ -55,6 +56,28 @@ type SelectionReason = "auto" | "program" | "user";
 type HotspotMetricPlacement = "header" | "stats";
 type AppLocale = "en" | "de";
 type LoadingStatusKind = "normal" | "problem" | "idle";
+type InitializationTelemetryStatus = "running" | "done" | "error";
+type InitializationTelemetryMetadata = Record<string, string | number | boolean | null>;
+
+interface InitializationTelemetry {
+  startedAt: string;
+  startMark: number;
+  appVersion: string;
+  dataVersion: string | null;
+  steps: InitializationTelemetryStep[];
+  logged: boolean;
+}
+
+interface InitializationTelemetryStep {
+  name: string;
+  detail: string | null;
+  startTime: string;
+  startMark: number;
+  startOffsetMs: number;
+  durationMs: number | null;
+  status: InitializationTelemetryStatus;
+  metadata: InitializationTelemetryMetadata;
+}
 
 interface RoadUserSummaryItem {
   definition: RoadUserDefinition;
@@ -111,6 +134,8 @@ const PROJECT_REPOSITORY_URL = "https://github.com/kachurovskiy/sichereknoten";
 const PROJECT_REPOSITORY_LABEL = "kachurovskiy/sichereknoten";
 const APP_CACHE_VERSION =
   typeof __SICHERE_KNOTEN_APP_VERSION__ === "string" ? __SICHERE_KNOTEN_APP_VERSION__ : "dev-cluster-streets";
+const POST_RENDER_PARSED_CACHE_CHUNK_SIZE = 5000;
+const POST_RENDER_PARSED_CACHE_CHUNK_DELAY_MS = 25;
 const STREET_VIEW_OPEN_STORAGE_KEY = "sichere-knoten:street-view-open";
 const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
   en: {
@@ -786,6 +811,22 @@ interface AnalysisCacheContext {
   appVersion: string;
 }
 
+interface PendingParsedDataCacheWrite {
+  dataVersion: string;
+  accidents: AccidentRecord[];
+}
+
+interface PendingAnalysisCacheWrite {
+  cacheContext: AnalysisCacheContext;
+  options: AnalysisOptions;
+  result: AnalysisResult;
+}
+
+interface PostRenderCacheWrites {
+  parsedData: PendingParsedDataCacheWrite | null;
+  analysis: PendingAnalysisCacheWrite | null;
+}
+
 interface AccidentIndexCache {
   key: string;
   index: GeoGridIndex<AccidentRecord>;
@@ -811,6 +852,7 @@ let userLocation: { lat: number; lon: number; accuracyMeters: number | null } | 
 let activeAnalysisOptions: AnalysisOptions | null = null;
 let crossingAccidentIndexCache: AccidentIndexCache | null = null;
 let accidentKeyLookupCache: AccidentKeyLookupCache | null = null;
+let postRenderCacheWriteQueue: Promise<void> = Promise.resolve();
 let isStreetViewOpen = readStoredStreetViewOpen();
 let activeView: ViewKey = "map";
 let loadingStatusKind: LoadingStatusKind = "normal";
@@ -1135,6 +1177,7 @@ function markAnalysisSettingsDirty(): void {
 }
 
 async function loadBundledData(): Promise<void> {
+  const telemetry = createInitializationTelemetry();
   setBusy(true);
   let analysisStarted = false;
   try {
@@ -1150,9 +1193,19 @@ async function loadBundledData(): Promise<void> {
     populateFilters();
     renderAll();
     const dataVersion = bundledDataVersion();
+    telemetry.dataVersion = dataVersion;
     activeDataVersion = dataVersion;
     setStatus(tr("status.checkingParsedCache"), 4);
-    const cached = await readParsedDataCache(dataVersion, localizedCacheStatus);
+    const cached = await measureInitializationStep(
+      telemetry,
+      "read parsed data cache",
+      dataVersion,
+      () => readParsedDataCache(dataVersion, localizedCacheStatus),
+      (cache) => ({
+        cacheHit: Boolean(cache),
+        accidentCount: cache?.accidents.length ?? 0
+      })
+    );
     if (cached) {
       accidents = cached.accidents;
       crossingAccidentIndexCache = null;
@@ -1160,37 +1213,76 @@ async function loadBundledData(): Promise<void> {
       populateFilters();
       setStatus(trf("status.accidentsLoadedFromCache", { count: formatInteger(accidents.length) }), 66);
       analysisStarted = true;
-      runAnalysis();
+      runAnalysis(telemetry);
       return;
     }
 
     setStatus(tr("status.cacheMissParsingBundled"), 10);
-    const loadedAccidents: AccidentRecord[] = [];
-    for (const [index, path] of BUNDLED_CSV_FILES.entries()) {
-      const blob = await readBundledBlob(path);
-      const file = new File([blob], path.split("/").pop() ?? "accidents.csv", { type: "text/csv" });
-      const parsed = await parseAccidentCsvFiles([file], (progress) => {
-        const baseProgress = 10 + index * 9;
-        setStatus(trf("status.parsingLabel", { label: progress.label }), Math.min(55, baseProgress + 8));
-      });
-      loadedAccidents.push(...parsed);
-      accidents = loadedAccidents;
-      crossingAccidentIndexCache = null;
-      accidentKeyLookupCache = null;
-      populateFilters();
-    }
+    const bundledFiles = await Promise.all(
+      BUNDLED_CSV_FILES.map(async (path) => {
+        const blob = await measureInitializationStep(
+          telemetry,
+          "read bundled csv",
+          path,
+          () => readBundledBlob(path),
+          (loadedBlob) => ({ bytes: loadedBlob.size })
+        );
+        return {
+          path,
+          file: new File([blob], path.split("/").pop() ?? "accidents.csv", { type: "text/csv" })
+        };
+      })
+    );
+    const parseSteps = new Map<number, InitializationTelemetryStep>();
+    let parsePlan: CsvParseExecutionPlan | null = null;
+    let completedParseFiles = 0;
+    accidents = await parseAccidentCsvFilesInBackground(bundledFiles.map(({ file }) => file), {
+      onPlan: (plan) => {
+        parsePlan = plan;
+      },
+      onFileStart: ({ index }) => {
+        parseSteps.set(index, startInitializationStep(telemetry, "parse bundled csv", bundledFiles[index].path));
+      },
+      onFileProgress: ({ index, progress }) => {
+        const visibleProgress = 10 + Math.floor((completedParseFiles / Math.max(bundledFiles.length, 1)) * 45);
+        setStatus(trf("status.parsingLabel", { label: progress.label || bundledFiles[index].file.name }), Math.min(55, visibleProgress + 5));
+      },
+      onFileComplete: ({ index, accidents: parsedAccidents }) => {
+        completedParseFiles += 1;
+        const step = parseSteps.get(index);
+        if (step) {
+          finishInitializationStep(step, "done", {
+            accidentCount: parsedAccidents.length,
+            workerCount: parsePlan?.workerCount ?? 0,
+            fileCount: parsePlan?.fileCount ?? bundledFiles.length,
+            background: parsePlan?.background ?? false,
+            fallback: parsePlan?.fallback ?? false,
+            parallel: parsePlan?.parallel ?? false
+          });
+        }
+        setStatus(
+          trf("status.parsingLabel", { label: bundledFiles[index].file.name }),
+          Math.min(55, 10 + Math.floor((completedParseFiles / Math.max(bundledFiles.length, 1)) * 45))
+        );
+      },
+      onFileError: ({ index }, error) => {
+        const step = parseSteps.get(index);
+        if (step && step.status === "running") {
+          finishInitializationStep(step, "error", { error: errorMessage(error) });
+        }
+      }
+    });
+    crossingAccidentIndexCache = null;
+    accidentKeyLookupCache = null;
+    populateFilters();
     setStatus(trf("status.accidentRecordsLoaded", { count: formatInteger(accidents.length) }), 60);
 
-    try {
-      await writeParsedDataCache(dataVersion, accidents, localizedCacheStatus);
-      setStatus(tr("status.parsedDataCached"), 74);
-    } catch (error) {
-      setStatus(trf("status.parsedDataCacheWriteSkipped", { error: errorMessage(error) }), 74);
-    }
+    const pendingParsedDataCacheWrite = { dataVersion, accidents };
     analysisStarted = true;
-    runAnalysis();
+    runAnalysis(telemetry, pendingParsedDataCacheWrite);
   } catch (error) {
     setStatus(errorMessage(error), 0, "problem");
+    logInitializationTelemetry(telemetry, "error");
   } finally {
     if (!analysisStarted) {
       setBusy(false);
@@ -1225,9 +1317,13 @@ async function loadAccidentCsv(files: File[], replace: boolean, manageBusy = tru
   }
 }
 
-function runAnalysis(): void {
+function runAnalysis(
+  initializationTelemetry: InitializationTelemetry | null = null,
+  pendingParsedDataCacheWrite: PendingParsedDataCacheWrite | null = null
+): void {
   if (accidents.length === 0) {
     setStatus(tr("status.loadDataFirst"), 0, "idle");
+    logInitializationTelemetry(initializationTelemetry, "error");
     return;
   }
 
@@ -1235,14 +1331,29 @@ function runAnalysis(): void {
   const options = readOptions();
   const cacheContext = activeDataVersion ? { dataVersion: activeDataVersion, appVersion: APP_CACHE_VERSION } : null;
   setBusy(true);
-  void runAnalysisWithCache(options, cacheContext);
+  void runAnalysisWithCache(options, cacheContext, initializationTelemetry, pendingParsedDataCacheWrite);
 }
 
-async function runAnalysisWithCache(options: AnalysisOptions, cacheContext: AnalysisCacheContext | null): Promise<void> {
+async function runAnalysisWithCache(
+  options: AnalysisOptions,
+  cacheContext: AnalysisCacheContext | null,
+  initializationTelemetry: InitializationTelemetry | null = null,
+  pendingParsedDataCacheWrite: PendingParsedDataCacheWrite | null = null
+): Promise<void> {
+  let telemetryStatus: InitializationTelemetryStatus = "done";
   try {
     if (cacheContext) {
       setStatus(tr("status.checkingAnalysisCache"), 75);
-      const cached = await readAnalysisCache(cacheContext.dataVersion, cacheContext.appVersion, options);
+      const cached = await measureInitializationStep(
+        initializationTelemetry,
+        "read analysis cache",
+        analysisTelemetryDetail(options),
+        () => readAnalysisCache(cacheContext.dataVersion, cacheContext.appVersion, options),
+        (cachedResult) => ({
+          cacheHit: Boolean(cachedResult),
+          clusterCount: cachedResult?.clusters.length ?? 0
+        })
+      );
       if (cached) {
         result = cached;
         selectedCluster = null;
@@ -1250,36 +1361,87 @@ async function runAnalysisWithCache(options: AnalysisOptions, cacheContext: Anal
         crossingAccidentIndexCache = null;
         accidentKeyLookupCache = null;
         analysisSettingsDirty = false;
-        renderAll();
+        await measureInitializationStep(
+          initializationTelemetry,
+          "render analysis results",
+          analysisTelemetryDetail(options),
+          async () => {
+            renderAll();
+          },
+          () => ({ clusterCount: result?.clusters.length ?? 0 })
+        );
         setStatus(trf("status.intersectionClustersLoadedFromCache", { count: formatInteger(result.clusters.length) }), 100);
+        enqueuePostRenderCacheWrites(initializationTelemetry, {
+          parsedData: pendingParsedDataCacheWrite,
+          analysis:
+            pendingParsedDataCacheWrite && cacheContext
+              ? {
+                  cacheContext,
+                  options: cloneAnalysisOptions(options),
+                  result: cached
+                }
+              : null
+        });
         return;
       }
     }
 
     setStatus(tr("status.analyzingIntersections"), 75);
     await yieldToBrowser();
-    result = await analyzeDangerousIntersectionsInBackground(accidents, options, updateAnalysisPlanStatus);
+    let analysisPlan: AnalysisExecutionPlan | null = null;
+    result = await measureInitializationStep(
+      initializationTelemetry,
+      "analyze intersections",
+      analysisTelemetryDetail(options),
+      () =>
+        analyzeDangerousIntersectionsInBackground(accidents, options, (plan) => {
+          analysisPlan = plan;
+          updateAnalysisPlanStatus();
+        }),
+      (analysisResult) => ({
+        accidentCount: accidents.length,
+        filteredAccidentCount: analysisResult.filteredAccidentCount,
+        clusterCount: analysisResult.clusters.length,
+        workerCount: analysisPlan?.workerCount ?? 0,
+        partitionCount: analysisPlan?.partitionCount ?? 1,
+        background: analysisPlan?.background ?? false,
+        fallback: analysisPlan?.fallback ?? false,
+        parallel: analysisPlan?.parallel ?? false
+      })
+    );
     selectedCluster = null;
     activeAnalysisOptions = cloneAnalysisOptions(options);
     crossingAccidentIndexCache = null;
     accidentKeyLookupCache = null;
     analysisSettingsDirty = false;
-    renderAll();
-
-    if (cacheContext) {
-      try {
-        setStatus(tr("status.cachingAnalysisResult"), 96);
-        await writeAnalysisCache(cacheContext.dataVersion, cacheContext.appVersion, options, result);
-      } catch {
-        // The analysis result is already rendered; cache failures only affect later reload speed.
-      }
-    }
+    await measureInitializationStep(
+      initializationTelemetry,
+      "render analysis results",
+      analysisTelemetryDetail(options),
+      async () => {
+        renderAll();
+      },
+      () => ({ clusterCount: result?.clusters.length ?? 0 })
+    );
 
     setStatus(trf("status.intersectionClustersAnalyzed", { count: formatInteger(result.clusters.length) }), 100);
+    enqueuePostRenderCacheWrites(initializationTelemetry, {
+      parsedData: pendingParsedDataCacheWrite,
+      analysis:
+        cacheContext && result
+          ? {
+              cacheContext,
+              options: cloneAnalysisOptions(options),
+              result
+            }
+          : null
+    });
   } catch (error) {
+    telemetryStatus = "error";
     setStatus(errorMessage(error), 0, "problem");
   } finally {
     setBusy(false);
+    logInitializationTelemetry(initializationTelemetry, telemetryStatus);
   }
 }
 
@@ -4179,6 +4341,203 @@ function escapeHtml(value: string): string {
     };
     return entities[char];
   });
+}
+
+function createInitializationTelemetry(): InitializationTelemetry {
+  return {
+    startedAt: new Date().toISOString(),
+    startMark: performance.now(),
+    appVersion: APP_CACHE_VERSION,
+    dataVersion: null,
+    steps: [],
+    logged: false
+  };
+}
+
+function createPostRenderCacheTelemetry(source: InitializationTelemetry | null): InitializationTelemetry | null {
+  if (!source) {
+    return null;
+  }
+
+  return {
+    startedAt: new Date().toISOString(),
+    startMark: performance.now(),
+    appVersion: source.appVersion,
+    dataVersion: source.dataVersion,
+    steps: [],
+    logged: false
+  };
+}
+
+function enqueuePostRenderCacheWrites(
+  initializationTelemetry: InitializationTelemetry | null,
+  writes: PostRenderCacheWrites
+): void {
+  if (!writes.parsedData && !writes.analysis) {
+    return;
+  }
+
+  const telemetry = createPostRenderCacheTelemetry(initializationTelemetry);
+  scheduleAfterFirstRender(() => {
+    postRenderCacheWriteQueue = postRenderCacheWriteQueue
+      .catch(() => undefined)
+      .then(() => writePostRenderCaches(telemetry, writes));
+    void postRenderCacheWriteQueue;
+  });
+}
+
+async function writePostRenderCaches(telemetry: InitializationTelemetry | null, writes: PostRenderCacheWrites): Promise<void> {
+  let status: Exclude<InitializationTelemetryStatus, "running"> = "done";
+
+  if (writes.parsedData) {
+    try {
+      await measureInitializationStep(
+        telemetry,
+        "write parsed data cache",
+        writes.parsedData.dataVersion,
+        () =>
+          writeParsedDataCache(writes.parsedData!.dataVersion, writes.parsedData!.accidents, ignoreCacheWriteProgress, {
+            chunkSize: POST_RENDER_PARSED_CACHE_CHUNK_SIZE,
+            delayBetweenChunksMs: POST_RENDER_PARSED_CACHE_CHUNK_DELAY_MS
+          }),
+        () => ({
+          accidentCount: writes.parsedData?.accidents.length ?? 0,
+          chunkSize: POST_RENDER_PARSED_CACHE_CHUNK_SIZE,
+          chunkDelayMs: POST_RENDER_PARSED_CACHE_CHUNK_DELAY_MS,
+          afterFirstRender: true
+        })
+      );
+    } catch (error) {
+      status = "error";
+      console.warn("[Safe Intersections] Could not write parsed data cache after startup.", error);
+    }
+  }
+
+  if (writes.analysis) {
+    try {
+      await measureInitializationStep(
+        telemetry,
+        "write analysis cache",
+        analysisTelemetryDetail(writes.analysis.options),
+        () =>
+          writeAnalysisCache(
+            writes.analysis!.cacheContext.dataVersion,
+            writes.analysis!.cacheContext.appVersion,
+            writes.analysis!.options,
+            writes.analysis!.result
+          ),
+        () => ({
+          clusterCount: writes.analysis?.result.clusters.length ?? 0,
+          afterFirstRender: true
+        })
+      );
+    } catch (error) {
+      status = "error";
+      console.warn("[Safe Intersections] Could not write analysis cache after startup.", error);
+    }
+  }
+
+  logInitializationTelemetry(telemetry, status, "post-render cache telemetry");
+}
+
+function scheduleAfterFirstRender(work: () => void): void {
+  window.requestAnimationFrame(() => {
+    window.setTimeout(work, 0);
+  });
+}
+
+function ignoreCacheWriteProgress(_message: string, _progress: number): void {}
+
+async function measureInitializationStep<T>(
+  telemetry: InitializationTelemetry | null,
+  name: string,
+  detail: string | null,
+  work: () => Promise<T>,
+  metadata?: (result: T) => InitializationTelemetryMetadata
+): Promise<T> {
+  if (!telemetry) {
+    return work();
+  }
+
+  const step = startInitializationStep(telemetry, name, detail);
+  try {
+    const result = await work();
+    finishInitializationStep(step, "done", metadata?.(result) ?? {});
+    return result;
+  } catch (error) {
+    finishInitializationStep(step, "error", { error: errorMessage(error) });
+    throw error;
+  }
+}
+
+function startInitializationStep(telemetry: InitializationTelemetry, name: string, detail: string | null): InitializationTelemetryStep {
+  const startMark = performance.now();
+  const step: InitializationTelemetryStep = {
+    name,
+    detail,
+    startTime: new Date().toISOString(),
+    startMark,
+    startOffsetMs: startMark - telemetry.startMark,
+    durationMs: null,
+    status: "running",
+    metadata: {}
+  };
+  telemetry.steps.push(step);
+  return step;
+}
+
+function finishInitializationStep(
+  step: InitializationTelemetryStep,
+  status: Exclude<InitializationTelemetryStatus, "running">,
+  metadata: InitializationTelemetryMetadata
+): void {
+  step.durationMs = performance.now() - step.startMark;
+  step.status = status;
+  step.metadata = metadata;
+}
+
+function logInitializationTelemetry(
+  telemetry: InitializationTelemetry | null,
+  status: Exclude<InitializationTelemetryStatus, "running">,
+  label = "initialization telemetry"
+): void {
+  if (!telemetry || telemetry.logged) {
+    return;
+  }
+
+  telemetry.logged = true;
+  const finishedAt = new Date().toISOString();
+  const durationMs = round(performance.now() - telemetry.startMark, 2);
+  const summary = {
+    status,
+    appVersion: telemetry.appVersion,
+    dataVersion: telemetry.dataVersion ?? "unknown",
+    startedAt: telemetry.startedAt,
+    finishedAt,
+    durationMs,
+    stepCount: telemetry.steps.length
+  };
+  const rows = telemetry.steps.map((step, index) => ({
+    "#": index + 1,
+    step: step.name,
+    detail: step.detail ?? "",
+    status: step.status,
+    "start time": step.startTime,
+    "start +ms": round(step.startOffsetMs, 2),
+    "duration ms": step.durationMs === null ? null : round(step.durationMs, 2),
+    ...step.metadata
+  }));
+
+  console.groupCollapsed(`[Safe Intersections] ${label}: ${status} in ${durationMs} ms`);
+  console.info(summary);
+  console.table(rows);
+  console.groupEnd();
+}
+
+function analysisTelemetryDetail(options: AnalysisOptions): string {
+  const years = Array.from(options.years).sort((a, b) => a - b).join(",") || "all";
+  const roadUsers = roadUserFocusKey(options.roadUserFocus) || "all";
+  return `state=${options.stateCode}; years=${years}; roadUsers=${roadUsers}; radius=${options.clusterRadiusMeters}m; minAccidents=${options.minAccidents}`;
 }
 
 function errorMessage(error: unknown): string {

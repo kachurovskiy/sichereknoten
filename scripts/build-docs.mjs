@@ -29,7 +29,8 @@ await build({
   legalComments: "none",
   define: {
     __SICHERE_KNOTEN_APP_VERSION__: JSON.stringify(appVersion),
-    __SICHERE_KNOTEN_ANALYSIS_WORKER_URL__: JSON.stringify(`./assets/analysis-worker.js?v=${appVersion}`)
+    __SICHERE_KNOTEN_ANALYSIS_WORKER_URL__: JSON.stringify(`./assets/analysis-worker.js?v=${appVersion}`),
+    __SICHERE_KNOTEN_CSV_PARSER_WORKER_URL__: JSON.stringify(`./assets/csv-parser-worker.js?v=${appVersion}`)
   }
 });
 
@@ -37,6 +38,17 @@ await build({
   entryPoints: [path.join(root, "src/analysisWorker.ts")],
   bundle: true,
   outfile: path.join(assetsDir, "analysis-worker.js"),
+  format: "iife",
+  target: "es2022",
+  minify: true,
+  sourcemap: false,
+  legalComments: "none"
+});
+
+await build({
+  entryPoints: [path.join(root, "src/csvParserWorker.ts")],
+  bundle: true,
+  outfile: path.join(assetsDir, "csv-parser-worker.js"),
   format: "iife",
   target: "es2022",
   minify: true,
