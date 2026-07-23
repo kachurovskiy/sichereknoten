@@ -10,7 +10,7 @@ Build-time source inputs live under `data`:
 - `data/AuszugGV2QAktuell.xlsx`: Destatis municipality directory extract used to generate `src/municipalities.ts`.
 - `data/germany-260721.osm.pbf`: local OpenStreetMap PBF used at build time to derive nearest street names for accident records. The PBF is ignored by Git.
 
-The default public CSV paths are defined in `src/main.ts` as `BUNDLED_CSV_FILES`. `scripts/build-docs.mjs` maps those public paths to source files in `data/csv` and writes compressed data scripts into `docs/assets`.
+`scripts/build-docs.mjs` discovers CSV source files in `data/csv`, parses them at build time, and writes compressed normalized accident chunks into `docs/assets`.
 `scripts/generate-municipalities.mjs` reads `data/AuszugGV2QAktuell.xlsx` and writes the compact lookup source used at runtime.
 Raw SHP/DBF Unfallatlas downloads are intentionally excluded from the repository: the DBF files are very large, are not loaded by the current app, and would duplicate the same accident records already represented by the CSV inputs.
 
@@ -32,35 +32,27 @@ tsc --noEmit && node scripts/build-docs.mjs
 
 `scripts/build-docs.mjs` does three things:
 
-1. Clears and recreates `docs/assets`.
+1. Removes known generated files from `docs/assets`.
 2. Builds `src/main.ts` into `docs/assets/app.js` with esbuild as a classic IIFE script so `docs/index.html` can be opened directly without Vite.
 3. Creates offline data scripts:
    - `docs/assets/data-manifest.js`
-   - `docs/assets/streets.js`
-   - `docs/assets/data-1.js`, `data-2.js`, etc.
+   - `docs/assets/accidents-1.js`, `accidents-2.js`, etc.
 
-Each data script contains one source CSV file from `data/csv`, compressed with gzip, encoded as base64, and split into 256 KB string chunks. Splitting the bundle one file per script keeps each generated file below GitHub's 100 MB single-file limit.
+Each accident data script contains up to 100,000 normalized accident records, compressed with gzip, encoded as base64, and split into 256 KB string chunks. Splitting the bundle across generated scripts keeps each file below GitHub's 100 MB single-file limit and avoids CSV parsing at startup.
 
-When the local PBF exists, `scripts/build-streets.mjs` streams it during build and writes a compact street lookup bundle. The bundle uses one global street-name dictionary and per-CSV-row integer street indexes instead of repeating street names for every accident. Rows near multiple named streets store a short integer list so intersection incidents can keep more than one nearby street name. A local rebuild cache is written to `data/generated/street-lookup.json` and ignored by Git.
+When the local PBF exists, `scripts/build-streets.mjs` streams it during build and creates a compact street lookup bundle used while normalizing accident records. The bundle uses one global street-name dictionary and per-CSV-row integer street indexes instead of repeating street names for every accident. Rows near multiple named streets store a short integer list so intersection incidents can keep more than one nearby street name. A local rebuild cache is written to `data/generated/street-lookup.json` and ignored by Git. The runtime app does not ship or load this lookup because normalized accident chunks already contain the street names needed by the UI.
 
 The build script also computes a SHA-256 based data version from the raw CSV file paths and bytes, plus the generated street lookup version when present. `docs/assets/data-manifest.js` exposes that version as `globalThis.__SICHERE_KNOTEN_DATA__.version`. It separately computes an app build fingerprint from the source files and injects it into `app.js` for analysis-cache invalidation.
 
-`docs/index.html` loads the data scripts before `app.js`, so direct `file://` usage works in Chrome and Firefox without `fetch()` access to local CSV files.
+`docs/index.html` loads the manifest before `app.js`; the app then lazy-loads accident chunk scripts only after a parsed-cache miss. Direct `file://` usage works in Chrome and Firefox without `fetch()` access to local CSV files. During Vite development, `src/main.ts` can also load the generated manifest and accident chunks from `docs/assets` automatically.
 
 ## Runtime Loading
 
 On startup, `src/main.ts` calls `loadBundledData()`.
 
-For each required data file, `readBundledBlob()` first checks `globalThis.__SICHERE_KNOTEN_DATA__`, which is populated by the generated data scripts. If found, it:
+The app first ensures `docs/assets/data-manifest.js` has populated `globalThis.__SICHERE_KNOTEN_DATA__`, then checks IndexedDB for parsed records under that manifest version. On a parsed-cache miss, `readBundledAccidents()` starts loading the listed `accidents-*.js` chunk scripts in parallel, then decodes them in manifest order. Each chunk's base64 strings are decoded, decompressed with `fflate.gunzipSync`, parsed as normalized compact records, and expanded into `AccidentRecord` objects.
 
-1. Joins the base64 chunks.
-2. Decodes them to bytes.
-3. Decompresses gzip with `fflate.gunzipSync`.
-4. Wraps the result in a `Blob`/`File`.
-
-If the embedded bundle is not present, the app falls back to `fetch()`/XHR from `data/csv`. That fallback is useful during local development when the project root is served by Vite, but many browsers block it from `file://`. The deployable `docs/` folder is expected to use the generated `docs/assets/data-*.js` bundle rather than raw CSV files.
-
-CSV files are decompressed and parsed sequentially to reduce peak memory use.
+There is no runtime CSV fallback. If the generated manifest or accident chunks are missing, run `npm run build`.
 
 ## Browser Caches
 
@@ -80,7 +72,7 @@ The cache metadata stores:
 - accident record count
 - creation timestamp
 
-On startup, `loadBundledData()` checks IndexedDB before reading the compressed data scripts. If the cached version matches the current data manifest version, the app loads parsed records from IndexedDB and skips CSV parsing. If the version does not match, or if the cache is unavailable/corrupt, the app parses the bundled raw data and writes a new cache.
+On startup, `loadBundledData()` checks IndexedDB before loading the accident chunk scripts. If the cached version matches the current data manifest version, the app loads parsed records from IndexedDB and skips normalized chunk loading. If the version does not match, or if the cache is unavailable/corrupt, the app loads the bundled normalized records and writes a new cache after the first render.
 
 After analysis succeeds for bundled data, the app also stores the resulting `AnalysisResult` in the `analysis` object store. That cache key includes:
 
@@ -232,8 +224,7 @@ This regenerates:
 - `docs/index.html`
 - `docs/assets/app.js`
 - `docs/assets/app.css`
-- `docs/assets/streets.js`
-- `docs/assets/data-*.js`
+- `docs/assets/accidents-*.js`
 - the data version in `docs/assets/data-manifest.js`
 
 Do not edit generated files in `docs/assets` by hand. Change source code under `src/` or raw data under `data/csv`, then rebuild. Existing browser caches are invalidated automatically when the generated data version changes.

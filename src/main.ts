@@ -2,10 +2,8 @@ import "./styles.css";
 import { gunzipSync } from "fflate";
 import { analyzeDangerousIntersectionsInBackground, type AnalysisExecutionPlan } from "./analysisRunner";
 import { readAnalysisCache, readParsedDataCache, resetAppStorage, writeAnalysisCache, writeParsedDataCache } from "./cache";
-import { parseAccidentCsvFilesInBackground, type CsvParseExecutionPlan } from "./csvParserRunner";
 import { GeoGridIndex } from "./geo";
 import { MapCanvas } from "./mapCanvas";
-import { parseAccidentCsvFiles } from "./parsers/csv";
 import { accidentMatchesRoadUserFocus, ROAD_USER_DEFINITIONS, RoadUserDefinition, roadUserFocusKey } from "./roadUsers";
 import { STATE_NAMES } from "./states";
 import {
@@ -19,13 +17,6 @@ import {
   RoadUserKey
 } from "./types";
 
-const BUNDLED_CSV_FILES = [
-  "data/csv/Unfallorte_2021_LinRef.csv",
-  "data/csv/Unfallorte2022_LinRef.csv",
-  "data/csv/Unfallorte2023_LinRef.csv",
-  "data/csv/Unfallorte2024_LinRef.csv",
-  "data/csv/Unfallorte_2025_LR_BasisDLM.csv"
-];
 const TABLE_ROWS_PER_STATE = 10;
 const STATE_BROWSE_MIN_SEVERITY_PERCENT = 0.1;
 const STATE_BROWSE_MAX_INTERSECTIONS = 100;
@@ -34,15 +25,63 @@ interface EmbeddedDataFile {
   path: string;
   name: string;
   type: string;
-  encoding: "gzip-base64";
+  size: number;
+  modifiedTime?: string;
+}
+
+interface EmbeddedAccidentChunk {
+  id: string;
+  encoding: "gzip-base64-json-compact-v1";
+  recordCount: number;
   size: number;
   compressedSize: number;
-  modifiedTime?: string;
   chunks: string[];
 }
 
+interface EmbeddedDataBundle {
+  version?: string;
+  files: EmbeddedDataFile[];
+  accidentChunkFiles?: string[];
+  accidentChunks?: EmbeddedAccidentChunk[];
+}
+
+type CompactAccidentRecord = [
+  string,
+  string | null,
+  string,
+  string[],
+  string,
+  string | null,
+  string | null,
+  string | null,
+  string | null,
+  string | null,
+  string | null,
+  number,
+  number | null,
+  number | null,
+  number | null,
+  number | null,
+  number | null,
+  number | null,
+  number | null,
+  number | null,
+  number | null,
+  number | null,
+  number | null,
+  number | null,
+  number,
+  number,
+  boolean | null,
+  boolean | null,
+  boolean | null,
+  boolean | null,
+  boolean | null,
+  boolean | null
+];
+
 declare global {
-  var __SICHERE_KNOTEN_DATA__: { version?: string; files: EmbeddedDataFile[] } | undefined;
+  var __SICHERE_KNOTEN_DATA__: EmbeddedDataBundle | undefined;
 }
 
 declare const __SICHERE_KNOTEN_APP_VERSION__: string | undefined;
@@ -136,6 +175,7 @@ const APP_CACHE_VERSION =
   typeof __SICHERE_KNOTEN_APP_VERSION__ === "string" ? __SICHERE_KNOTEN_APP_VERSION__ : "dev-cluster-streets";
 const POST_RENDER_PARSED_CACHE_CHUNK_SIZE = 5000;
 const POST_RENDER_PARSED_CACHE_CHUNK_DELAY_MS = 25;
+const offlineBundleScriptPromises = new Map<string, Promise<string>>();
 const STREET_VIEW_OPEN_STORAGE_KEY = "sichere-knoten:street-view-open";
 const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
   en: {
@@ -223,7 +263,7 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "table.sort.desc": "descending",
     "table.sort.none": "none",
     "settings.data": "Data",
-    "settings.dataNote": "Bundled CSV accident data loads automatically from the offline data bundle.",
+    "settings.dataNote": "Bundled normalized accident data loads automatically from the offline data bundle.",
     "settings.accidentData": "Accident data:",
     "settings.municipalityData": "Municipality data:",
     "settings.destatisMunicipalities": "/ Destatis municipality directory extract, 2nd quarter 2026.",
@@ -260,10 +300,11 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "settings.whyFocusText2":
       "The metric focuses on intersections with higher recorded severity, using fatal and serious-injury outcomes to distinguish severe locations from high-volume ones.",
     "status.settingsChanged": "Settings changed. Click Analyze to update results.",
+    "status.loadingDataManifest": "Loading bundled data manifest.",
     "status.checkingParsedCache": "Checking parsed data cache.",
     "status.loadingCachedAccidents": "Loading cached accidents {current}/{total}.",
-    "status.cacheMissParsingBundled": "Cache miss. Parsing bundled CSV files.",
-    "status.parsingLabel": "Parsing {label}",
+    "status.cacheMissParsingBundled": "Cache miss. Loading bundled accident records.",
+    "status.loadingBundledChunk": "Loading bundled accident records {current}/{total}.",
     "status.accidentsLoadedFromCache": "{count} accidents loaded from cache.",
     "status.accidentRecordsLoaded": "{count} accident records loaded.",
     "status.parsedDataCached": "Parsed data cached for future refreshes.",
@@ -294,9 +335,6 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "status.factsheetCreating": "Preparing factsheet PDF.",
     "status.factsheetDownloaded": "Factsheet downloaded.",
     "status.factsheetFailed": "Could not create factsheet: {error}",
-    "status.bundleLoadFailed":
-      "Could not load {path}. The embedded data bundle should be present in docs/assets; when running without generated data scripts, serve source CSV files from data/csv. Re-run npm run build after data changes. {errors}",
-    "status.localReadBlocked": "local read blocked",
     "label.away": "{distance} away",
     "noun.accident.one": "accident",
     "noun.accident.other": "accidents",
@@ -523,7 +561,7 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "table.sort.desc": "absteigend",
     "table.sort.none": "nicht",
     "settings.data": "Daten",
-    "settings.dataNote": "Gebündelte CSV-Unfalldaten werden automatisch aus dem Offline-Datenpaket geladen.",
+    "settings.dataNote": "Gebündelte normalisierte Unfalldaten werden automatisch aus dem Offline-Datenpaket geladen.",
     "settings.accidentData": "Unfalldaten:",
     "settings.municipalityData": "Gemeindedaten:",
     "settings.destatisMunicipalities": "/ Destatis-Gemeindeverzeichnis-Auszug, 2. Quartal 2026.",
@@ -560,10 +598,11 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "settings.whyFocusText2":
       "Die Metrik fokussiert Kreuzungen mit höherem erfasstem Schweregrad und nutzt tödliche sowie schwere Unfallfolgen, um Orte mit schweren Folgen von stark belasteten Orten zu unterscheiden.",
     "status.settingsChanged": "Einstellungen geändert. Klicke auf Analysieren, um die Ergebnisse zu aktualisieren.",
+    "status.loadingDataManifest": "Gebündeltes Datenmanifest wird geladen.",
     "status.checkingParsedCache": "Cache mit eingelesenen Daten wird geprüft.",
     "status.loadingCachedAccidents": "Unfälle aus dem Cache werden geladen {current}/{total}.",
-    "status.cacheMissParsingBundled": "Kein Cachetreffer. Gebündelte CSV-Dateien werden eingelesen.",
-    "status.parsingLabel": "{label} wird eingelesen",
+    "status.cacheMissParsingBundled": "Kein Cachetreffer. Gebündelte Unfalldatensätze werden geladen.",
+    "status.loadingBundledChunk": "Gebündelte Unfalldatensätze werden geladen {current}/{total}.",
     "status.accidentsLoadedFromCache": "{count} Unfälle aus dem Cache geladen.",
     "status.accidentRecordsLoaded": "{count} Unfalldatensätze geladen.",
     "status.parsedDataCached": "Eingelesene Daten wurden für spätere Aktualisierungen gespeichert.",
@@ -593,9 +632,6 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "status.factsheetCreating": "Faktenblatt-PDF wird vorbereitet.",
     "status.factsheetDownloaded": "Faktenblatt heruntergeladen.",
     "status.factsheetFailed": "Faktenblatt konnte nicht erstellt werden: {error}",
-    "status.bundleLoadFailed":
-      "{path} konnte nicht geladen werden. Das eingebettete Datenpaket sollte in docs/assets liegen; beim Betrieb ohne generierte Datenskripte müssen die Quell-CSV-Dateien aus data/csv bereitgestellt werden. Führe nach Datenänderungen npm run build aus. {errors}",
-    "status.localReadBlocked": "lokaler Lesezugriff blockiert",
     "label.away": "{distance} entfernt",
     "noun.accident.one": "Unfall",
     "noun.accident.other": "Unfälle",
@@ -1192,6 +1228,8 @@ async function loadBundledData(): Promise<void> {
     updateAnalyzeButton();
     populateFilters();
     renderAll();
+    setStatus(tr("status.loadingDataManifest"), 2);
+    await ensureBundledDataManifest(telemetry);
     const dataVersion = bundledDataVersion();
     telemetry.dataVersion = dataVersion;
     activeDataVersion = dataVersion;
@@ -1218,60 +1256,7 @@ async function loadBundledData(): Promise<void> {
     }
 
     setStatus(tr("status.cacheMissParsingBundled"), 10);
-    const bundledFiles = await Promise.all(
-      BUNDLED_CSV_FILES.map(async (path) => {
-        const blob = await measureInitializationStep(
-          telemetry,
-          "read bundled csv",
-          path,
-          () => readBundledBlob(path),
-          (loadedBlob) => ({ bytes: loadedBlob.size })
-        );
-        return {
-          path,
-          file: new File([blob], path.split("/").pop() ?? "accidents.csv", { type: "text/csv" })
-        };
-      })
-    );
-    const parseSteps = new Map<number, InitializationTelemetryStep>();
-    let parsePlan: CsvParseExecutionPlan | null = null;
-    let completedParseFiles = 0;
-    accidents = await parseAccidentCsvFilesInBackground(bundledFiles.map(({ file }) => file), {
-      onPlan: (plan) => {
-        parsePlan = plan;
-      },
-      onFileStart: ({ index }) => {
-        parseSteps.set(index, startInitializationStep(telemetry, "parse bundled csv", bundledFiles[index].path));
-      },
-      onFileProgress: ({ index, progress }) => {
-        const visibleProgress = 10 + Math.floor((completedParseFiles / Math.max(bundledFiles.length, 1)) * 45);
-        setStatus(trf("status.parsingLabel", { label: progress.label || bundledFiles[index].file.name }), Math.min(55, visibleProgress + 5));
-      },
-      onFileComplete: ({ index, accidents: parsedAccidents }) => {
-        completedParseFiles += 1;
-        const step = parseSteps.get(index);
-        if (step) {
-          finishInitializationStep(step, "done", {
-            accidentCount: parsedAccidents.length,
-            workerCount: parsePlan?.workerCount ?? 0,
-            fileCount: parsePlan?.fileCount ?? bundledFiles.length,
-            background: parsePlan?.background ?? false,
-            fallback: parsePlan?.fallback ?? false,
-            parallel: parsePlan?.parallel ?? false
-          });
-        }
-        setStatus(
-          trf("status.parsingLabel", { label: bundledFiles[index].file.name }),
-          Math.min(55, 10 + Math.floor((completedParseFiles / Math.max(bundledFiles.length, 1)) * 45))
-        );
-      },
-      onFileError: ({ index }, error) => {
-        const step = parseSteps.get(index);
-        if (step && step.status === "running") {
-          finishInitializationStep(step, "error", { error: errorMessage(error) });
-        }
-      }
-    });
+    accidents = await readBundledAccidents(telemetry);
     crossingAccidentIndexCache = null;
     accidentKeyLookupCache = null;
     populateFilters();
@@ -1287,33 +1272,6 @@ async function loadBundledData(): Promise<void> {
     if (!analysisStarted) {
       setBusy(false);
     }
-  }
-}
-
-async function loadAccidentCsv(files: File[], replace: boolean, manageBusy = true): Promise<void> {
-  if (manageBusy) {
-    setBusy(true);
-  }
-  try {
-    const parsed = await parseAccidentCsvFiles(files, (progress) => {
-      setStatus(trf("status.parsingLabel", { label: progress.label }), progress.total ? progressValue(progress.loaded, progress.total) : 45);
-    });
-    accidents = replace ? parsed : accidents.concat(parsed);
-    result = null;
-    selectedCluster = null;
-    activeAnalysisOptions = null;
-    crossingAccidentIndexCache = null;
-    accidentKeyLookupCache = null;
-    populateFilters();
-    setStatus(trf("status.accidentRecordsLoaded", { count: formatInteger(accidents.length) }), 100);
-    activeDataVersion = null;
-  } catch (error) {
-    setStatus(errorMessage(error), 0, "problem");
-  } finally {
-    if (manageBusy) {
-      setBusy(false);
-    }
-    renderAll();
   }
 }
 
@@ -4132,67 +4090,212 @@ function loadingTitle(step: LoadingStepKey, progress: number, isProblem: boolean
   }
 }
 
+async function ensureBundledDataManifest(telemetry: InitializationTelemetry): Promise<EmbeddedDataBundle> {
+  const existingBundle = globalThis.__SICHERE_KNOTEN_DATA__;
+  if (existingBundle?.version) {
+    return existingBundle;
+  }
+
+  await measureInitializationStep(
+    telemetry,
+    "load data manifest",
+    "data-manifest.js",
+    () => loadOfflineBundleScript("data-manifest.js"),
+    (url) => ({
+      url,
+      automatic: true
+    })
+  );
+
+  const loadedBundle = globalThis.__SICHERE_KNOTEN_DATA__;
+  if (!loadedBundle?.version) {
+    throw new Error("Bundled data manifest is missing. Run npm run build so docs/assets contains the generated offline bundle.");
+  }
+  return loadedBundle;
+}
+
 function bundledDataVersion(): string {
   const bundle = globalThis.__SICHERE_KNOTEN_DATA__;
   if (bundle?.version) {
     return bundle.version;
   }
   if (bundle?.files.length) {
-    return `legacy:${bundle.files.map((file) => `${file.path}:${file.size}:${file.compressedSize}`).join("|")}`;
+    return `legacy:${bundle.files.map((file) => `${file.path}:${file.size}:${file.modifiedTime ?? ""}`).join("|")}`;
   }
-  return `fetch:${BUNDLED_CSV_FILES.join("|")}`;
+  return "missing-normalized-data";
 }
 
-async function readBundledBlob(path: string): Promise<Blob> {
-  const embedded = readEmbeddedBlob(path);
-  if (embedded) {
-    return embedded;
+async function readBundledAccidents(telemetry: InitializationTelemetry): Promise<AccidentRecord[]> {
+  const bundle = await ensureBundledDataManifest(telemetry);
+  const chunkFiles = bundle.accidentChunkFiles ?? [];
+  const preloadedChunks = bundle.accidentChunks ?? [];
+  const totalChunks = chunkFiles.length || preloadedChunks.length;
+  if (totalChunks === 0) {
+    throw new Error("Bundled normalized accident data is missing. Run npm run build so docs/assets contains accidents-*.js.");
   }
 
-  const candidates = Array.from(new Set([path, `docs/${path}`]));
-  const errors: string[] = [];
-
-  for (const candidate of candidates) {
-    const url = new URL(candidate, window.location.href).href;
-    try {
-      const response = await fetch(url, { cache: "no-store" });
-      if (response.ok) {
-        return response.blob();
-      }
-      errors.push(`${candidate}: HTTP ${response.status}`);
-    } catch (error) {
-      errors.push(`${candidate}: ${errorMessage(error)}`);
-    }
-
-    try {
-      return await readBlobWithXhr(url);
-    } catch (error) {
-      errors.push(`${candidate}: ${errorMessage(error)}`);
-    }
+  const chunkLoadPromises = chunkFiles.length > 0 ? chunkFiles.map((fileName) => ensureBundledAccidentChunk(fileName, telemetry)) : [];
+  const loadedAccidents: AccidentRecord[] = [];
+  for (let index = 0; index < totalChunks; index += 1) {
+    const chunk = chunkLoadPromises.length > 0 ? await chunkLoadPromises[index] : preloadedChunks[index];
+    const records = await measureInitializationStep(
+      telemetry,
+      "read normalized accident chunk",
+      chunk.id,
+      async () => {
+        const compressed = decodeBase64Chunks(chunk.chunks);
+        const bytes = gunzipSync(compressed);
+        const text = new TextDecoder().decode(bytes);
+        const parsed = (JSON.parse(text) as CompactAccidentRecord[]).map(accidentFromCompactRecord);
+        await yieldToBrowser();
+        return parsed;
+      },
+      (parsed) => ({
+        accidentCount: parsed.length,
+        bytes: chunk.size,
+        compressedBytes: chunk.compressedSize,
+        chunkCount: totalChunks
+      })
+    );
+    loadedAccidents.push(...records);
+    setStatus(
+      trf("status.loadingBundledChunk", { current: index + 1, total: totalChunks }),
+      Math.min(60, 10 + Math.floor(((index + 1) / totalChunks) * 50))
+    );
   }
 
-  throw new Error(
-    trf("status.bundleLoadFailed", { path, errors: errors.join(" ") })
+  return loadedAccidents;
+}
+
+async function ensureBundledAccidentChunk(fileName: string, telemetry: InitializationTelemetry): Promise<EmbeddedAccidentChunk> {
+  const existingChunk = findBundledAccidentChunk(fileName);
+  if (existingChunk) {
+    return existingChunk;
+  }
+
+  await measureInitializationStep(
+    telemetry,
+    "load normalized accident chunk script",
+    fileName,
+    () => loadOfflineBundleScript(fileName),
+    (url) => ({
+      url,
+      automatic: true
+    })
   );
+
+  const loadedChunk = findBundledAccidentChunk(fileName);
+  if (!loadedChunk) {
+    throw new Error(`Bundled accident chunk ${fileName} did not register itself.`);
+  }
+  return loadedChunk;
 }
 
-function readEmbeddedBlob(path: string): Blob | null {
-  const bundle = globalThis.__SICHERE_KNOTEN_DATA__;
-  if (!bundle) {
-    return null;
+function findBundledAccidentChunk(fileName: string): EmbeddedAccidentChunk | null {
+  const chunkId = fileName.replace(/\.js$/i, "");
+  return globalThis.__SICHERE_KNOTEN_DATA__?.accidentChunks?.find((chunk) => chunk.id === chunkId || `${chunk.id}.js` === fileName) ?? null;
+}
+
+async function loadOfflineBundleScript(fileName: string): Promise<string> {
+  const urls = offlineBundleScriptUrls(fileName);
+  let lastError: unknown = null;
+
+  for (const url of urls) {
+    try {
+      await appendOfflineBundleScript(url);
+      return url;
+    } catch (error) {
+      lastError = error;
+    }
   }
 
-  const normalizedPath = normalizeBundledPath(path);
-  const file = bundle.files.find((entry) => normalizeBundledPath(entry.path) === normalizedPath);
-  if (!file) {
-    return null;
+  const detail = lastError ? ` Last error: ${errorMessage(lastError)}` : "";
+  throw new Error(`Could not load offline data asset ${fileName}.${detail}`);
+}
+
+function offlineBundleScriptUrls(fileName: string): string[] {
+  const baseUrls = offlineBundleAssetBaseUrls();
+  return baseUrls.map((baseUrl) => new URL(fileName, baseUrl).href);
+}
+
+function offlineBundleAssetBaseUrls(): string[] {
+  const sourceModuleScript = document.querySelector<HTMLScriptElement>(
+    'script[type="module"][src$="/src/main.ts"], script[type="module"][src$="src/main.ts"]'
+  );
+  const preferred = sourceModuleScript ? "./docs/assets/" : "./assets/";
+  const fallback = sourceModuleScript ? "./assets/" : "./docs/assets/";
+  return uniqueStrings([new URL(preferred, document.baseURI).href, new URL(fallback, document.baseURI).href]);
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return Array.from(new Set(values));
+}
+
+function appendOfflineBundleScript(url: string): Promise<string> {
+  const existingPromise = offlineBundleScriptPromises.get(url);
+  if (existingPromise) {
+    return existingPromise;
   }
 
-  const compressed = decodeBase64Chunks(file.chunks);
-  const bytes = file.encoding === "gzip-base64" ? gunzipSync(compressed) : compressed;
-  const arrayBuffer = new ArrayBuffer(bytes.byteLength);
-  new Uint8Array(arrayBuffer).set(bytes);
-  return new Blob([arrayBuffer], { type: file.type });
+  const promise = new Promise<string>((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = url;
+    script.async = false;
+    script.onload = () => resolve(url);
+    script.onerror = () => {
+      script.remove();
+      offlineBundleScriptPromises.delete(url);
+      reject(new Error(`Failed to load ${url}`));
+    };
+    document.head.append(script);
+  });
+  offlineBundleScriptPromises.set(url, promise);
+  return promise;
+}
+
+function accidentFromCompactRecord(record: CompactAccidentRecord): AccidentRecord {
+  const streetNames = record[3];
+  const stateCode = record[4];
+  const administrativeRegionCode = record[5];
+  const districtCode = record[6];
+  const municipalityCode = record[7];
+  return {
+    id: record[0],
+    serialNumber: record[1],
+    source: record[2],
+    sourceType: "csv",
+    streetName: streetNames[0] ?? null,
+    streetNames,
+    stateCode,
+    stateName: STATE_NAMES[stateCode] ?? `Bundesland ${stateCode || "unknown"}`,
+    administrativeRegionCode,
+    administrativeRegionName: record[8],
+    districtCode,
+    districtName: record[9],
+    municipalityCode,
+    municipalityName: record[10],
+    year: record[11],
+    month: record[12],
+    day: record[13],
+    hour: record[14],
+    weekday: record[15],
+    category: record[16],
+    accidentKind: record[17],
+    accidentType: record[18],
+    lightCondition: record[19],
+    roadSurface: record[20],
+    plausibilityLevel: record[21],
+    linRefX: record[22],
+    linRefY: record[23],
+    lon: record[24],
+    lat: record[25],
+    involvesBike: record[26],
+    involvesPedestrian: record[27],
+    involvesMotorcycle: record[28],
+    involvesCar: record[29],
+    involvesTruck: record[30],
+    involvesOther: record[31]
+  };
 }
 
 function decodeBase64Chunks(chunks: string[]): Uint8Array {
@@ -4216,27 +4319,6 @@ function decodeBase64Chunks(chunks: string[]): Uint8Array {
   return output;
 }
 
-function normalizeBundledPath(path: string): string {
-  return path.replace(/\\/g, "/").replace(/^\.\//, "").replace(/^docs\//, "");
-}
-
-function readBlobWithXhr(url: string): Promise<Blob> {
-  return new Promise((resolve, reject) => {
-    const request = new XMLHttpRequest();
-    request.open("GET", url);
-    request.responseType = "blob";
-    request.onload = () => {
-      if ((request.status >= 200 && request.status < 300) || request.status === 0) {
-        resolve(request.response);
-      } else {
-        reject(new Error(`HTTP ${request.status}`));
-      }
-    };
-    request.onerror = () => reject(new Error(tr("status.localReadBlocked")));
-    request.send();
-  });
-}
-
 function localizedCacheStatus(message: string, progress: number): void {
   setStatus(translateCacheStatus(message), progress);
 }
@@ -4253,10 +4335,6 @@ function translateCacheStatus(message: string): string {
   }
 
   return message;
-}
-
-function progressValue(loaded = 0, total = 1): number {
-  return Math.round((loaded / Math.max(total, 1)) * 100);
 }
 
 function formatInteger(value: number): string {

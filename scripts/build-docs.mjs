@@ -9,13 +9,14 @@ const root = process.cwd();
 const docsDir = path.join(root, "docs");
 const assetsDir = path.join(docsDir, "assets");
 const sourceDataDir = path.join(root, "data");
+const NORMALIZED_ACCIDENT_CHUNK_SIZE = 100000;
 
 await mkdir(assetsDir, { recursive: true });
-await rm(assetsDir, { recursive: true, force: true });
-await mkdir(assetsDir, { recursive: true });
+await cleanGeneratedAssets();
 const csvFileList = await csvFiles();
+const normalizedDataCsvFileList = chronologicalCsvFiles(csvFileList);
 const streetLookupBundle = await buildStreetLookupBundle({ root, sourceDataDir, csvFiles: csvFileList });
-const dataScriptTags = await writeDataBundle(csvFileList, streetLookupBundle);
+const dataScriptTags = await writeDataBundle(normalizedDataCsvFileList, streetLookupBundle);
 const appVersion = await hashAppSources();
 
 await build({
@@ -29,8 +30,7 @@ await build({
   legalComments: "none",
   define: {
     __SICHERE_KNOTEN_APP_VERSION__: JSON.stringify(appVersion),
-    __SICHERE_KNOTEN_ANALYSIS_WORKER_URL__: JSON.stringify(`./assets/analysis-worker.js?v=${appVersion}`),
-    __SICHERE_KNOTEN_CSV_PARSER_WORKER_URL__: JSON.stringify(`./assets/csv-parser-worker.js?v=${appVersion}`)
+    __SICHERE_KNOTEN_ANALYSIS_WORKER_URL__: JSON.stringify(`./assets/analysis-worker.js?v=${appVersion}`)
   }
 });
 
@@ -38,17 +38,6 @@ await build({
   entryPoints: [path.join(root, "src/analysisWorker.ts")],
   bundle: true,
   outfile: path.join(assetsDir, "analysis-worker.js"),
-  format: "iife",
-  target: "es2022",
-  minify: true,
-  sourcemap: false,
-  legalComments: "none"
-});
-
-await build({
-  entryPoints: [path.join(root, "src/csvParserWorker.ts")],
-  bundle: true,
-  outfile: path.join(assetsDir, "csv-parser-worker.js"),
   format: "iife",
   target: "es2022",
   minify: true,
@@ -68,41 +57,156 @@ await writeFile(path.join(docsDir, "index.html"), docsHtml);
 await copyFile(path.join(root, "favicon.svg"), path.join(docsDir, "favicon.svg"));
 
 async function writeDataBundle(files, streetLookup) {
-  const scriptFileNames = ["data-manifest.js"];
   const dataVersion = await hashFiles(files, streetLookup);
+  const fileMetadata = await sourceFileMetadata(files);
+
+  const parseAccidentCsvFiles = await loadCsvParser();
+  globalThis.__SICHERE_KNOTEN_STREETS__ = streetLookup;
+  let accidentChunkIndex = 1;
+  let pendingRecords = [];
+  const accidentChunkFiles = [];
+
+  for (const file of files) {
+    const parsed = await parseCsvFile(file, parseAccidentCsvFiles);
+    for (const accident of parsed) {
+      pendingRecords.push(compactAccidentRecord(accident));
+      if (pendingRecords.length >= NORMALIZED_ACCIDENT_CHUNK_SIZE) {
+        accidentChunkFiles.push(await writeAccidentChunk(dataVersion, accidentChunkIndex, pendingRecords));
+        accidentChunkIndex += 1;
+        pendingRecords = [];
+      }
+    }
+  }
+
+  if (pendingRecords.length > 0) {
+    accidentChunkFiles.push(await writeAccidentChunk(dataVersion, accidentChunkIndex, pendingRecords));
+  }
 
   await writeFile(
     path.join(assetsDir, "data-manifest.js"),
-    `globalThis.__SICHERE_KNOTEN_DATA__={version:${JSON.stringify(dataVersion)},files:[]};\n`
+    `globalThis.__SICHERE_KNOTEN_DATA__={version:${JSON.stringify(dataVersion)},files:${JSON.stringify(
+      fileMetadata
+    )},accidentChunkFiles:${JSON.stringify(accidentChunkFiles)},accidentChunks:[]};\n`
   );
-  if (streetLookup) {
-    const scriptFileName = "streets.js";
-    await writeFile(path.join(assetsDir, scriptFileName), `globalThis.__SICHERE_KNOTEN_STREETS__=${JSON.stringify(streetLookup)};\n`);
-    scriptFileNames.push(scriptFileName);
-  }
-  let dataScriptIndex = 1;
+
+  return ["data-manifest.js"];
+}
+
+async function cleanGeneratedAssets() {
+  const entries = await readdir(assetsDir);
+  await Promise.all(
+    entries
+      .filter((entry) => isGeneratedAsset(entry))
+      .map((entry) => rm(path.join(assetsDir, entry), { force: true }))
+  );
+}
+
+function isGeneratedAsset(fileName) {
+  return (
+    fileName === "app.js" ||
+    fileName === "app.css" ||
+    fileName === "analysis-worker.js" ||
+    fileName === "csv-parser-worker.js" ||
+    fileName === "data-manifest.js" ||
+    fileName === "streets.js" ||
+    /^data-\d+\.js$/.test(fileName) ||
+    /^accidents-\d+\.js$/.test(fileName)
+  );
+}
+
+async function sourceFileMetadata(files) {
+  const metadata = [];
   for (const file of files) {
-    const bytes = await readFile(file.sourcePath);
     const sourceStats = await stat(file.sourcePath);
-    const compressed = gzipSync(bytes, { level: 9 });
-    const bundledFile = {
+    metadata.push({
       path: file.publicPath,
       name: path.basename(file.publicPath),
       type: file.type,
-      encoding: "gzip-base64",
-      size: bytes.byteLength,
-      compressedSize: compressed.byteLength,
-      modifiedTime: sourceStats.mtime.toISOString(),
-      chunks: chunkString(compressed.toString("base64"), 256 * 1024)
-    };
-    const scriptFileName = `data-${dataScriptIndex}.js`;
-    const script = `globalThis.__SICHERE_KNOTEN_DATA__=globalThis.__SICHERE_KNOTEN_DATA__||{version:${JSON.stringify(dataVersion)},files:[]};globalThis.__SICHERE_KNOTEN_DATA__.files.push(${JSON.stringify(bundledFile)});\n`;
-    await writeFile(path.join(assetsDir, scriptFileName), script);
-    scriptFileNames.push(scriptFileName);
-    dataScriptIndex += 1;
+      size: sourceStats.size,
+      modifiedTime: sourceStats.mtime.toISOString()
+    });
   }
+  return metadata;
+}
 
-  return scriptFileNames;
+async function loadCsvParser() {
+  const result = await build({
+    entryPoints: [path.join(root, "src/parsers/csv.ts")],
+    bundle: true,
+    write: false,
+    format: "esm",
+    platform: "node",
+    target: "node22",
+    sourcemap: false,
+    legalComments: "none"
+  });
+  const code = result.outputFiles[0].text;
+  const moduleUrl = `data:text/javascript;base64,${Buffer.from(code).toString("base64")}`;
+  const module = await import(moduleUrl);
+  return module.parseAccidentCsvFiles;
+}
+
+async function parseCsvFile(file, parseAccidentCsvFiles) {
+  const bytes = await readFile(file.sourcePath);
+  const sourceFile = new File([bytes], path.basename(file.publicPath), { type: file.type });
+  const accidents = await parseAccidentCsvFiles([sourceFile], () => {});
+  console.log(`Parsed ${accidents.length.toLocaleString("en-US")} accident records from ${file.publicPath}.`);
+  return accidents;
+}
+
+async function writeAccidentChunk(dataVersion, index, records) {
+  const bytes = Buffer.from(JSON.stringify(records));
+  const compressed = gzipSync(bytes, { level: 9 });
+  const scriptFileName = `accidents-${index}.js`;
+  const chunk = {
+    id: `accidents-${index}`,
+    encoding: "gzip-base64-json-compact-v1",
+    recordCount: records.length,
+    size: bytes.byteLength,
+    compressedSize: compressed.byteLength,
+    chunks: chunkString(compressed.toString("base64"), 256 * 1024)
+  };
+  const script = `globalThis.__SICHERE_KNOTEN_DATA__=globalThis.__SICHERE_KNOTEN_DATA__||{version:${JSON.stringify(dataVersion)},files:[],accidentChunks:[]};globalThis.__SICHERE_KNOTEN_DATA__.accidentChunks=globalThis.__SICHERE_KNOTEN_DATA__.accidentChunks||[];globalThis.__SICHERE_KNOTEN_DATA__.accidentChunks.push(${JSON.stringify(chunk)});\n`;
+  await writeFile(path.join(assetsDir, scriptFileName), script);
+  console.log(`Wrote ${scriptFileName} with ${records.length.toLocaleString("en-US")} normalized accident records.`);
+  return scriptFileName;
+}
+
+function compactAccidentRecord(accident) {
+  return [
+    accident.id,
+    accident.serialNumber,
+    accident.source,
+    accident.streetNames,
+    accident.stateCode,
+    accident.administrativeRegionCode,
+    accident.districtCode,
+    accident.municipalityCode,
+    accident.administrativeRegionName,
+    accident.districtName,
+    accident.municipalityName,
+    accident.year,
+    accident.month,
+    accident.day,
+    accident.hour,
+    accident.weekday,
+    accident.category,
+    accident.accidentKind,
+    accident.accidentType,
+    accident.lightCondition,
+    accident.roadSurface,
+    accident.plausibilityLevel,
+    accident.linRefX,
+    accident.linRefY,
+    accident.lon,
+    accident.lat,
+    accident.involvesBike,
+    accident.involvesPedestrian,
+    accident.involvesMotorcycle,
+    accident.involvesCar,
+    accident.involvesTruck,
+    accident.involvesOther
+  ];
 }
 
 async function hashFiles(files, streetLookup) {
@@ -182,6 +286,19 @@ async function csvFiles() {
   }
 
   return files;
+}
+
+function chronologicalCsvFiles(files) {
+  return [...files].sort((a, b) => compareCsvFileNames(a.publicPath, b.publicPath));
+}
+
+function compareCsvFileNames(a, b) {
+  return csvFileYear(a) - csvFileYear(b) || a.localeCompare(b);
+}
+
+function csvFileYear(name) {
+  const match = /20\d{2}/.exec(name);
+  return match ? Number(match[0]) : Number.MAX_SAFE_INTEGER;
 }
 
 function chunkString(value, size) {
