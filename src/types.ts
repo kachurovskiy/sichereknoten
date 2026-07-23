@@ -11,6 +11,8 @@ export interface AccidentRecord {
   serialNumber: string | null;
   source: string;
   sourceType: "csv" | "dbf";
+  streetName: string | null;
+  streetNames: string[];
   stateCode: string;
   stateName: string;
   administrativeRegionCode: string | null;
@@ -94,6 +96,7 @@ export interface IntersectionCluster {
   seriousCount: number;
   lightCount: number;
   vulnerableCount: number;
+  streetNames: string[];
   severityPercent: number;
   years: number[];
   yearlyStats: ClusterYearStat[];

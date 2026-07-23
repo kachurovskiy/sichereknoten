@@ -1,6 +1,7 @@
 import { AccidentRecord } from "../types";
 import { administrativeRegionNameFor, districtNameFor, municipalityNameFor } from "../municipalities";
 import { normalizeStateCode, stateNameFor } from "../states";
+import { streetNamesForAccident } from "../streetLookup";
 
 export function parseNumber(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) {
@@ -58,12 +59,15 @@ export function accidentFromRecord(
   const explicitDay = parseInteger(readField(fields, "UTAG", "UTAGMONAT", "UMONATSTAG", "UDAY", "U_DAY"));
   const weekday = parseInteger(readField(fields, "UWOCHENTAG"));
   const day = validDateDay(year, month, explicitDay, weekday) ? explicitDay : dayFromSourceId(id, year, month, weekday);
+  const streetNames = recordStreetNames(fields, source, index);
 
   return {
     id,
     serialNumber,
     source,
     sourceType,
+    streetName: streetNames[0] ?? null,
+    streetNames,
     stateCode,
     stateName: stateNameFor(stateCode),
     administrativeRegionCode,
@@ -94,6 +98,30 @@ export function accidentFromRecord(
     involvesTruck: parseBooleanFlag(readField(fields, "IstGkfz")),
     involvesOther: parseBooleanFlag(readField(fields, "IstSonstige"))
   };
+}
+
+function recordStreetNames(fields: Record<string, unknown>, source: string, index: number): string[] {
+  return uniqueStrings([
+    readOptionalString(readField(fields, "OSM_STREET_NAME", "STREET_NAME", "STRASSE", "STRASSENNAME")),
+    ...streetNamesForAccident(source, index)
+  ]);
+}
+
+function uniqueStrings(values: Array<string | null | undefined>): string[] {
+  const names: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const name = value?.trim();
+    if (!name) {
+      continue;
+    }
+    const key = name.toLocaleLowerCase("de");
+    if (!seen.has(key)) {
+      seen.add(key);
+      names.push(name);
+    }
+  }
+  return names;
 }
 
 function dayFromSourceId(id: string, year: number, month: number | null, weekday: number | null): number | null {

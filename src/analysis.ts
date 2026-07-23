@@ -33,6 +33,7 @@ interface ClusterAccumulator {
   lightCount: number;
   vulnerableCount: number;
   accidentKeys: string[];
+  streetNameCounts: Map<string, number>;
   yearSet: Set<number>;
   yearStats: Map<number, ClusterYearAccumulator>;
   stateCounts: Map<string, number>;
@@ -149,6 +150,7 @@ function buildClusters(accidents: AccidentRecord[], radiusMeters: number): Clust
         lightCount: 0,
         vulnerableCount: 0,
         accidentKeys: [],
+        streetNameCounts: new Map(),
         yearSet: new Set(),
         yearStats: new Map(),
         stateCounts: new Map(),
@@ -180,6 +182,9 @@ function addAccidentToCluster(cluster: ClusterAccumulator, accident: AccidentRec
   cluster.x = (cluster.x * previousCount + projected.x) / cluster.accidentCount;
   cluster.y = (cluster.y * previousCount + projected.y) / cluster.accidentCount;
   cluster.accidentKeys.push(accidentKey(accident));
+  for (const streetName of accidentStreetNames(accident)) {
+    cluster.streetNameCounts.set(streetName, (cluster.streetNameCounts.get(streetName) ?? 0) + 1);
+  }
   cluster.yearSet.add(accident.year);
   cluster.stateCounts.set(accident.stateCode, (cluster.stateCounts.get(accident.stateCode) ?? 0) + 1);
   if (accident.administrativeRegionName) {
@@ -292,6 +297,7 @@ function finalizeCluster(
     seriousCount: cluster.seriousCount,
     lightCount: cluster.lightCount,
     vulnerableCount: cluster.vulnerableCount,
+    streetNames: clusterStreetNames(cluster.streetNameCounts),
     severityPercent: severityPercent(cluster, accidentTrend, severityPercentOptions),
     years: Array.from(cluster.yearSet).sort((a, b) => a - b),
     yearlyStats,
@@ -302,6 +308,30 @@ function finalizeCluster(
 
 function accidentKey(accident: AccidentRecord): string {
   return `${accident.source}\0${accident.id}`;
+}
+
+function clusterStreetNames(streetNameCounts: Map<string, number>): string[] {
+  return Array.from(streetNameCounts.entries())
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], "de", { sensitivity: "base" }))
+    .map(([name]) => name);
+}
+
+function accidentStreetNames(accident: AccidentRecord): string[] {
+  const values = Array.isArray(accident.streetNames) && accident.streetNames.length > 0 ? accident.streetNames : [accident.streetName];
+  const names: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const name = value?.trim();
+    if (!name) {
+      continue;
+    }
+    const key = name.toLocaleLowerCase("de");
+    if (!seen.has(key)) {
+      seen.add(key);
+      names.push(name);
+    }
+  }
+  return names;
 }
 
 function toClusterYearStat(stats: ClusterYearAccumulator): ClusterYearStat {

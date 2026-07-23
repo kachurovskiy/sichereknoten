@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { gzipSync } from "node:zlib";
 import { copyFile, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { buildStreetLookupBundle } from "./build-streets.mjs";
 
 const root = process.cwd();
 const docsDir = path.join(root, "docs");
@@ -12,7 +13,9 @@ const sourceDataDir = path.join(root, "data");
 await mkdir(assetsDir, { recursive: true });
 await rm(assetsDir, { recursive: true, force: true });
 await mkdir(assetsDir, { recursive: true });
-const dataScriptTags = await writeDataBundle();
+const csvFileList = await csvFiles();
+const streetLookupBundle = await buildStreetLookupBundle({ root, sourceDataDir, csvFiles: csvFileList });
+const dataScriptTags = await writeDataBundle(csvFileList, streetLookupBundle);
 const appVersion = await hashAppSources();
 
 await build({
@@ -52,15 +55,20 @@ const docsHtml = sourceHtml
 await writeFile(path.join(docsDir, "index.html"), docsHtml);
 await copyFile(path.join(root, "favicon.svg"), path.join(docsDir, "favicon.svg"));
 
-async function writeDataBundle() {
-  const files = await csvFiles();
+async function writeDataBundle(files, streetLookup) {
   const scriptFileNames = ["data-manifest.js"];
-  const dataVersion = await hashFiles(files);
+  const dataVersion = await hashFiles(files, streetLookup);
 
   await writeFile(
     path.join(assetsDir, "data-manifest.js"),
     `globalThis.__SICHERE_KNOTEN_DATA__={version:${JSON.stringify(dataVersion)},files:[]};\n`
   );
+  if (streetLookup) {
+    const scriptFileName = "streets.js";
+    await writeFile(path.join(assetsDir, scriptFileName), `globalThis.__SICHERE_KNOTEN_STREETS__=${JSON.stringify(streetLookup)};\n`);
+    scriptFileNames.push(scriptFileName);
+  }
+  let dataScriptIndex = 1;
   for (const file of files) {
     const bytes = await readFile(file.sourcePath);
     const sourceStats = await stat(file.sourcePath);
@@ -75,22 +83,29 @@ async function writeDataBundle() {
       modifiedTime: sourceStats.mtime.toISOString(),
       chunks: chunkString(compressed.toString("base64"), 256 * 1024)
     };
-    const scriptFileName = `data-${scriptFileNames.length}.js`;
+    const scriptFileName = `data-${dataScriptIndex}.js`;
     const script = `globalThis.__SICHERE_KNOTEN_DATA__=globalThis.__SICHERE_KNOTEN_DATA__||{version:${JSON.stringify(dataVersion)},files:[]};globalThis.__SICHERE_KNOTEN_DATA__.files.push(${JSON.stringify(bundledFile)});\n`;
     await writeFile(path.join(assetsDir, scriptFileName), script);
     scriptFileNames.push(scriptFileName);
+    dataScriptIndex += 1;
   }
 
   return scriptFileNames;
 }
 
-async function hashFiles(files) {
+async function hashFiles(files, streetLookup) {
   const hash = createHash("sha256");
   for (const file of files) {
     const bytes = await readFile(file.sourcePath);
     hash.update(file.publicPath);
     hash.update("\0");
     hash.update(bytes);
+    hash.update("\0");
+  }
+  if (streetLookup) {
+    hash.update("streets");
+    hash.update("\0");
+    hash.update(streetLookup.version);
     hash.update("\0");
   }
   return hash.digest("hex").slice(0, 16);
@@ -102,7 +117,8 @@ async function hashAppSources() {
     path.join(root, "index.html"),
     path.join(root, "package.json"),
     path.join(root, "package-lock.json"),
-    path.join(root, "scripts/build-docs.mjs")
+    path.join(root, "scripts/build-docs.mjs"),
+    path.join(root, "scripts/build-streets.mjs")
   ].sort();
   const hash = createHash("sha256");
 

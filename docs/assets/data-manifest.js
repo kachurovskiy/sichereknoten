@@ -1,1 +1,1 @@
-globalThis.__SICHERE_KNOTEN_DATA__={version:"03738c96bed2bb14",files:[]};
+globalThis.__SICHERE_KNOTEN_DATA__={version:"e033923dd0a78800",files:[]};

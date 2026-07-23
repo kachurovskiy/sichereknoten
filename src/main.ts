@@ -104,11 +104,13 @@ const FACTSHEET_MARGIN = 64;
 const FACTSHEET_BOTTOM_MARGIN = 96;
 const FACTSHEET_CONTENT_WIDTH = FACTSHEET_PAGE_WIDTH - FACTSHEET_MARGIN * 2;
 const FACTSHEET_INCIDENT_LINK_TOP_GAP = 18;
+const FACTSHEET_TITLE_STREET_LIMIT = 3;
+const STREET_NAME_SEPARATOR = " × ";
 const OSM_TILE_URL_TEMPLATE = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
 const PROJECT_REPOSITORY_URL = "https://github.com/kachurovskiy/sichereknoten";
 const PROJECT_REPOSITORY_LABEL = "kachurovskiy/sichereknoten";
 const APP_CACHE_VERSION =
-  typeof __SICHERE_KNOTEN_APP_VERSION__ === "string" ? __SICHERE_KNOTEN_APP_VERSION__ : "dev-parallel-analysis";
+  typeof __SICHERE_KNOTEN_APP_VERSION__ === "string" ? __SICHERE_KNOTEN_APP_VERSION__ : "dev-cluster-streets";
 const STREET_VIEW_OPEN_STORAGE_KEY = "sichere-knoten:street-view-open";
 const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
   en: {
@@ -174,14 +176,18 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "details.adminRegion": "Administrative region",
     "details.district": "District",
     "details.municipality": "Municipality",
+    "details.street": "Street",
+    "details.streets": "Streets",
     "details.coordinates": "Coordinates",
     "details.years": "Years",
     "details.accidents": "Accidents",
     "details.fatalSerious": "Fatal / serious",
     "details.severityPercent": "Severity %",
-    "details.vulnerableUsers": "Vulnerable users",
     "metric.severityPercent": "Severity %",
     "metric.severity": "Severity",
+    "metric.severityPercentContextGermany":
+      "{value} ({state}: #{stateRank}, top {statePercent}%; Germany: #{germanyRank}, top {germanyPercent}%)",
+    "metric.severityPercentContextState": "{value} ({state}: #{stateRank}, top {statePercent}%)",
     "unit.perYear": "/yr",
     "table.state": "State",
     "table.accidents": "Accidents",
@@ -290,6 +296,7 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "records.type": "Type",
     "records.light": "Light",
     "records.surface": "Surface",
+    "records.street": "Street",
     "records.roadUsers": "Road users",
     "records.area": "Area",
     "records.coordinates": "Coordinates",
@@ -318,6 +325,7 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "roadUsers.summaryAria": "Road-user distribution for selected intersection",
     "roadUsers.segmentLabel": "{label}: {count} involved, {percent}",
     "factsheet.title": "Selected intersection factsheet",
+    "factsheet.titleMoreStreets": "{count} more",
     "factsheet.generated": "Generated",
     "factsheet.location": "Location",
     "factsheet.map": "Map image",
@@ -469,14 +477,18 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "details.adminRegion": "Regierungsbezirk",
     "details.district": "Kreis",
     "details.municipality": "Gemeinde",
+    "details.street": "Straße",
+    "details.streets": "Straßen",
     "details.coordinates": "Koordinaten",
     "details.years": "Jahre",
     "details.accidents": "Unfälle",
     "details.fatalSerious": "Tödlich / schwer",
     "details.severityPercent": "Schweregrad %",
-    "details.vulnerableUsers": "Ungeschützte Verkehrsteilnehmer",
     "metric.severityPercent": "Schweregrad %",
     "metric.severity": "Schweregrad",
+    "metric.severityPercentContextGermany":
+      "{value} ({state}: #{stateRank}, oberste {statePercent}%; Deutschland: #{germanyRank}, oberste {germanyPercent}%)",
+    "metric.severityPercentContextState": "{value} ({state}: #{stateRank}, oberste {statePercent}%)",
     "unit.perYear": "/Jahr",
     "table.state": "Bundesland",
     "table.accidents": "Unfälle",
@@ -584,6 +596,7 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "records.type": "Typ",
     "records.light": "Licht",
     "records.surface": "Oberfläche",
+    "records.street": "Straße",
     "records.roadUsers": "Verkehrsteilnehmer",
     "records.area": "Gebiet",
     "records.coordinates": "Koordinaten",
@@ -612,6 +625,7 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "roadUsers.summaryAria": "Verteilung der Verkehrsteilnehmer dieser Kreuzung",
     "roadUsers.segmentLabel": "{label}: {count} beteiligt, {percent}",
     "factsheet.title": "Faktenblatt ausgewählte Kreuzung",
+    "factsheet.titleMoreStreets": "{count} weitere",
     "factsheet.generated": "Erstellt",
     "factsheet.location": "Ort",
     "factsheet.map": "Kartenbild",
@@ -752,6 +766,16 @@ interface ClusterTableSort {
 
 interface SeverityPercentSource {
   severityPercent: number;
+}
+
+interface SeverityRank {
+  rank: number;
+  percentile: number;
+}
+
+interface SeverityRankContext {
+  state: SeverityRank;
+  germany: SeverityRank | null;
 }
 
 interface TrendSeriesPoint extends ClusterYearStat {
@@ -1591,6 +1615,68 @@ function compareClusterCoreMetric(a: IntersectionCluster, b: IntersectionCluster
   );
 }
 
+function formatSeverityPercentWithContext(cluster: IntersectionCluster): string {
+  const value = formatSeverityPercent(cluster);
+  const context = severityRankContext(cluster);
+  if (!context) {
+    return value;
+  }
+
+  if (context.germany === null) {
+    return trf("metric.severityPercentContextState", {
+      value,
+      stateRank: formatInteger(context.state.rank),
+      statePercent: formatInteger(context.state.percentile),
+      state: cluster.stateName
+    });
+  }
+
+  return trf("metric.severityPercentContextGermany", {
+    value,
+    stateRank: formatInteger(context.state.rank),
+    statePercent: formatInteger(context.state.percentile),
+    state: cluster.stateName,
+    germanyRank: formatInteger(context.germany.rank),
+    germanyPercent: formatInteger(context.germany.percentile)
+  });
+}
+
+function severityRankContext(cluster: IntersectionCluster): SeverityRankContext | null {
+  const clusters = result?.clusters;
+  if (!clusters?.length) {
+    return null;
+  }
+
+  const state = severityRank(cluster, clusters.filter((candidate) => candidate.stateCode === cluster.stateCode));
+  if (state === null) {
+    return null;
+  }
+
+  const hasGermanyScope = clusters.some((candidate) => candidate.stateCode !== cluster.stateCode);
+  return {
+    state,
+    germany: hasGermanyScope ? severityRank(cluster, clusters) : null
+  };
+}
+
+function severityRank(cluster: IntersectionCluster, clusters: IntersectionCluster[]): SeverityRank | null {
+  if (clusters.length === 0) {
+    return null;
+  }
+
+  const sortedClusters = clusters.slice().sort(compareClusterCoreMetric);
+  const index = sortedClusters.findIndex((candidate) => candidate.id === cluster.id && candidate.stateCode === cluster.stateCode);
+  if (index < 0) {
+    return null;
+  }
+
+  const rank = index + 1;
+  return {
+    rank,
+    percentile: Math.max(1, Math.ceil((rank / sortedClusters.length) * 100))
+  };
+}
+
 function defaultClusterSortDirection(key: ClusterSortKey): SortDirection {
   return key === "state" || key === "location" ? "asc" : "desc";
 }
@@ -1811,8 +1897,9 @@ function renderSelection(cluster: IntersectionCluster | null): void {
   const authoritySearchUrl = responsibleAuthoritySearchUrlForCluster(cluster);
   const accidentRecords = clusterAccidentRecords(cluster);
   const pressSearchUrl = pressSearchUrlForCluster(cluster, accidentRecords);
+  const streetNames = clusterStreetNamesForDisplay(cluster, accidentRecords);
   const trendPanel = renderTrendPanel(cluster, accidentRecords);
-  const recordPanel = renderSidebarAccidentRecords(accidentRecords, cluster.accidentCount);
+  const recordPanel = renderSidebarAccidentRecords(accidentRecords, cluster.accidentCount, streetNames);
   map.setSelectedIncidentPoints(
     accidentRecords.map(({ accident }, index) => ({
       lat: accident.lat,
@@ -1827,12 +1914,12 @@ function renderSelection(cluster: IntersectionCluster | null): void {
       ${cluster.administrativeRegionName ? `<div><dt>${escapeHtml(tr("details.adminRegion"))}</dt><dd>${escapeHtml(cluster.administrativeRegionName)}</dd></div>` : ""}
       ${cluster.districtName ? `<div><dt>${escapeHtml(tr("details.district"))}</dt><dd>${escapeHtml(cluster.districtName)}</dd></div>` : ""}
       ${cluster.municipalityName ? `<div><dt>${escapeHtml(tr("details.municipality"))}</dt><dd>${escapeHtml(cluster.municipalityName)}</dd></div>` : ""}
+      ${renderClusterStreetDetailRow(streetNames)}
       <div><dt>${escapeHtml(tr("details.coordinates"))}</dt><dd>${cluster.lat.toFixed(5)}, ${cluster.lon.toFixed(5)}</dd></div>
       <div><dt>${escapeHtml(tr("details.years"))}</dt><dd>${cluster.years.join(", ")}</dd></div>
       <div><dt>${escapeHtml(tr("details.accidents"))}</dt><dd>${formatInteger(cluster.accidentCount)}</dd></div>
       <div><dt>${escapeHtml(tr("details.fatalSerious"))}</dt><dd>${formatInteger(cluster.fatalCount)} / ${formatInteger(cluster.seriousCount)}</dd></div>
-      <div><dt>${escapeHtml(tr("details.severityPercent"))}</dt><dd>${formatSeverityPercent(cluster)}</dd></div>
-      <div><dt>${escapeHtml(tr("details.vulnerableUsers"))}</dt><dd>${formatInteger(cluster.vulnerableCount)}</dd></div>
+      <div><dt>${escapeHtml(tr("details.severityPercent"))}</dt><dd>${escapeHtml(formatSeverityPercentWithContext(cluster))}</dd></div>
     </dl>
     ${renderMapServiceActions(openStreetMapUrl, googleMapsUrl, streetViewUrl)}
     ${renderSelectedWorkflowActions(authoritySearchUrl, pressSearchUrl)}
@@ -1841,6 +1928,69 @@ function renderSelection(cluster: IntersectionCluster | null): void {
   `;
   updateContextTabs();
   updateStreetViewPanel();
+}
+
+function renderClusterStreetDetailRow(streetNames: string[]): string {
+  if (streetNames.length === 0) {
+    return "";
+  }
+  return `<div><dt>${escapeHtml(clusterStreetLabel(streetNames))}</dt><dd>${escapeHtml(formatClusterStreetNames(streetNames))}</dd></div>`;
+}
+
+function clusterStreetNamesForDisplay(cluster: IntersectionCluster, records: CrossingAccident[] = []): string[] {
+  const storedNames = uniqueStreetNames(Array.isArray(cluster.streetNames) ? cluster.streetNames : []);
+  return storedNames.length > 0 ? storedNames : uniqueStreetNames(records.flatMap(({ accident }) => accidentStreetNamesForDisplay(accident)));
+}
+
+function accidentStreetNamesForDisplay(accident: AccidentRecord): string[] {
+  return uniqueStreetNames(Array.isArray(accident.streetNames) && accident.streetNames.length > 0 ? accident.streetNames : [accident.streetName]);
+}
+
+function uniqueStreetNames(values: Array<string | null | undefined>): string[] {
+  const names: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const name = value?.trim();
+    if (!name) {
+      continue;
+    }
+    const key = name.toLocaleLowerCase("de");
+    if (!seen.has(key)) {
+      seen.add(key);
+      names.push(name);
+    }
+  }
+  return names;
+}
+
+function clusterStreetLabel(streetNames: string[]): string {
+  return streetNames.length === 1 ? tr("details.street") : tr("details.streets");
+}
+
+function formatClusterStreetNames(streetNames: string[]): string {
+  return streetNames.join(STREET_NAME_SEPARATOR);
+}
+
+function formatAccidentStreetNames(accident: AccidentRecord, streetOrder: string[] = []): string | null {
+  const streetNames = orderStreetNamesForCrossing(accidentStreetNamesForDisplay(accident), streetOrder);
+  return streetNames.length > 0 ? formatClusterStreetNames(streetNames) : null;
+}
+
+function orderStreetNamesForCrossing(streetNames: string[], streetOrder: string[]): string[] {
+  if (streetNames.length < 2 || streetOrder.length === 0) {
+    return streetNames;
+  }
+
+  const rankByName = new Map(streetOrder.map((name, index) => [streetNameSortKey(name), index]));
+  return streetNames.slice().sort((a, b) => {
+    const aRank = rankByName.get(streetNameSortKey(a)) ?? Number.MAX_SAFE_INTEGER;
+    const bRank = rankByName.get(streetNameSortKey(b)) ?? Number.MAX_SAFE_INTEGER;
+    return aRank - bRank || a.localeCompare(b, "de", { sensitivity: "base" });
+  });
+}
+
+function streetNameSortKey(name: string): string {
+  return name.toLocaleLowerCase("de");
 }
 
 function toggleStreetViewPanel(): void {
@@ -2030,7 +2180,7 @@ function renderAccidentActionLinks(accident: AccidentRecord): string {
   `;
 }
 
-function renderSidebarAccidentRecords(records: CrossingAccident[], totalCount: number): string {
+function renderSidebarAccidentRecords(records: CrossingAccident[], totalCount: number, streetOrder: string[] = []): string {
   const countText = trf("records.countOf", { shown: formatInteger(records.length), total: formatInteger(totalCount) });
   if (records.length === 0) {
     return `
@@ -2049,7 +2199,7 @@ function renderSidebarAccidentRecords(records: CrossingAccident[], totalCount: n
       const severity = accidentSeverity(accident);
       const recordNumber = String(index + 1);
       const actionLinks = renderAccidentActionLinks(accident);
-      const rows = accidentRecordRows(accident, distanceMeters)
+      const rows = accidentRecordRows(accident, distanceMeters, streetOrder)
         .map((row) => `<div><dt>${escapeHtml(row.label)}</dt><dd>${escapeHtml(row.value)}</dd></div>`)
         .join("");
       return `
@@ -2077,13 +2227,18 @@ function renderSidebarAccidentRecords(records: CrossingAccident[], totalCount: n
   `;
 }
 
-function accidentRecordRows(accident: AccidentRecord, distanceMeters: number): Array<{ label: string; value: string }> {
+function accidentRecordRows(
+  accident: AccidentRecord,
+  distanceMeters: number,
+  streetOrder: string[] = []
+): Array<{ label: string; value: string }> {
   const rows: Array<{ label: string; value: string }> = [];
   addRecordRow(rows, tr("records.category"), codeLabel(accident.category, ACCIDENT_CATEGORY_LABELS));
   addRecordRow(rows, tr("records.kind"), codeLabel(accident.accidentKind, ACCIDENT_KIND_LABELS));
   addRecordRow(rows, tr("records.type"), codeLabel(accident.accidentType, ACCIDENT_TYPE_LABELS));
   addRecordRow(rows, tr("records.light"), codeLabel(accident.lightCondition, LIGHT_CONDITION_LABELS));
   addRecordRow(rows, tr("records.surface"), codeLabel(accident.roadSurface, ROAD_SURFACE_LABELS));
+  addRecordRow(rows, tr("records.street"), formatAccidentStreetNames(accident, streetOrder));
   addRecordRow(rows, tr("records.roadUsers"), roadUsersLabel(accident));
   addRecordRow(rows, tr("records.area"), administrativeAreaLabel(accident));
   addRecordRow(rows, tr("records.coordinates"), `${accident.lat.toFixed(6)}, ${accident.lon.toFixed(6)}`);
@@ -2789,7 +2944,7 @@ function selectedFactsheetButtons(): HTMLButtonElement[] {
 async function createFactsheetPdf(cluster: IntersectionCluster, records: CrossingAccident[]): Promise<Blob> {
   const layout = createFactsheetLayout();
   await drawFactsheetOverview(layout, cluster, records);
-  drawFactsheetAccidentDetails(layout, records);
+  drawFactsheetAccidentDetails(layout, cluster, records);
   drawFactsheetPageFooters(layout);
   const pages = layout.pages.map((canvas, pageIndex): FactsheetPdfPage => ({
     jpegBytes: dataUrlBytes(canvas.toDataURL("image/jpeg", 0.9)),
@@ -2843,8 +2998,14 @@ async function drawFactsheetOverview(layout: FactsheetLayout, cluster: Intersect
   const context = layout.context;
   context.fillStyle = "#172126";
   context.font = factsheetFont(40, 600);
-  drawFactsheetText(layout, tr("factsheet.title"), FACTSHEET_MARGIN, layout.y + 20);
-  layout.y += 52;
+  layout.y += 20;
+  drawFactsheetLines(
+    layout,
+    wrappedCanvasLines(context, factsheetTitle(cluster, records), FACTSHEET_CONTENT_WIDTH),
+    FACTSHEET_MARGIN,
+    46
+  );
+  layout.y += 8;
 
   context.fillStyle = "#53636d";
   context.font = factsheetFont(18, 400);
@@ -2858,6 +3019,10 @@ async function drawFactsheetOverview(layout: FactsheetLayout, cluster: Intersect
   const area = clusterAreaText(cluster);
   if (area) {
     drawFactsheetParagraph(layout, area, 19, 26, "#53636d");
+  }
+  const streetNames = clusterStreetNamesForDisplay(cluster, records);
+  if (streetNames.length > 0) {
+    drawFactsheetRows(layout, [[clusterStreetLabel(streetNames), formatClusterStreetNames(streetNames)]]);
   }
 
   drawFactsheetSectionHeading(layout, tr("factsheet.map"));
@@ -2875,7 +3040,7 @@ async function drawFactsheetOverview(layout: FactsheetLayout, cluster: Intersect
     [tr("severity.fatal"), formatInteger(cluster.fatalCount)],
     [tr("severity.serious"), formatInteger(cluster.seriousCount)],
     [tr("factsheet.lightOther"), formatInteger(Math.max(0, cluster.accidentCount - cluster.fatalCount - cluster.seriousCount))],
-    [tr("factsheet.severity"), formatSeverityPercent(cluster)],
+    [tr("metric.severityPercent"), formatSeverityPercentWithContext(cluster)],
     [tr("factsheet.coordinates"), `${cluster.lat.toFixed(5)}, ${cluster.lon.toFixed(5)}`]
   ]);
 
@@ -2884,6 +3049,23 @@ async function drawFactsheetOverview(layout: FactsheetLayout, cluster: Intersect
   drawFactsheetSourceSection(layout);
   drawFactsheetTextSection(layout, tr("factsheet.methodology"), factsheetMethodologyText(cluster));
   drawFactsheetTextSection(layout, tr("factsheet.limitations"), tr("factsheet.limitationsText"));
+}
+
+function factsheetTitle(cluster: IntersectionCluster, records: CrossingAccident[]): string {
+  const streetNames = clusterStreetNamesForDisplay(cluster, records);
+  if (streetNames.length === 0) {
+    return tr("factsheet.title");
+  }
+
+  return `${tr("factsheet.title")}: ${formatFactsheetTitleStreetNames(streetNames)}`;
+}
+
+function formatFactsheetTitleStreetNames(streetNames: string[]): string {
+  const displayedNames = streetNames.slice(0, FACTSHEET_TITLE_STREET_LIMIT);
+  const remainingCount = streetNames.length - displayedNames.length;
+  const suffix =
+    remainingCount > 0 ? ` + ${trf("factsheet.titleMoreStreets", { count: formatInteger(remainingCount) })}` : "";
+  return `${formatClusterStreetNames(displayedNames)}${suffix}`;
 }
 
 function drawFactsheetMapLinksSection(layout: FactsheetLayout, cluster: IntersectionCluster): void {
@@ -3113,13 +3295,14 @@ function drawFactsheetTextSection(layout: FactsheetLayout, title: string, text: 
   drawFactsheetParagraph(layout, text, 19, 26, "#38454b");
 }
 
-function drawFactsheetAccidentDetails(layout: FactsheetLayout, records: CrossingAccident[]): void {
+function drawFactsheetAccidentDetails(layout: FactsheetLayout, cluster: IntersectionCluster, records: CrossingAccident[]): void {
   drawFactsheetSectionHeading(layout, tr("records.title"));
   if (records.length === 0) {
     drawFactsheetParagraph(layout, tr("records.empty"), 21, 29, "#38454b");
     return;
   }
 
+  const streetOrder = clusterStreetNamesForDisplay(cluster, records);
   records.forEach(({ accident, distanceMeters }, index) => {
     ensureFactsheetSpace(layout, 84);
     if (index > 0) {
@@ -3132,7 +3315,7 @@ function drawFactsheetAccidentDetails(layout: FactsheetLayout, records: Crossing
     drawFactsheetLines(layout, wrappedCanvasLines(context, heading, FACTSHEET_CONTENT_WIDTH), FACTSHEET_MARGIN, 29);
     drawFactsheetRows(
       layout,
-      accidentRecordRows(accident, distanceMeters).map((row) => [row.label, row.value])
+      accidentRecordRows(accident, distanceMeters, streetOrder).map((row) => [row.label, row.value])
     );
     layout.y += FACTSHEET_INCIDENT_LINK_TOP_GAP;
     drawFactsheetLinkRow(layout, tr("press.label"), pressSearchUrlForAccident(accident), tr("press.searchIncident"));
