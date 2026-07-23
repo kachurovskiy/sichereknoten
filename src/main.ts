@@ -1894,7 +1894,8 @@ function renderSelection(cluster: IntersectionCluster | null): void {
   const accidentRecords = clusterAccidentRecords(cluster);
   const pressSearchUrl = pressSearchUrlForCluster(cluster, accidentRecords);
   const streetNames = clusterStreetNamesForDisplay(cluster, accidentRecords);
-  const trendPanel = renderTrendPanel(cluster, accidentRecords);
+  const trendPanel = renderTrendPanel(cluster);
+  const roadUserPanel = renderRoadUserPanel(accidentRecords);
   const recordPanel = renderSidebarAccidentRecords(accidentRecords, cluster.accidentCount, streetNames);
   map.setSelectedIncidentPoints(
     accidentRecords.map(({ accident }, index) => ({
@@ -1912,7 +1913,7 @@ function renderSelection(cluster: IntersectionCluster | null): void {
       ${cluster.municipalityName ? `<div><dt>${escapeHtml(tr("details.municipality"))}</dt><dd>${escapeHtml(cluster.municipalityName)}</dd></div>` : ""}
       ${renderClusterStreetDetailRow(streetNames)}
       <div><dt>${escapeHtml(tr("details.coordinates"))}</dt><dd>${cluster.lat.toFixed(5)}, ${cluster.lon.toFixed(5)}</dd></div>
-      <div><dt>${escapeHtml(tr("details.years"))}</dt><dd>${cluster.years.join(", ")}</dd></div>
+      <div><dt>${escapeHtml(tr("details.years"))}</dt><dd>${escapeHtml(formatYearSelection(cluster.years))}</dd></div>
       <div><dt>${escapeHtml(tr("details.accidents"))}</dt><dd>${formatInteger(cluster.accidentCount)}</dd></div>
       <div><dt>${escapeHtml(tr("details.fatalSerious"))}</dt><dd>${formatInteger(cluster.fatalCount)} / ${formatInteger(cluster.seriousCount)}</dd></div>
       <div><dt>${escapeHtml(tr("details.severityPercent"))}</dt><dd>${escapeHtml(formatSeverityPercentWithContext(cluster))}</dd></div>
@@ -1920,6 +1921,7 @@ function renderSelection(cluster: IntersectionCluster | null): void {
     ${renderMapServiceActions(openStreetMapUrl, googleMapsUrl, streetViewUrl)}
     ${renderSelectedWorkflowActions(authoritySearchUrl, pressSearchUrl)}
     ${trendPanel}
+    ${roadUserPanel}
     ${recordPanel}
   `;
   updateContextTabs();
@@ -2512,7 +2514,7 @@ function accidentKey(accident: AccidentRecord): string {
   return `${accident.source}\0${accident.id}`;
 }
 
-function renderTrendPanel(cluster: IntersectionCluster, accidentRecords: CrossingAccident[]): string {
+function renderTrendPanel(cluster: IntersectionCluster): string {
   const years = result?.years.length ? result.years : cluster.years;
   const series = clusterTrendSeries(cluster, years);
   const trend = cluster.accidentTrend;
@@ -2531,13 +2533,12 @@ function renderTrendPanel(cluster: IntersectionCluster, accidentRecords: Crossin
       <div class="trend-legend">
         <span class="legend-accidents">${escapeHtml(tr("trend.legend.accidents"))}</span>
       </div>
-      ${renderRoadUserDistribution(accidentRecords)}
       <p class="trend-note">${escapeHtml(tr("trend.note"))}</p>
     </section>
   `;
 }
 
-function renderRoadUserDistribution(records: CrossingAccident[]): string {
+function renderRoadUserPanel(records: CrossingAccident[]): string {
   const items = roadUserSummaryItems(records);
   if (items.length === 0) {
     return "";
@@ -2576,14 +2577,16 @@ function renderRoadUserDistribution(records: CrossingAccident[]): string {
     .join("");
 
   return `
-    <div class="road-user-summary" aria-label="${escapeHtml(tr("roadUsers.summaryAria"))}">
-      <div class="road-user-heading">
-        <span>${escapeHtml(tr("roadUsers.title"))}</span>
-        <strong>${escapeHtml(topItem.label)} ${formatSharePercent(topItem.share)}</strong>
+    <section class="road-user-panel" aria-label="${escapeHtml(tr("roadUsers.summaryAria"))}">
+      <div class="road-user-summary">
+        <div class="road-user-heading">
+          <span>${escapeHtml(tr("roadUsers.title"))}</span>
+          <strong>${escapeHtml(topItem.label)} ${formatSharePercent(topItem.share)}</strong>
+        </div>
+        <div class="road-user-strip" role="list">${segments}</div>
+        <div class="road-user-legend">${legend}</div>
       </div>
-      <div class="road-user-strip" role="list">${segments}</div>
-      <div class="road-user-legend">${legend}</div>
-    </div>
+    </section>
   `;
 }
 
