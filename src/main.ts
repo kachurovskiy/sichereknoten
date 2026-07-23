@@ -118,6 +118,27 @@ interface InitializationTelemetryStep {
   metadata: InitializationTelemetryMetadata;
 }
 
+interface InteractionTelemetry {
+  label: string;
+  source: string;
+  startedAt: string;
+  startMark: number;
+  clusterId: string | null;
+  clusterLabel: string | null;
+  steps: InteractionTelemetryStep[];
+  logged: boolean;
+}
+
+interface InteractionTelemetryStep {
+  name: string;
+  detail: string | null;
+  startTime: string;
+  startMark: number;
+  startOffsetMs: number;
+  durationMs: number | null;
+  metadata: InitializationTelemetryMetadata;
+}
+
 interface RoadUserSummaryItem {
   definition: RoadUserDefinition;
   label: string;
@@ -837,6 +858,14 @@ interface SeverityRankContext {
   germany: SeverityRank | null;
 }
 
+interface SeverityRankCache {
+  clusters: IntersectionCluster[];
+  clusterIndexes: Map<string, number>;
+  hasMultipleStates: boolean;
+  stateRanks: Map<string, SeverityRank>;
+  germanyRanks: Map<string, SeverityRank>;
+}
+
 interface TrendSeriesPoint extends ClusterYearStat {
   x: number;
   accidentY: number;
@@ -888,10 +917,12 @@ let userLocation: { lat: number; lon: number; accuracyMeters: number | null } | 
 let activeAnalysisOptions: AnalysisOptions | null = null;
 let crossingAccidentIndexCache: AccidentIndexCache | null = null;
 let accidentKeyLookupCache: AccidentKeyLookupCache | null = null;
+let severityRankCache: SeverityRankCache | null = null;
 let postRenderCacheWriteQueue: Promise<void> = Promise.resolve();
 let isStreetViewOpen = readStoredStreetViewOpen();
 let activeView: ViewKey = "map";
 let loadingStatusKind: LoadingStatusKind = "normal";
+let activeInteractionTelemetry: InteractionTelemetry | null = null;
 
 const elements = {
   app: byId<HTMLDivElement>("app"),
@@ -1223,6 +1254,7 @@ async function loadBundledData(): Promise<void> {
     activeAnalysisOptions = null;
     crossingAccidentIndexCache = null;
     accidentKeyLookupCache = null;
+    severityRankCache = null;
     analysisSettingsDirty = false;
     activeDataVersion = null;
     updateAnalyzeButton();
@@ -1245,9 +1277,10 @@ async function loadBundledData(): Promise<void> {
       })
     );
     if (cached) {
-      accidents = cached.accidents;
+      accidents = assignAccidentRecordIndexes(cached.accidents);
       crossingAccidentIndexCache = null;
       accidentKeyLookupCache = null;
+      severityRankCache = null;
       populateFilters();
       setStatus(trf("status.accidentsLoadedFromCache", { count: formatInteger(accidents.length) }), 66);
       analysisStarted = true;
@@ -1256,9 +1289,10 @@ async function loadBundledData(): Promise<void> {
     }
 
     setStatus(tr("status.cacheMissParsingBundled"), 10);
-    accidents = await readBundledAccidents(telemetry);
+    accidents = assignAccidentRecordIndexes(await readBundledAccidents(telemetry));
     crossingAccidentIndexCache = null;
     accidentKeyLookupCache = null;
+    severityRankCache = null;
     populateFilters();
     setStatus(trf("status.accidentRecordsLoaded", { count: formatInteger(accidents.length) }), 60);
 
@@ -1322,6 +1356,7 @@ async function runAnalysisWithCache(
         activeAnalysisOptions = cloneAnalysisOptions(options);
         crossingAccidentIndexCache = null;
         accidentKeyLookupCache = null;
+        severityRankCache = null;
         analysisSettingsDirty = false;
         await measureInitializationStep(
           initializationTelemetry,
@@ -1332,6 +1367,7 @@ async function runAnalysisWithCache(
           },
           () => ({ clusterCount: result?.clusters.length ?? 0 })
         );
+        scheduleSelectionSupportPrewarm();
         setStatus(trf("status.intersectionClustersLoadedFromCache", { count: formatInteger(result.clusters.length) }), 100);
         enqueuePostRenderCacheWrites(initializationTelemetry, {
           parsedData: pendingParsedDataCacheWrite,
@@ -1375,6 +1411,7 @@ async function runAnalysisWithCache(
     activeAnalysisOptions = cloneAnalysisOptions(options);
     crossingAccidentIndexCache = null;
     accidentKeyLookupCache = null;
+    severityRankCache = null;
     analysisSettingsDirty = false;
     await measureInitializationStep(
       initializationTelemetry,
@@ -1385,6 +1422,7 @@ async function runAnalysisWithCache(
       },
       () => ({ clusterCount: result?.clusters.length ?? 0 })
     );
+    scheduleSelectionSupportPrewarm();
 
     setStatus(trf("status.intersectionClustersAnalyzed", { count: formatInteger(result.clusters.length) }), 100);
     enqueuePostRenderCacheWrites(initializationTelemetry, {
@@ -1521,17 +1559,35 @@ function renderAll(): void {
 }
 
 function handleClusterSelection(cluster: IntersectionCluster | null, reason: SelectionReason): void {
-  selectedCluster = cluster;
-  renderSelection(cluster);
-  renderExplore();
+  measureActiveInteractionStep("store selected cluster", cluster?.id ?? null, () => {
+    selectedCluster = cluster;
+  });
+  measureActiveInteractionStep(
+    "render selected intersection panel",
+    cluster?.id ?? null,
+    () => renderSelection(cluster),
+    () => ({
+      selected: Boolean(cluster),
+      accidentCount: cluster?.accidentCount ?? 0
+    })
+  );
+  measureActiveInteractionStep(
+    "rerender browse lists after selection",
+    cluster?.id ?? null,
+    renderExplore,
+    () => ({
+      stateHotspotCount: elements.stateHotspotList.children.length,
+      nearbyCount: elements.nearbyList.children.length
+    })
+  );
 
   if (!cluster) {
     return;
   }
 
   if (reason === "user" && mobileLayout.matches) {
-    map.focus(cluster);
-    setView("details");
+    measureActiveInteractionStep("mobile map focus", cluster.id, () => map.focus(cluster));
+    measureActiveInteractionStep("mobile set view details", cluster.id, () => setView("details"), () => ({ activeView }));
   }
 }
 
@@ -1762,39 +1818,145 @@ function formatSeverityPercentWithContext(cluster: IntersectionCluster): string 
 }
 
 function severityRankContext(cluster: IntersectionCluster): SeverityRankContext | null {
-  const clusters = result?.clusters;
-  if (!clusters?.length) {
+  const cache = severityRankCacheForCurrentResult();
+  if (!cache) {
     return null;
   }
 
-  const state = severityRank(cluster, clusters.filter((candidate) => candidate.stateCode === cluster.stateCode));
+  const key = severityRankKey(cluster);
+  const state = cachedSeverityRank(cache.stateRanks, key, () =>
+    measureActiveInteractionStep(
+      "compute state severity rank",
+      cluster.id,
+      () => severityRankInScope(cluster, cache, (candidate) => candidate.stateCode === cluster.stateCode),
+      (rank) => ({
+        rank: rank?.rank ?? null,
+        percentile: rank?.percentile ?? null
+      })
+    )
+  );
   if (state === null) {
     return null;
   }
 
-  const hasGermanyScope = clusters.some((candidate) => candidate.stateCode !== cluster.stateCode);
   return {
     state,
-    germany: hasGermanyScope ? severityRank(cluster, clusters) : null
+    germany: cache.hasMultipleStates
+      ? cachedSeverityRank(cache.germanyRanks, key, () =>
+          measureActiveInteractionStep(
+            "compute germany severity rank",
+            cluster.id,
+            () => severityRankInScope(cluster, cache),
+            (rank) => ({
+              rank: rank?.rank ?? null,
+              percentile: rank?.percentile ?? null
+            })
+          )
+        )
+      : null
   };
 }
 
-function severityRank(cluster: IntersectionCluster, clusters: IntersectionCluster[]): SeverityRank | null {
-  if (clusters.length === 0) {
+function severityRankCacheForCurrentResult(): SeverityRankCache | null {
+  const clusters = result?.clusters;
+  if (!clusters?.length) {
+    return null;
+  }
+  if (severityRankCache?.clusters === clusters) {
+    return severityRankCache;
+  }
+
+  severityRankCache = measureActiveInteractionStep(
+    "prepare severity rank cache",
+    null,
+    () => buildSeverityRankCache(clusters),
+    (cache) => ({
+      clusterCount: cache.clusters.length,
+      hasMultipleStates: cache.hasMultipleStates
+    })
+  );
+  return severityRankCache;
+}
+
+function buildSeverityRankCache(clusters: IntersectionCluster[]): SeverityRankCache {
+  const clusterIndexes = new Map<string, number>();
+  const firstStateCode = clusters[0]?.stateCode ?? null;
+  let hasMultipleStates = false;
+
+  clusters.forEach((cluster, index) => {
+    const key = severityRankKey(cluster);
+    if (!clusterIndexes.has(key)) {
+      clusterIndexes.set(key, index);
+    }
+    if (firstStateCode !== null && cluster.stateCode !== firstStateCode) {
+      hasMultipleStates = true;
+    }
+  });
+
+  return {
+    clusters,
+    clusterIndexes,
+    hasMultipleStates,
+    stateRanks: new Map(),
+    germanyRanks: new Map()
+  };
+}
+
+function cachedSeverityRank(ranks: Map<string, SeverityRank>, key: string, compute: () => SeverityRank | null): SeverityRank | null {
+  const cached = ranks.get(key);
+  if (cached) {
+    return cached;
+  }
+
+  const rank = compute();
+  if (rank) {
+    ranks.set(key, rank);
+  }
+  return rank;
+}
+
+function severityRankInScope(
+  cluster: IntersectionCluster,
+  cache: SeverityRankCache,
+  inScope?: (candidate: IntersectionCluster) => boolean
+): SeverityRank | null {
+  const clusterIndex = cache.clusterIndexes.get(severityRankKey(cluster));
+  if (clusterIndex === undefined) {
     return null;
   }
 
-  const sortedClusters = clusters.slice().sort(compareClusterCoreMetric);
-  const index = sortedClusters.findIndex((candidate) => candidate.id === cluster.id && candidate.stateCode === cluster.stateCode);
-  if (index < 0) {
+  let scopeSize = 0;
+  let rank = 1;
+  let foundCluster = false;
+  for (let index = 0; index < cache.clusters.length; index += 1) {
+    const candidate = cache.clusters[index];
+    if (inScope && !inScope(candidate)) {
+      continue;
+    }
+
+    scopeSize += 1;
+    if (candidate.id === cluster.id && candidate.stateCode === cluster.stateCode) {
+      foundCluster = true;
+    }
+
+    const order = compareClusterCoreMetric(candidate, cluster);
+    if (order < 0 || (order === 0 && index < clusterIndex)) {
+      rank += 1;
+    }
+  }
+
+  if (!foundCluster || scopeSize === 0) {
     return null;
   }
 
-  const rank = index + 1;
   return {
     rank,
-    percentile: Math.max(1, Math.ceil((rank / sortedClusters.length) * 100))
+    percentile: Math.max(1, Math.ceil((rank / scopeSize) * 100))
   };
+}
+
+function severityRankKey(cluster: IntersectionCluster): string {
+  return `${cluster.stateCode}\0${cluster.id}`;
 }
 
 function defaultClusterSortDirection(key: ClusterSortKey): SortDirection {
@@ -1849,7 +2011,9 @@ function renderNearbyList(): void {
   }
 
   nearby.forEach((entry) => {
-    elements.nearbyList.append(hotspotButton(entry.cluster, trf("label.away", { distance: formatDistance(entry.distanceMeters) })));
+    elements.nearbyList.append(
+      hotspotButton(entry.cluster, trf("label.away", { distance: formatDistance(entry.distanceMeters) }), { telemetrySource: "nearby hotspot" })
+    );
   });
 }
 
@@ -1875,7 +2039,10 @@ function renderStateHotspotList(): void {
 
   clusters.forEach((cluster) => {
     elements.stateHotspotList.append(
-      hotspotButton(cluster, stateCode === "all" ? cluster.stateName : clusterLocationText(cluster), { metricPlacement: "header" })
+      hotspotButton(cluster, stateCode === "all" ? cluster.stateName : clusterLocationText(cluster), {
+        metricPlacement: "header",
+        telemetrySource: "state hotspot"
+      })
     );
   });
 }
@@ -1889,7 +2056,7 @@ function topClusterByState(): IntersectionCluster[] {
 function hotspotButton(
   cluster: IntersectionCluster,
   context: string,
-  options: { metricPlacement?: HotspotMetricPlacement } = {}
+  options: { metricPlacement?: HotspotMetricPlacement; telemetrySource?: string } = {}
 ): HTMLButtonElement {
   const button = document.createElement("button");
   button.type = "button";
@@ -1912,7 +2079,7 @@ function hotspotButton(
     </span>
   `;
   button.addEventListener("click", () => {
-    selectClusterOnMap(cluster);
+    selectClusterOnMap(cluster, options.telemetrySource ?? "hotspot");
   });
   return button;
 }
@@ -1946,15 +2113,32 @@ function selectNearestCluster(): { cluster: IntersectionCluster; distanceMeters:
     setView("map");
     return null;
   }
-  selectClusterOnMap(nearest.cluster);
+  selectClusterOnMap(nearest.cluster, "nearest hotspot");
   return nearest;
 }
 
-function selectClusterOnMap(cluster: IntersectionCluster): void {
-  ensureClusterSeverityVisible(cluster);
-  setView("map");
+function selectClusterOnMap(cluster: IntersectionCluster, telemetrySource = "cluster selection"): void {
+  const telemetry = createInteractionTelemetry("select cluster from list", telemetrySource, cluster);
+  activeInteractionTelemetry = telemetry;
+  measureInteractionStep(telemetry, "ensure severity visible", cluster.id, () => ensureClusterSeverityVisible(cluster), () => ({
+    severity: clusterSeverity(cluster),
+    fatalCount: cluster.fatalCount,
+    seriousCount: cluster.seriousCount
+  }));
+  measureInteractionStep(telemetry, "set view to map", activeView, () => setView("map"), () => ({ activeView }));
+  const frameStep = startInteractionStep(telemetry, "wait for selection animation frame", cluster.id);
   window.requestAnimationFrame(() => {
-    map.select(cluster, true);
+    finishInteractionStep(frameStep, {});
+    try {
+      withInteractionTelemetry(telemetry, () => {
+        measureInteractionStep(telemetry, "map select, focus, draw, callback", cluster.id, () => map.select(cluster, true), () => ({
+          clusterId: cluster.id,
+          accidentCount: cluster.accidentCount
+        }));
+      });
+    } finally {
+      scheduleInteractionTelemetryLog(telemetry);
+    }
   });
 }
 
@@ -2011,45 +2195,88 @@ function renderSelection(cluster: IntersectionCluster | null): void {
 
   elements.selectedAside.hidden = false;
   elements.mapView.classList.add("has-selection");
-  const openStreetMapUrl = openStreetMapUrlForCluster(cluster);
-  const googleMapsUrl = googleMapsUrlForCluster(cluster);
-  const streetViewUrl = googleStreetViewUrl(cluster);
-  const authoritySearchUrl = responsibleAuthoritySearchUrlForCluster(cluster);
-  const accidentRecords = clusterAccidentRecords(cluster);
-  const pressSearchUrl = pressSearchUrlForCluster(cluster, accidentRecords);
-  const streetNames = clusterStreetNamesForDisplay(cluster, accidentRecords);
-  const trendPanel = renderTrendPanel(cluster);
-  const roadUserPanel = renderRoadUserPanel(accidentRecords);
-  const recordPanel = renderSidebarAccidentRecords(accidentRecords, cluster.accidentCount, streetNames);
-  map.setSelectedIncidentPoints(
-    accidentRecords.map(({ accident }, index) => ({
-      lat: accident.lat,
-      lon: accident.lon,
-      label: String(index + 1)
-    }))
+  const urls = measureActiveInteractionStep(
+    "build selected external URLs",
+    cluster.id,
+    () => ({
+      openStreetMapUrl: openStreetMapUrlForCluster(cluster),
+      googleMapsUrl: googleMapsUrlForCluster(cluster),
+      streetViewUrl: googleStreetViewUrl(cluster),
+      authoritySearchUrl: responsibleAuthoritySearchUrlForCluster(cluster)
+    }),
+    () => ({ urlCount: 4 })
+  );
+  const accidentRecords = measureActiveInteractionStep(
+    "find selected accident records",
+    cluster.id,
+    () => clusterAccidentRecords(cluster),
+    (records) => ({
+      recordCount: records.length,
+      clusterAccidentCount: cluster.accidentCount
+    })
+  );
+  const pressSearchUrl = measureActiveInteractionStep("build press search URL", cluster.id, () =>
+    pressSearchUrlForCluster(cluster, accidentRecords)
+  );
+  const streetNames = measureActiveInteractionStep(
+    "derive selected street names",
+    cluster.id,
+    () => clusterStreetNamesForDisplay(cluster, accidentRecords),
+    (names) => ({ streetCount: names.length })
+  );
+  const trendPanel = measureActiveInteractionStep("render trend panel html", cluster.id, () => renderTrendPanel(cluster));
+  const roadUserPanel = measureActiveInteractionStep(
+    "render road-user panel html",
+    cluster.id,
+    () => renderRoadUserPanel(accidentRecords),
+    () => ({ recordCount: accidentRecords.length })
+  );
+  const recordPanel = measureActiveInteractionStep(
+    "render accident record list html",
+    cluster.id,
+    () => renderSidebarAccidentRecords(accidentRecords, cluster.accidentCount, streetNames),
+    () => ({ recordCount: accidentRecords.length })
+  );
+  measureActiveInteractionStep(
+    "update selected incident points",
+    cluster.id,
+    () =>
+      map.setSelectedIncidentPoints(
+        accidentRecords.map(({ accident }, index) => ({
+          lat: accident.lat,
+          lon: accident.lon,
+          label: String(index + 1)
+        }))
+      ),
+    () => ({ pointCount: accidentRecords.length })
   );
 
-  elements.selectionDetails.innerHTML = `
-    <dl>
-      <div><dt>${escapeHtml(tr("details.state"))}</dt><dd>${escapeHtml(cluster.stateName)}</dd></div>
-      ${cluster.administrativeRegionName ? `<div><dt>${escapeHtml(tr("details.adminRegion"))}</dt><dd>${escapeHtml(cluster.administrativeRegionName)}</dd></div>` : ""}
-      ${cluster.districtName ? `<div><dt>${escapeHtml(tr("details.district"))}</dt><dd>${escapeHtml(cluster.districtName)}</dd></div>` : ""}
-      ${cluster.municipalityName ? `<div><dt>${escapeHtml(tr("details.municipality"))}</dt><dd>${escapeHtml(cluster.municipalityName)}</dd></div>` : ""}
-      ${renderClusterStreetDetailRow(streetNames)}
-      <div><dt>${escapeHtml(tr("details.coordinates"))}</dt><dd>${cluster.lat.toFixed(5)}, ${cluster.lon.toFixed(5)}</dd></div>
-      <div><dt>${escapeHtml(tr("details.years"))}</dt><dd>${escapeHtml(formatYearSelection(cluster.years))}</dd></div>
-      <div><dt>${escapeHtml(tr("details.accidents"))}</dt><dd>${formatInteger(cluster.accidentCount)}</dd></div>
-      <div><dt>${escapeHtml(tr("details.fatalSerious"))}</dt><dd>${formatInteger(cluster.fatalCount)} / ${formatInteger(cluster.seriousCount)}</dd></div>
-      <div><dt>${escapeHtml(tr("details.severityPercent"))}</dt><dd>${escapeHtml(formatSeverityPercentWithContext(cluster))}</dd></div>
-    </dl>
-    ${renderMapServiceActions(openStreetMapUrl, googleMapsUrl, streetViewUrl)}
-    ${renderSelectedWorkflowActions(authoritySearchUrl, pressSearchUrl)}
-    ${trendPanel}
-    ${roadUserPanel}
-    ${recordPanel}
-  `;
-  updateContextTabs();
-  updateStreetViewPanel();
+  const detailsHtml = measureActiveInteractionStep("build selected panel html", cluster.id, () => `
+      <dl>
+        <div><dt>${escapeHtml(tr("details.state"))}</dt><dd>${escapeHtml(cluster.stateName)}</dd></div>
+        ${cluster.administrativeRegionName ? `<div><dt>${escapeHtml(tr("details.adminRegion"))}</dt><dd>${escapeHtml(cluster.administrativeRegionName)}</dd></div>` : ""}
+        ${cluster.districtName ? `<div><dt>${escapeHtml(tr("details.district"))}</dt><dd>${escapeHtml(cluster.districtName)}</dd></div>` : ""}
+        ${cluster.municipalityName ? `<div><dt>${escapeHtml(tr("details.municipality"))}</dt><dd>${escapeHtml(cluster.municipalityName)}</dd></div>` : ""}
+        ${renderClusterStreetDetailRow(streetNames)}
+        <div><dt>${escapeHtml(tr("details.coordinates"))}</dt><dd>${cluster.lat.toFixed(5)}, ${cluster.lon.toFixed(5)}</dd></div>
+        <div><dt>${escapeHtml(tr("details.years"))}</dt><dd>${escapeHtml(formatYearSelection(cluster.years))}</dd></div>
+        <div><dt>${escapeHtml(tr("details.accidents"))}</dt><dd>${formatInteger(cluster.accidentCount)}</dd></div>
+        <div><dt>${escapeHtml(tr("details.fatalSerious"))}</dt><dd>${formatInteger(cluster.fatalCount)} / ${formatInteger(cluster.seriousCount)}</dd></div>
+        <div><dt>${escapeHtml(tr("details.severityPercent"))}</dt><dd>${escapeHtml(formatSeverityPercentWithContext(cluster))}</dd></div>
+      </dl>
+      ${renderMapServiceActions(urls.openStreetMapUrl, urls.googleMapsUrl, urls.streetViewUrl)}
+      ${renderSelectedWorkflowActions(urls.authoritySearchUrl, pressSearchUrl)}
+      ${trendPanel}
+      ${roadUserPanel}
+      ${recordPanel}
+    `);
+  measureActiveInteractionStep("apply selected panel html", cluster.id, () => {
+    elements.selectionDetails.innerHTML = detailsHtml;
+  });
+  measureActiveInteractionStep("update details tabs", cluster.id, updateContextTabs);
+  measureActiveInteractionStep("update street view panel", cluster.id, updateStreetViewPanel, () => ({
+    streetViewOpen: isStreetViewOpen
+  }));
 }
 
 function renderClusterStreetDetailRow(streetNames: string[]): string {
@@ -2397,6 +2624,11 @@ function clusterAccidentRecords(cluster: IntersectionCluster): CrossingAccident[
 }
 
 function exactClusterAccidentRecords(cluster: IntersectionCluster): CrossingAccident[] {
+  const indexedRecords = exactClusterAccidentRecordsByIndex(cluster);
+  if (indexedRecords.length > 0) {
+    return indexedRecords;
+  }
+
   if (!cluster.accidentKeys?.length) {
     return [];
   }
@@ -2408,11 +2640,44 @@ function exactClusterAccidentRecords(cluster: IntersectionCluster): CrossingAcci
     .map((accident) => ({ accident, distanceMeters: distanceMeters(cluster, accident) }));
 }
 
+function exactClusterAccidentRecordsByIndex(cluster: IntersectionCluster): CrossingAccident[] {
+  const indexes = cluster.accidentIndexes;
+  if (!indexes?.length) {
+    return [];
+  }
+
+  return measureActiveInteractionStep(
+    "read indexed accident records",
+    cluster.id,
+    () =>
+      indexes
+        .map((index) => accidents[index])
+        .filter((accident): accident is AccidentRecord => Boolean(accident))
+        .map((accident) => ({ accident, distanceMeters: distanceMeters(cluster, accident) })),
+    (records) => ({
+      recordCount: records.length,
+      indexCount: indexes.length
+    })
+  );
+}
+
 function accidentKeyLookup(): Map<string, AccidentRecord> {
   if (accidentKeyLookupCache?.source === accidents) {
     return accidentKeyLookupCache.map;
   }
 
+  return measureActiveInteractionStep(
+    "build accident key lookup",
+    "all accident records",
+    buildAccidentKeyLookup,
+    (map) => ({
+      accidentCount: accidents.length,
+      recordCount: map.size
+    })
+  );
+}
+
+function buildAccidentKeyLookup(): Map<string, AccidentRecord> {
   const map = new Map<string, AccidentRecord>();
   for (const accident of accidents) {
     map.set(accidentKey(accident), accident);
@@ -4125,6 +4390,13 @@ function bundledDataVersion(): string {
   return "missing-normalized-data";
 }
 
+function assignAccidentRecordIndexes(records: AccidentRecord[]): AccidentRecord[] {
+  for (let index = 0; index < records.length; index += 1) {
+    records[index].recordIndex = index;
+  }
+  return records;
+}
+
 async function readBundledAccidents(telemetry: InitializationTelemetry): Promise<AccidentRecord[]> {
   const bundle = await ensureBundledDataManifest(telemetry);
   const chunkFiles = bundle.accidentChunkFiles ?? [];
@@ -4542,6 +4814,40 @@ function scheduleAfterFirstRender(work: () => void): void {
   });
 }
 
+function scheduleSelectionSupportPrewarm(): void {
+  const sourceResult = result;
+  if (!sourceResult?.clusters.length) {
+    return;
+  }
+
+  scheduleAfterFirstRender(() => {
+    scheduleIdleWork(() => {
+      if (result !== sourceResult) {
+        return;
+      }
+
+      const started = performance.now();
+      severityRankCacheForCurrentResult();
+      const durationMs = round(performance.now() - started, 2);
+      if (durationMs >= 10) {
+        console.info("[Safe Intersections] selection support prewarm", {
+          durationMs,
+          clusterCount: sourceResult.clusters.length
+        });
+      }
+    });
+  });
+}
+
+function scheduleIdleWork(work: () => void): void {
+  const requestIdleCallback = window.requestIdleCallback;
+  if (typeof requestIdleCallback === "function") {
+    requestIdleCallback.call(window, () => work(), { timeout: 2000 });
+  } else {
+    globalThis.setTimeout(work, 0);
+  }
+}
+
 function ignoreCacheWriteProgress(_message: string, _progress: number): void {}
 
 async function measureInitializationStep<T>(
@@ -4625,6 +4931,125 @@ function logInitializationTelemetry(
   }));
 
   console.groupCollapsed(`[Safe Intersections] ${label}: ${status} in ${durationMs} ms`);
+  console.info(summary);
+  console.table(rows);
+  console.groupEnd();
+}
+
+function createInteractionTelemetry(label: string, source: string, cluster: IntersectionCluster | null): InteractionTelemetry {
+  return {
+    label,
+    source,
+    startedAt: new Date().toISOString(),
+    startMark: performance.now(),
+    clusterId: cluster?.id ?? null,
+    clusterLabel: cluster ? clusterLocationText(cluster) : null,
+    steps: [],
+    logged: false
+  };
+}
+
+function measureActiveInteractionStep<T>(
+  name: string,
+  detail: string | null,
+  work: () => T,
+  metadata?: (result: T) => InitializationTelemetryMetadata
+): T {
+  const telemetry = activeInteractionTelemetry;
+  return telemetry ? measureInteractionStep(telemetry, name, detail, work, metadata) : work();
+}
+
+function measureInteractionStep<T>(
+  telemetry: InteractionTelemetry,
+  name: string,
+  detail: string | null,
+  work: () => T,
+  metadata?: (result: T) => InitializationTelemetryMetadata
+): T {
+  const step = startInteractionStep(telemetry, name, detail);
+  try {
+    const result = work();
+    finishInteractionStep(step, metadata?.(result) ?? {});
+    return result;
+  } catch (error) {
+    finishInteractionStep(step, { error: errorMessage(error) });
+    throw error;
+  }
+}
+
+function withInteractionTelemetry<T>(telemetry: InteractionTelemetry, work: () => T): T {
+  const previous = activeInteractionTelemetry;
+  activeInteractionTelemetry = telemetry;
+  try {
+    return work();
+  } finally {
+    activeInteractionTelemetry = previous;
+  }
+}
+
+function startInteractionStep(telemetry: InteractionTelemetry, name: string, detail: string | null): InteractionTelemetryStep {
+  const startMark = performance.now();
+  const step: InteractionTelemetryStep = {
+    name,
+    detail,
+    startTime: new Date().toISOString(),
+    startMark,
+    startOffsetMs: startMark - telemetry.startMark,
+    durationMs: null,
+    metadata: {}
+  };
+  telemetry.steps.push(step);
+  return step;
+}
+
+function finishInteractionStep(step: InteractionTelemetryStep, metadata: InitializationTelemetryMetadata): void {
+  step.durationMs = performance.now() - step.startMark;
+  step.metadata = metadata;
+}
+
+function scheduleInteractionTelemetryLog(telemetry: InteractionTelemetry): void {
+  const paintStep = startInteractionStep(telemetry, "wait for browser paint", telemetry.clusterId);
+  window.requestAnimationFrame(() => {
+    window.requestAnimationFrame(() => {
+      finishInteractionStep(paintStep, { activeView });
+      logInteractionTelemetry(telemetry);
+      if (activeInteractionTelemetry === telemetry) {
+        activeInteractionTelemetry = null;
+      }
+    });
+  });
+}
+
+function logInteractionTelemetry(telemetry: InteractionTelemetry): void {
+  if (telemetry.logged) {
+    return;
+  }
+
+  telemetry.logged = true;
+  const finishedAt = new Date().toISOString();
+  const durationMs = round(performance.now() - telemetry.startMark, 2);
+  const summary = {
+    label: telemetry.label,
+    source: telemetry.source,
+    clusterId: telemetry.clusterId ?? "",
+    cluster: telemetry.clusterLabel ?? "",
+    startedAt: telemetry.startedAt,
+    finishedAt,
+    durationMs,
+    stepCount: telemetry.steps.length,
+    activeView
+  };
+  const rows = telemetry.steps.map((step, index) => ({
+    "#": index + 1,
+    step: step.name,
+    detail: step.detail ?? "",
+    "start time": step.startTime,
+    "start +ms": round(step.startOffsetMs, 2),
+    "duration ms": step.durationMs === null ? null : round(step.durationMs, 2),
+    ...step.metadata
+  }));
+
+  console.groupCollapsed(`[Safe Intersections] interaction telemetry: ${telemetry.source} in ${durationMs} ms`);
   console.info(summary);
   console.table(rows);
   console.groupEnd();

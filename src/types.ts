@@ -8,6 +8,7 @@ export interface ParseProgress {
 
 export interface AccidentRecord {
   id: string;
+  recordIndex?: number;
   serialNumber: string | null;
   source: string;
   sourceType: "csv" | "dbf";
@@ -101,6 +102,7 @@ export interface IntersectionCluster {
   years: number[];
   yearlyStats: ClusterYearStat[];
   accidentTrend: AccidentTrend;
+  accidentIndexes?: number[];
   accidentKeys?: string[];
 }
 

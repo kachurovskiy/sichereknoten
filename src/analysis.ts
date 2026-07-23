@@ -32,6 +32,7 @@ interface ClusterAccumulator {
   seriousCount: number;
   lightCount: number;
   vulnerableCount: number;
+  accidentIndexes: number[];
   accidentKeys: string[];
   streetNameCounts: Map<string, number>;
   yearSet: Set<number>;
@@ -149,6 +150,7 @@ function buildClusters(accidents: AccidentRecord[], radiusMeters: number): Clust
         seriousCount: 0,
         lightCount: 0,
         vulnerableCount: 0,
+        accidentIndexes: [],
         accidentKeys: [],
         streetNameCounts: new Map(),
         yearSet: new Set(),
@@ -181,6 +183,9 @@ function addAccidentToCluster(cluster: ClusterAccumulator, accident: AccidentRec
   cluster.lat = (cluster.lat * previousCount + accident.lat) / cluster.accidentCount;
   cluster.x = (cluster.x * previousCount + projected.x) / cluster.accidentCount;
   cluster.y = (cluster.y * previousCount + projected.y) / cluster.accidentCount;
+  if (typeof accident.recordIndex === "number") {
+    cluster.accidentIndexes.push(accident.recordIndex);
+  }
   cluster.accidentKeys.push(accidentKey(accident));
   for (const streetName of accidentStreetNames(accident)) {
     cluster.streetNameCounts.set(streetName, (cluster.streetNameCounts.get(streetName) ?? 0) + 1);
@@ -302,6 +307,7 @@ function finalizeCluster(
     years: Array.from(cluster.yearSet).sort((a, b) => a - b),
     yearlyStats,
     accidentTrend,
+    accidentIndexes: cluster.accidentIndexes.length === cluster.accidentCount ? cluster.accidentIndexes : undefined,
     accidentKeys: cluster.accidentKeys
   };
 }
