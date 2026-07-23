@@ -7,10 +7,10 @@ Visit https://kachurovskiy.com/sichereknoten/ to explore dangerous intersections
 ```powershell
 npm install
 npm run build
-npm run serve:docs
+npm run dev
 ```
 
-Open `docs/index.html` from the build output, serve the built app locally with `npm run serve:docs`, or publish the `docs/` folder with GitHub Pages. Use `npm run serve:docs` locally for complete OpenStreetMap basemap tiles.
+Open `docs/index.html` from the build output, serve the built app locally with `npm run dev` or `npm run serve:docs`, or publish the `docs/` folder with GitHub Pages. The local server is a plain Node HTTP server on `http://127.0.0.1:5173/` and stops a previous dev server process before starting. Use it locally for complete OpenStreetMap basemap tiles.
 
 The app supports:
 
@@ -22,9 +22,9 @@ The app supports:
 
 The app automatically loads the compressed normalized data scripts in `docs/assets`. Source data files live under `data/` and are not required in the deployed `docs/` folder. Raw SHP/DBF Unfallatlas downloads are not required in the repository because the bundled CSV files already contain the accident coordinates and attributes used by the browser analysis.
 
-The map draws grayscale OpenStreetMap tiles behind the accident markers and loads only the visible tiles for the current viewport. OpenStreetMap tiles require a browser `Referer` header, so direct `file://` use may show partial or blocked tiles; use `npm run serve:docs` or GitHub Pages for complete tiles.
+The map draws grayscale OpenStreetMap tiles behind the accident markers and loads only the visible tiles for the current viewport. OpenStreetMap tiles require a browser `Referer` header, so direct `file://` use may show partial or blocked tiles; use `npm run dev`, `npm run serve:docs`, or GitHub Pages for complete tiles.
 
-For direct `file://` use, the build writes compressed normalized data scripts in `docs/assets/accidents-*.js`. Re-run `npm run build` after changing files in `data/csv`.
+For direct `file://` use, the build writes compressed normalized data scripts in `docs/assets/accidents-*.js`. Re-run `npm run build` after changing files in `data/csv`; unchanged accident chunks are reused across regular builds.
 
 After the first successful load, parsed records are cached in IndexedDB under the generated data version, so normal refreshes skip CSV parsing. Analysis results are also cached per data version, app build, and analysis settings, so reloads with the same controls skip the clustering stage. The cache invalidates automatically after `npm run build` changes the data version or app build fingerprint.
 

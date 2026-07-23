@@ -4,18 +4,16 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite --host 127.0.0.1",
+    "dev": "node scripts/serve-docs.mjs",
     "generate:municipalities": "node scripts/generate-municipalities.mjs",
     "build": "tsc --noEmit && node scripts/build-docs.mjs",
-    "preview": "vite preview --host 127.0.0.1",
-    "serve:docs": "vite docs --host 127.0.0.1"
+    "serve:docs": "node scripts/serve-docs.mjs"
   },
   "dependencies": {
     "fflate": "^0.8.2"
   },
   "devDependencies": {
     "esbuild": "^0.25.0",
-    "typescript": "^5.9.2",
-    "vite": "^7.0.0"
+    "typescript": "^5.9.2"
   }
 }

@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { gzipSync } from "node:zlib";
 import { copyFile, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { runInNewContext } from "node:vm";
 import { buildStreetLookupBundle } from "./build-streets.mjs";
 
 const root = process.cwd();
@@ -59,7 +60,21 @@ await copyFile(path.join(root, "favicon.svg"), path.join(docsDir, "favicon.svg")
 async function writeDataBundle(files, streetLookup) {
   const dataVersion = await hashFiles(files, streetLookup);
   const fileMetadata = await sourceFileMetadata(files);
+  const reusableAccidentChunkFiles = await reusableAccidentChunks(dataVersion);
+  const accidentChunkFiles = reusableAccidentChunkFiles ?? (await writeAccidentChunks(dataVersion, files, streetLookup));
 
+  if (reusableAccidentChunkFiles) {
+    await removeGeneratedAccidentChunks(new Set(reusableAccidentChunkFiles));
+    console.log(
+      `Reused ${reusableAccidentChunkFiles.length.toLocaleString("en-US")} normalized accident chunk scripts for data version ${dataVersion}.`
+    );
+  }
+
+  await writeDataManifest(dataVersion, fileMetadata, accidentChunkFiles);
+  return ["data-manifest.js"];
+}
+
+async function writeAccidentChunks(dataVersion, files, streetLookup) {
   const parseAccidentCsvFiles = await loadCsvParser();
   globalThis.__SICHERE_KNOTEN_STREETS__ = streetLookup;
   let accidentChunkIndex = 1;
@@ -82,14 +97,17 @@ async function writeDataBundle(files, streetLookup) {
     accidentChunkFiles.push(await writeAccidentChunk(dataVersion, accidentChunkIndex, pendingRecords));
   }
 
+  await removeGeneratedAccidentChunks(new Set(accidentChunkFiles));
+  return accidentChunkFiles;
+}
+
+async function writeDataManifest(dataVersion, fileMetadata, accidentChunkFiles) {
   await writeFile(
     path.join(assetsDir, "data-manifest.js"),
     `globalThis.__SICHERE_KNOTEN_DATA__={version:${JSON.stringify(dataVersion)},files:${JSON.stringify(
       fileMetadata
     )},accidentChunkFiles:${JSON.stringify(accidentChunkFiles)},accidentChunks:[]};\n`
   );
-
-  return ["data-manifest.js"];
 }
 
 async function cleanGeneratedAssets() {
@@ -107,11 +125,61 @@ function isGeneratedAsset(fileName) {
     fileName === "app.css" ||
     fileName === "analysis-worker.js" ||
     fileName === "csv-parser-worker.js" ||
-    fileName === "data-manifest.js" ||
     fileName === "streets.js" ||
-    /^data-\d+\.js$/.test(fileName) ||
-    /^accidents-\d+\.js$/.test(fileName)
+    /^data-\d+\.js$/.test(fileName)
   );
+}
+
+async function reusableAccidentChunks(dataVersion) {
+  const manifest = await readExistingDataManifest();
+  if (!manifest || manifest.version !== dataVersion || !Array.isArray(manifest.accidentChunkFiles)) {
+    return null;
+  }
+  if (manifest.accidentChunkFiles.length === 0) {
+    return null;
+  }
+
+  const chunkFiles = [];
+  for (const fileName of manifest.accidentChunkFiles) {
+    if (typeof fileName !== "string" || !/^accidents-\d+\.js$/.test(fileName)) {
+      return null;
+    }
+    if (!(await fileExists(path.join(assetsDir, fileName)))) {
+      return null;
+    }
+    chunkFiles.push(fileName);
+  }
+
+  return chunkFiles;
+}
+
+async function readExistingDataManifest() {
+  try {
+    const script = await readFile(path.join(assetsDir, "data-manifest.js"), "utf8");
+    const sandbox = { globalThis: {} };
+    runInNewContext(script, sandbox, { timeout: 1000 });
+    const manifest = sandbox.globalThis.__SICHERE_KNOTEN_DATA__;
+    return manifest && typeof manifest === "object" ? manifest : null;
+  } catch {
+    return null;
+  }
+}
+
+async function removeGeneratedAccidentChunks(keep = new Set()) {
+  const entries = await readdir(assetsDir);
+  await Promise.all(
+    entries
+      .filter((entry) => /^accidents-\d+\.js$/.test(entry) && !keep.has(entry))
+      .map((entry) => rm(path.join(assetsDir, entry), { force: true }))
+  );
+}
+
+async function fileExists(filePath) {
+  try {
+    return (await stat(filePath)).isFile();
+  } catch {
+    return false;
+  }
 }
 
 async function sourceFileMetadata(files) {

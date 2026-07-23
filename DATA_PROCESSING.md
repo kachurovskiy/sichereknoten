@@ -10,7 +10,7 @@ Build-time source inputs live under `data`:
 - `data/AuszugGV2QAktuell.xlsx`: Destatis municipality directory extract used to generate `src/municipalities.ts`.
 - `data/germany-260721.osm.pbf`: local OpenStreetMap PBF used at build time to derive nearest street names for accident records. The PBF is ignored by Git.
 
-`scripts/build-docs.mjs` discovers CSV source files in `data/csv`, parses them at build time, and writes compressed normalized accident chunks into `docs/assets`.
+`scripts/build-docs.mjs` discovers CSV source files in `data/csv` and writes compressed normalized accident chunks into `docs/assets`. Existing chunk scripts are reused when the generated data version still matches and all referenced chunk files exist.
 `scripts/generate-municipalities.mjs` reads `data/AuszugGV2QAktuell.xlsx` and writes the compact lookup source used at runtime.
 Raw SHP/DBF Unfallatlas downloads are intentionally excluded from the repository: the DBF files are very large, are not loaded by the current app, and would duplicate the same accident records already represented by the CSV inputs.
 
@@ -32,19 +32,19 @@ tsc --noEmit && node scripts/build-docs.mjs
 
 `scripts/build-docs.mjs` does three things:
 
-1. Removes known generated files from `docs/assets`.
+1. Removes known generated non-data files from `docs/assets`.
 2. Builds `src/main.ts` into `docs/assets/app.js` with esbuild as a classic IIFE script so `docs/index.html` can be opened directly without Vite.
-3. Creates offline data scripts:
+3. Creates or reuses offline data scripts:
    - `docs/assets/data-manifest.js`
    - `docs/assets/accidents-1.js`, `accidents-2.js`, etc.
 
-Each accident data script contains up to 100,000 normalized accident records, compressed with gzip, encoded as base64, and split into 256 KB string chunks. Splitting the bundle across generated scripts keeps each file below GitHub's 100 MB single-file limit and avoids CSV parsing at startup.
+Each accident data script contains up to 100,000 normalized accident records, compressed with gzip, encoded as base64, and split into 256 KB string chunks. Splitting the bundle across generated scripts keeps each file below GitHub's 100 MB single-file limit and avoids CSV parsing at startup. Regular builds keep existing `accidents-*.js` files when the current manifest version matches the source CSV bytes and generated street lookup version; the slow normalization pass only runs when data changed or chunk files are missing.
 
 When the local PBF exists, `scripts/build-streets.mjs` streams it during build and creates a compact street lookup bundle used while normalizing accident records. The bundle uses one global street-name dictionary and per-CSV-row integer street indexes instead of repeating street names for every accident. Rows near multiple named streets store a short integer list so intersection incidents can keep more than one nearby street name. A local rebuild cache is written to `data/generated/street-lookup.json` and ignored by Git. The runtime app does not ship or load this lookup because normalized accident chunks already contain the street names needed by the UI.
 
 The build script also computes a SHA-256 based data version from the raw CSV file paths and bytes, plus the generated street lookup version when present. `docs/assets/data-manifest.js` exposes that version as `globalThis.__SICHERE_KNOTEN_DATA__.version`. It separately computes an app build fingerprint from the source files and injects it into `app.js` for analysis-cache invalidation.
 
-`docs/index.html` loads the manifest before `app.js`; the app then lazy-loads accident chunk scripts only after a parsed-cache miss. Direct `file://` usage works in Chrome and Firefox without `fetch()` access to local CSV files. During Vite development, `src/main.ts` can also load the generated manifest and accident chunks from `docs/assets` automatically.
+`docs/index.html` loads the manifest before `app.js`; the app then lazy-loads accident chunk scripts only after a parsed-cache miss. Direct `file://` usage works in Chrome and Firefox without `fetch()` access to local CSV files. Local development uses `scripts/serve-docs.mjs`, a plain HTTP server for `docs/` on `http://127.0.0.1:5173/`; rerunning it stops the previous server process first.
 
 ## Runtime Loading
 
@@ -141,7 +141,7 @@ The default cluster radius is 60 meters.
 
 ## Map Rendering
 
-The map draws visible grayscale OpenStreetMap raster tiles from `https://tile.openstreetmap.org/{z}/{x}/{y}.png` behind the cluster points while showing OpenStreetMap attribution in the map corner. Direct `file://` use cannot send the browser `Referer` header required by the OSM tile usage policy, so tiles may be partial or blocked in that mode; use `npm run serve:docs` or GitHub Pages for complete tiles. Tiles are requested only for the current viewport and retained in a small in-memory browser cache; the app does not prefetch offline tile packs.
+The map draws visible grayscale OpenStreetMap raster tiles from `https://tile.openstreetmap.org/{z}/{x}/{y}.png` behind the cluster points while showing OpenStreetMap attribution in the map corner. Direct `file://` use cannot send the browser `Referer` header required by the OSM tile usage policy, so tiles may be partial or blocked in that mode; use `npm run dev`, `npm run serve:docs`, or GitHub Pages for complete tiles. Tiles are requested only for the current viewport and retained in a small in-memory browser cache; the app does not prefetch offline tile packs.
 
 Accident clusters are drawn as map-projected points. All visible clusters are rendered; the map renderer does not drop low-metric clusters as a display optimization. Marker color, size, transparency, draw order, and click tie-breaking use Fatal % as the core metric, with accident count used only as a secondary tie-break and volume cue. This keeps city-level hotspots readable while separating severe locations from merely large intersections. Higher Fatal % clusters are drawn later so stronger points remain visible when dots overlap. For responsiveness, projected cluster coordinates are cached and pan/zoom redraws are throttled to animation frames.
 
@@ -224,7 +224,7 @@ This regenerates:
 - `docs/index.html`
 - `docs/assets/app.js`
 - `docs/assets/app.css`
-- `docs/assets/accidents-*.js`
+- `docs/assets/accidents-*.js` only when data changed or generated chunk files are missing
 - the data version in `docs/assets/data-manifest.js`
 
 Do not edit generated files in `docs/assets` by hand. Change source code under `src/` or raw data under `data/csv`, then rebuild. Existing browser caches are invalidated automatically when the generated data version changes.
