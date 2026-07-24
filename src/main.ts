@@ -2381,14 +2381,14 @@ function buildSelectedIntersectionViewModel(cluster: IntersectionCluster): Selec
     })
   );
   const accidentRecords = accidentRecordSnapshot.records;
-  const pressSearchUrl = measureActiveInteractionStep("build press search URL", cluster.id, () =>
-    pressSearchUrlForCluster(cluster, accidentRecords)
-  );
   const streetNames = measureActiveInteractionStep(
     "derive selected street names",
     cluster.id,
     () => clusterStreetNamesForDisplay(cluster, accidentRecords),
     (names) => ({ streetCount: names.length })
+  );
+  const pressSearchUrl = measureActiveInteractionStep("build press search URL", cluster.id, () =>
+    pressSearchUrlForCluster(cluster, streetNames)
   );
   const trendPanel = measureActiveInteractionStep("render trend panel html", cluster.id, () => renderTrendPanel(cluster));
   const roadUserPanel = measureActiveInteractionStep(
@@ -2609,14 +2609,8 @@ function responsibleAuthoritySearchUrlForCluster(cluster: IntersectionCluster): 
   return `https://www.google.com/search?q=${encodeURIComponent(queryParts.join(" "))}`;
 }
 
-function pressSearchUrlForCluster(cluster: IntersectionCluster, records: CrossingAccident[]): string {
-  const latestRecord = records[0]?.accident ?? null;
-  const queryParts = [
-    "Unfall",
-    cluster.fatalCount > 0 ? "toedlicher Unfall" : cluster.seriousCount > 0 ? "schwer verletzt" : "Verkehrsunfall",
-    latestRecord ? accidentSearchDateLabel(latestRecord) : null,
-    pressSearchPlaceName(cluster)
-  ].filter((part): part is string => Boolean(part));
+function pressSearchUrlForCluster(cluster: IntersectionCluster, streetNames: string[]): string {
+  const queryParts = ["Unfall", ...streetNames, pressSearchPlaceName(cluster)].filter((part): part is string => Boolean(part));
   return googleSearchUrl(queryParts);
 }
 
@@ -2640,7 +2634,27 @@ function pressSearchPlaceName(location: {
   administrativeRegionName: string | null;
   stateName: string;
 }): string {
-  return location.municipalityName ?? location.districtName ?? location.administrativeRegionName ?? location.stateName;
+  const placeName = location.municipalityName ?? location.districtName ?? location.administrativeRegionName ?? location.stateName;
+  return cleanPressSearchPlaceName(placeName);
+}
+
+function cleanPressSearchPlaceName(placeName: string): string {
+  const parts = placeName
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  while (parts.length > 1 && isCityTitleSuffix(parts[parts.length - 1])) {
+    parts.pop();
+  }
+  return parts.join(", ") || placeName;
+}
+
+function isCityTitleSuffix(value: string): boolean {
+  const normalized = value
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLocaleLowerCase("de");
+  return normalized === "stadt" || normalized.endsWith("stadt");
 }
 
 function accidentSearchDateLabel(accident: AccidentRecord): string {
