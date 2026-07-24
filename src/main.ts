@@ -1,7 +1,7 @@
 import "./styles.css";
 import { gunzipSync } from "fflate";
 import { analyzeDangerousIntersectionsInBackground, type AnalysisExecutionPlan } from "./analysisRunner";
-import { readAnalysisCache, readParsedDataCache, resetAppStorage, writeAnalysisCache, writeParsedDataCache } from "./cache";
+import { readAnalysisCache, resetAppStorage, writeAnalysisCache } from "./cache";
 import { GeoGridIndex } from "./geo";
 import { MapCanvas } from "./mapCanvas";
 import { accidentMatchesRoadUserFocus, ROAD_USER_DEFINITIONS, RoadUserDefinition, roadUserFocusKey } from "./roadUsers";
@@ -194,8 +194,6 @@ const PROJECT_REPOSITORY_URL = "https://github.com/kachurovskiy/sichereknoten";
 const PROJECT_REPOSITORY_LABEL = "kachurovskiy/sichereknoten";
 const APP_CACHE_VERSION =
   typeof __SICHERE_KNOTEN_APP_VERSION__ === "string" ? __SICHERE_KNOTEN_APP_VERSION__ : "dev-cluster-streets";
-const POST_RENDER_PARSED_CACHE_CHUNK_SIZE = 5000;
-const POST_RENDER_PARSED_CACHE_CHUNK_DELAY_MS = 25;
 const offlineBundleScriptPromises = new Map<string, Promise<string>>();
 const STREET_VIEW_OPEN_STORAGE_KEY = "sichere-knoten:street-view-open";
 const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
@@ -322,15 +320,10 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
       "The metric focuses on intersections with higher recorded severity, using fatal and serious-injury outcomes to distinguish severe locations from high-volume ones.",
     "status.settingsChanged": "Settings changed. Click Analyze to update results.",
     "status.loadingDataManifest": "Loading bundled data manifest.",
-    "status.checkingParsedCache": "Checking parsed data cache.",
-    "status.loadingCachedAccidents": "Loading cached accidents {current}/{total}.",
     "status.cacheMissParsingBundled": "Cache miss. Loading bundled accident records.",
     "status.loadingBundledChunk": "Loading bundled accident records {current}/{total}.",
-    "status.accidentsLoadedFromCache": "{count} accidents loaded from cache.",
+    "status.loadingAccidentsInBackground": "Loading accident records in the background.",
     "status.accidentRecordsLoaded": "{count} accident records loaded.",
-    "status.parsedDataCached": "Parsed data cached for future refreshes.",
-    "status.cachingParsedAccidents": "Caching parsed accidents {current}/{total}.",
-    "status.parsedDataCacheWriteSkipped": "Parsed data loaded. Cache write skipped: {error}",
     "status.loadDataFirst": "Load accident data first.",
     "status.checkingAnalysisCache": "Checking analysis cache.",
     "status.intersectionClustersLoadedFromCache": "{count} intersection clusters loaded from cache.",
@@ -372,6 +365,7 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "press.searchIncident": "Search press coverage for this incident",
     "records.title": "Known accident records",
     "records.countOf": "{shown} of {total}",
+    "records.loading": "Accident record details are still loading.",
     "records.empty": "No matching source accident records were found near this intersection.",
     "records.incidentNumber": "Incident {number}",
     "records.category": "Category",
@@ -620,15 +614,10 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
       "Die Metrik fokussiert Kreuzungen mit höherem erfasstem Schweregrad und nutzt tödliche sowie schwere Unfallfolgen, um Orte mit schweren Folgen von stark belasteten Orten zu unterscheiden.",
     "status.settingsChanged": "Einstellungen geändert. Klicke auf Analysieren, um die Ergebnisse zu aktualisieren.",
     "status.loadingDataManifest": "Gebündeltes Datenmanifest wird geladen.",
-    "status.checkingParsedCache": "Cache mit eingelesenen Daten wird geprüft.",
-    "status.loadingCachedAccidents": "Unfälle aus dem Cache werden geladen {current}/{total}.",
     "status.cacheMissParsingBundled": "Kein Cachetreffer. Gebündelte Unfalldatensätze werden geladen.",
     "status.loadingBundledChunk": "Gebündelte Unfalldatensätze werden geladen {current}/{total}.",
-    "status.accidentsLoadedFromCache": "{count} Unfälle aus dem Cache geladen.",
+    "status.loadingAccidentsInBackground": "Unfalldatensätze werden im Hintergrund geladen.",
     "status.accidentRecordsLoaded": "{count} Unfalldatensätze geladen.",
-    "status.parsedDataCached": "Eingelesene Daten wurden für spätere Aktualisierungen gespeichert.",
-    "status.cachingParsedAccidents": "Eingelesene Unfälle werden gespeichert {current}/{total}.",
-    "status.parsedDataCacheWriteSkipped": "Daten wurden eingelesen. Cache-Schreiben übersprungen: {error}",
     "status.loadDataFirst": "Lade zuerst Unfalldaten.",
     "status.checkingAnalysisCache": "Analysecache wird geprüft.",
     "status.intersectionClustersLoadedFromCache": "{count} Kreuzungscluster aus dem Cache geladen.",
@@ -669,6 +658,7 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "press.searchIncident": "Presseberichte zu diesem Unfall suchen",
     "records.title": "Bekannte Unfalldatensätze",
     "records.countOf": "{shown} von {total}",
+    "records.loading": "Details zu den Unfalldatensätzen werden noch geladen.",
     "records.empty": "In der Nähe dieser Kreuzung wurden keine passenden Quelldatensätze gefunden.",
     "records.incidentNumber": "Unfall {number}",
     "records.category": "Kategorie",
@@ -876,11 +866,6 @@ interface AnalysisCacheContext {
   appVersion: string;
 }
 
-interface PendingParsedDataCacheWrite {
-  dataVersion: string;
-  accidents: AccidentRecord[];
-}
-
 interface PendingAnalysisCacheWrite {
   cacheContext: AnalysisCacheContext;
   options: AnalysisOptions;
@@ -888,7 +873,6 @@ interface PendingAnalysisCacheWrite {
 }
 
 interface PostRenderCacheWrites {
-  parsedData: PendingParsedDataCacheWrite | null;
   analysis: PendingAnalysisCacheWrite | null;
 }
 
@@ -918,6 +902,7 @@ let activeAnalysisOptions: AnalysisOptions | null = null;
 let crossingAccidentIndexCache: AccidentIndexCache | null = null;
 let accidentKeyLookupCache: AccidentKeyLookupCache | null = null;
 let severityRankCache: SeverityRankCache | null = null;
+let accidentDataLoadPromise: Promise<AccidentRecord[]> | null = null;
 let postRenderCacheWriteQueue: Promise<void> = Promise.resolve();
 let isStreetViewOpen = readStoredStreetViewOpen();
 let activeView: ViewKey = "map";
@@ -1255,6 +1240,7 @@ async function loadBundledData(): Promise<void> {
     crossingAccidentIndexCache = null;
     accidentKeyLookupCache = null;
     severityRankCache = null;
+    accidentDataLoadPromise = null;
     analysisSettingsDirty = false;
     activeDataVersion = null;
     updateAnalyzeButton();
@@ -1265,40 +1251,55 @@ async function loadBundledData(): Promise<void> {
     const dataVersion = bundledDataVersion();
     telemetry.dataVersion = dataVersion;
     activeDataVersion = dataVersion;
-    setStatus(tr("status.checkingParsedCache"), 4);
-    const cached = await measureInitializationStep(
+    populateFilters();
+    recordInitializationStep(telemetry, "skip parsed data cache", dataVersion, {
+      reason: "normalized bundle is faster than IndexedDB object cache"
+    });
+
+    const options = readOptions();
+    const cacheContext = { dataVersion, appVersion: APP_CACHE_VERSION };
+    setStatus(tr("status.checkingAnalysisCache"), 20);
+    const cachedAnalysis = await measureInitializationStep(
       telemetry,
-      "read parsed data cache",
-      dataVersion,
-      () => readParsedDataCache(dataVersion, localizedCacheStatus),
-      (cache) => ({
-        cacheHit: Boolean(cache),
-        accidentCount: cache?.accidents.length ?? 0
+      "read analysis cache",
+      analysisTelemetryDetail(options),
+      () => readAnalysisCache(cacheContext.dataVersion, cacheContext.appVersion, options),
+      (cachedResult) => ({
+        cacheHit: Boolean(cachedResult),
+        clusterCount: cachedResult?.clusters.length ?? 0
       })
     );
-    if (cached) {
-      accidents = assignAccidentRecordIndexes(cached.accidents);
+    if (cachedAnalysis) {
+      result = cachedAnalysis;
+      selectedCluster = null;
+      activeAnalysisOptions = cloneAnalysisOptions(options);
       crossingAccidentIndexCache = null;
       accidentKeyLookupCache = null;
       severityRankCache = null;
-      populateFilters();
-      setStatus(trf("status.accidentsLoadedFromCache", { count: formatInteger(accidents.length) }), 66);
-      analysisStarted = true;
-      runAnalysis(telemetry);
+      analysisSettingsDirty = false;
+      await measureInitializationStep(
+        telemetry,
+        "render analysis results",
+        analysisTelemetryDetail(options),
+        async () => {
+          renderAll();
+        },
+        () => ({ clusterCount: result?.clusters.length ?? 0 })
+      );
+      scheduleSelectionSupportPrewarm();
+      setStatus(trf("status.intersectionClustersLoadedFromCache", { count: formatInteger(result.clusters.length) }), 100);
+      setBusy(false);
+      logInitializationTelemetry(telemetry, "done");
+      scheduleBackgroundAccidentDataLoad(telemetry);
       return;
     }
 
     setStatus(tr("status.cacheMissParsingBundled"), 10);
-    accidents = assignAccidentRecordIndexes(await readBundledAccidents(telemetry));
-    crossingAccidentIndexCache = null;
-    accidentKeyLookupCache = null;
-    severityRankCache = null;
-    populateFilters();
+    await loadAccidentData(telemetry);
     setStatus(trf("status.accidentRecordsLoaded", { count: formatInteger(accidents.length) }), 60);
 
-    const pendingParsedDataCacheWrite = { dataVersion, accidents };
     analysisStarted = true;
-    runAnalysis(telemetry, pendingParsedDataCacheWrite);
+    void runAnalysisWithCache(options, cacheContext, telemetry, "analysis cache already missed before accident records loaded");
   } catch (error) {
     setStatus(errorMessage(error), 0, "problem");
     logInitializationTelemetry(telemetry, "error");
@@ -1309,34 +1310,42 @@ async function loadBundledData(): Promise<void> {
   }
 }
 
-function runAnalysis(
-  initializationTelemetry: InitializationTelemetry | null = null,
-  pendingParsedDataCacheWrite: PendingParsedDataCacheWrite | null = null
-): void {
-  if (accidents.length === 0) {
-    setStatus(tr("status.loadDataFirst"), 0, "idle");
-    logInitializationTelemetry(initializationTelemetry, "error");
-    return;
-  }
-
+function runAnalysis(initializationTelemetry: InitializationTelemetry | null = null): void {
   normalizeLinkedNumberRange(elements.clusterRadius, elements.clusterRadiusOut);
   const options = readOptions();
   const cacheContext = activeDataVersion ? { dataVersion: activeDataVersion, appVersion: APP_CACHE_VERSION } : null;
   setBusy(true);
-  void runAnalysisWithCache(options, cacheContext, initializationTelemetry, pendingParsedDataCacheWrite);
+  void runAnalysisWhenAccidentsReady(options, cacheContext, initializationTelemetry);
+}
+
+async function runAnalysisWhenAccidentsReady(
+  options: AnalysisOptions,
+  cacheContext: AnalysisCacheContext | null,
+  initializationTelemetry: InitializationTelemetry | null
+): Promise<void> {
+  try {
+    if (accidents.length === 0) {
+      await loadAccidentData(initializationTelemetry, { updateStatus: true });
+    }
+    await runAnalysisWithCache(options, cacheContext, initializationTelemetry);
+  } catch (error) {
+    setStatus(errorMessage(error), 0, "problem");
+    setBusy(false);
+    logInitializationTelemetry(initializationTelemetry, "error");
+  }
 }
 
 async function runAnalysisWithCache(
   options: AnalysisOptions,
   cacheContext: AnalysisCacheContext | null,
   initializationTelemetry: InitializationTelemetry | null = null,
-  pendingParsedDataCacheWrite: PendingParsedDataCacheWrite | null = null
+  skipAnalysisCacheReason: string | null = null
 ): Promise<void> {
   let telemetryStatus: InitializationTelemetryStatus = "done";
   try {
-    if (cacheContext && pendingParsedDataCacheWrite) {
+    if (cacheContext && skipAnalysisCacheReason) {
       recordInitializationStep(initializationTelemetry, "skip analysis cache", analysisTelemetryDetail(options), {
-        reason: "parsed data cache miss"
+        reason: skipAnalysisCacheReason
       });
     } else if (cacheContext) {
       setStatus(tr("status.checkingAnalysisCache"), 75);
@@ -1369,17 +1378,6 @@ async function runAnalysisWithCache(
         );
         scheduleSelectionSupportPrewarm();
         setStatus(trf("status.intersectionClustersLoadedFromCache", { count: formatInteger(result.clusters.length) }), 100);
-        enqueuePostRenderCacheWrites(initializationTelemetry, {
-          parsedData: pendingParsedDataCacheWrite,
-          analysis:
-            pendingParsedDataCacheWrite && cacheContext
-              ? {
-                  cacheContext,
-                  options: cloneAnalysisOptions(options),
-                  result: cached
-                }
-              : null
-        });
         return;
       }
     }
@@ -1412,6 +1410,7 @@ async function runAnalysisWithCache(
     crossingAccidentIndexCache = null;
     accidentKeyLookupCache = null;
     severityRankCache = null;
+    accidentDataLoadPromise = null;
     analysisSettingsDirty = false;
     await measureInitializationStep(
       initializationTelemetry,
@@ -1426,7 +1425,6 @@ async function runAnalysisWithCache(
 
     setStatus(trf("status.intersectionClustersAnalyzed", { count: formatInteger(result.clusters.length) }), 100);
     enqueuePostRenderCacheWrites(initializationTelemetry, {
-      parsedData: pendingParsedDataCacheWrite,
       analysis:
         cacheContext && result
           ? {
@@ -1514,11 +1512,15 @@ function cloneAnalysisOptions(options: AnalysisOptions): AnalysisOptions {
 function populateFilters(): void {
   const selectedState = elements.stateFilter.value;
   const selectedBrowseState = elements.browseState.value;
+  const previousYearInputs = Array.from(elements.yearFilter.querySelectorAll<HTMLInputElement>("input[type='checkbox']"));
+  const selectedYears = new Set(previousYearInputs.filter((input) => input.checked).map((input) => Number(input.value)));
+  const hadYearFilters = previousYearInputs.length > 0;
   elements.stateFilter.replaceChildren(new Option(tr("option.allStates"), "all"));
   elements.browseState.replaceChildren(new Option(tr("option.allStates"), "all"));
+  const availableStateCodes = stateCodesForFilters();
   const stateOptions = Object.entries(STATE_NAMES).sort((a, b) => a[1].localeCompare(b[1], "de", { sensitivity: "base" }));
   for (const [code, name] of stateOptions) {
-    if (accidents.some((accident) => accident.stateCode === code)) {
+    if (availableStateCodes.has(code)) {
       elements.stateFilter.append(new Option(name, code));
       elements.browseState.append(new Option(name, code));
     }
@@ -1528,7 +1530,7 @@ function populateFilters(): void {
     ? selectedBrowseState
     : "all";
 
-  const years = Array.from(new Set(accidents.map((accident) => accident.year).filter(Boolean))).sort((a, b) => a - b);
+  const years = yearsForFilters();
   elements.yearFilter.innerHTML = "";
   for (const year of years) {
     const label = document.createElement("label");
@@ -1536,12 +1538,41 @@ function populateFilters(): void {
     const input = document.createElement("input");
     input.type = "checkbox";
     input.value = String(year);
-    input.checked = true;
+    input.checked = hadYearFilters ? selectedYears.has(year) : true;
     input.addEventListener("change", markAnalysisSettingsDirty);
     label.append(input, document.createTextNode(String(year)));
     elements.yearFilter.append(label);
   }
   setAnalysisControlsDisabled(elements.analyzeBtn.disabled);
+}
+
+function stateCodesForFilters(): Set<string> {
+  if (accidents.length > 0) {
+    return new Set(accidents.map((accident) => accident.stateCode));
+  }
+  return new Set(Object.keys(STATE_NAMES));
+}
+
+function yearsForFilters(): number[] {
+  if (accidents.length > 0) {
+    return Array.from(new Set(accidents.map((accident) => accident.year).filter(Boolean))).sort((a, b) => a - b);
+  }
+  const manifestYears = bundledDataYears();
+  if (manifestYears.length > 0) {
+    return manifestYears;
+  }
+  return result?.years ?? [];
+}
+
+function bundledDataYears(): number[] {
+  const years = new Set<number>();
+  for (const file of globalThis.__SICHERE_KNOTEN_DATA__?.files ?? []) {
+    const label = `${file.path} ${file.name}`;
+    for (const match of label.matchAll(/(20\d{2})/g)) {
+      years.add(Number(match[1]));
+    }
+  }
+  return Array.from(years).sort((a, b) => a - b);
 }
 
 function renderAll(): void {
@@ -1712,28 +1743,50 @@ function renderTables(): void {
 }
 
 function clustersForTable(clusters: IntersectionCluster[]): IntersectionCluster[] {
-  const sortedClusters = sortClustersForTable(clusters);
   if (elements.stateFilter.value !== "all") {
-    return sortedClusters.slice(0, TABLE_ROWS_PER_STATE);
+    return topSortedClusters(clusters, TABLE_ROWS_PER_STATE);
   }
 
-  const byState = new Map<string, number>();
+  const selectedByState = new Map<string, IntersectionCluster[]>();
+  for (const cluster of clusters) {
+    const stateClusters = selectedByState.get(cluster.stateCode) ?? [];
+    insertSortedCluster(stateClusters, cluster, TABLE_ROWS_PER_STATE, compareClustersForTable);
+    selectedByState.set(cluster.stateCode, stateClusters);
+  }
+  return Array.from(selectedByState.values()).flat().sort(compareClustersForTable);
+}
+
+function topSortedClusters(clusters: IntersectionCluster[], limit: number): IntersectionCluster[] {
   const selected: IntersectionCluster[] = [];
-  for (const cluster of sortedClusters) {
-    const current = byState.get(cluster.stateCode) ?? 0;
-    if (current < TABLE_ROWS_PER_STATE) {
-      selected.push(cluster);
-      byState.set(cluster.stateCode, current + 1);
-    }
+  for (const cluster of clusters) {
+    insertSortedCluster(selected, cluster, limit, compareClustersForTable);
   }
   return selected;
 }
 
-function sortClustersForTable(clusters: IntersectionCluster[]): IntersectionCluster[] {
-  return clusters.slice().sort((a, b) => {
-    const primary = compareClusterSortValue(a, b, clusterTableSort.key, clusterTableSort.direction);
-    return primary || compareClusterCoreMetric(a, b);
-  });
+function insertSortedCluster(
+  selected: IntersectionCluster[],
+  cluster: IntersectionCluster,
+  limit: number,
+  comparator: (a: IntersectionCluster, b: IntersectionCluster) => number
+): void {
+  let index = 0;
+  while (index < selected.length && comparator(selected[index], cluster) <= 0) {
+    index += 1;
+  }
+  if (index >= limit) {
+    return;
+  }
+
+  selected.splice(index, 0, cluster);
+  if (selected.length > limit) {
+    selected.length = limit;
+  }
+}
+
+function compareClustersForTable(a: IntersectionCluster, b: IntersectionCluster): number {
+  const primary = compareClusterSortValue(a, b, clusterTableSort.key, clusterTableSort.direction);
+  return primary || compareClusterCoreMetric(a, b);
 }
 
 function compareClusterSortValue(
@@ -2532,13 +2585,14 @@ function renderAccidentActionLinks(accident: AccidentRecord): string {
 function renderSidebarAccidentRecords(records: CrossingAccident[], totalCount: number, streetOrder: string[] = []): string {
   const countText = trf("records.countOf", { shown: formatInteger(records.length), total: formatInteger(totalCount) });
   if (records.length === 0) {
+    const emptyMessage = accidentDataLoadPromise && accidents.length === 0 ? tr("records.loading") : tr("records.empty");
     return `
       <section class="sidebar-accident-records">
         <div class="section-heading-row">
           <h3>${escapeHtml(tr("records.title"))}</h3>
           <span>${countText}</span>
         </div>
-        <p class="hotspot-empty">${escapeHtml(tr("records.empty"))}</p>
+        <p class="hotspot-empty">${escapeHtml(emptyMessage)}</p>
       </section>
     `;
   }
@@ -2606,6 +2660,10 @@ function addRecordRow(rows: Array<{ label: string; value: string }>, label: stri
 }
 
 function clusterAccidentRecords(cluster: IntersectionCluster): CrossingAccident[] {
+  if (accidents.length === 0) {
+    return [];
+  }
+
   const exactRecords = exactClusterAccidentRecords(cluster);
   if (exactRecords.length > 0) {
     return exactRecords.sort(compareCrossingAccidents);
@@ -3302,6 +3360,9 @@ async function downloadSelectedFactsheet(): Promise<void> {
   });
   setStatus(tr("status.factsheetCreating"), 100);
   try {
+    if (accidents.length === 0) {
+      await loadAccidentData(null, { updateStatus: true });
+    }
     const records = clusterAccidentRecords(cluster);
     const blob = await createFactsheetPdf(cluster, records);
     const url = URL.createObjectURL(blob);
@@ -4355,7 +4416,7 @@ function loadingTitle(step: LoadingStepKey, progress: number, isProblem: boolean
   }
 }
 
-async function ensureBundledDataManifest(telemetry: InitializationTelemetry): Promise<EmbeddedDataBundle> {
+async function ensureBundledDataManifest(telemetry: InitializationTelemetry | null): Promise<EmbeddedDataBundle> {
   const existingBundle = globalThis.__SICHERE_KNOTEN_DATA__;
   if (existingBundle?.version) {
     return existingBundle;
@@ -4379,6 +4440,49 @@ async function ensureBundledDataManifest(telemetry: InitializationTelemetry): Pr
   return loadedBundle;
 }
 
+async function loadAccidentData(
+  telemetry: InitializationTelemetry | null,
+  options: { updateStatus?: boolean } = {}
+): Promise<AccidentRecord[]> {
+  if (accidents.length > 0) {
+    return accidents;
+  }
+  if (!accidentDataLoadPromise) {
+    accidentDataLoadPromise = readBundledAccidents(telemetry, { updateStatus: options.updateStatus ?? true })
+      .then((records) => {
+        accidents = assignAccidentRecordIndexes(records);
+        crossingAccidentIndexCache = null;
+        accidentKeyLookupCache = null;
+        populateFilters();
+        return accidents;
+      })
+      .catch((error) => {
+        accidentDataLoadPromise = null;
+        throw error;
+      });
+  }
+  return accidentDataLoadPromise;
+}
+
+function scheduleBackgroundAccidentDataLoad(initializationTelemetry: InitializationTelemetry | null): void {
+  const telemetry = createPostRenderCacheTelemetry(initializationTelemetry);
+  scheduleAfterFirstRender(() => {
+    setStatus(tr("status.loadingAccidentsInBackground"), 100);
+    void loadAccidentData(telemetry, { updateStatus: false })
+      .then((records) => {
+        setStatus(trf("status.accidentRecordsLoaded", { count: formatInteger(records.length) }), 100);
+        if (selectedCluster) {
+          renderSelection(selectedCluster);
+        }
+        logInitializationTelemetry(telemetry, "done", "background accident data telemetry");
+      })
+      .catch((error) => {
+        console.warn("[Safe Intersections] Could not load accident records after cached startup.", error);
+        logInitializationTelemetry(telemetry, "error", "background accident data telemetry");
+      });
+  });
+}
+
 function bundledDataVersion(): string {
   const bundle = globalThis.__SICHERE_KNOTEN_DATA__;
   if (bundle?.version) {
@@ -4397,7 +4501,10 @@ function assignAccidentRecordIndexes(records: AccidentRecord[]): AccidentRecord[
   return records;
 }
 
-async function readBundledAccidents(telemetry: InitializationTelemetry): Promise<AccidentRecord[]> {
+async function readBundledAccidents(
+  telemetry: InitializationTelemetry | null,
+  options: { updateStatus?: boolean } = {}
+): Promise<AccidentRecord[]> {
   const bundle = await ensureBundledDataManifest(telemetry);
   const chunkFiles = bundle.accidentChunkFiles ?? [];
   const preloadedChunks = bundle.accidentChunks ?? [];
@@ -4430,16 +4537,18 @@ async function readBundledAccidents(telemetry: InitializationTelemetry): Promise
       })
     );
     loadedAccidents.push(...records);
-    setStatus(
-      trf("status.loadingBundledChunk", { current: index + 1, total: totalChunks }),
-      Math.min(60, 10 + Math.floor(((index + 1) / totalChunks) * 50))
-    );
+    if (options.updateStatus ?? true) {
+      setStatus(
+        trf("status.loadingBundledChunk", { current: index + 1, total: totalChunks }),
+        Math.min(60, 10 + Math.floor(((index + 1) / totalChunks) * 50))
+      );
+    }
   }
 
   return loadedAccidents;
 }
 
-async function ensureBundledAccidentChunk(fileName: string, telemetry: InitializationTelemetry): Promise<EmbeddedAccidentChunk> {
+async function ensureBundledAccidentChunk(fileName: string, telemetry: InitializationTelemetry | null): Promise<EmbeddedAccidentChunk> {
   const existingChunk = findBundledAccidentChunk(fileName);
   if (existingChunk) {
     return existingChunk;
@@ -4591,24 +4700,6 @@ function decodeBase64Chunks(chunks: string[]): Uint8Array {
   return output;
 }
 
-function localizedCacheStatus(message: string, progress: number): void {
-  setStatus(translateCacheStatus(message), progress);
-}
-
-function translateCacheStatus(message: string): string {
-  const loadingCached = /^Loading cached accidents (\d+)\/(\d+)\.$/.exec(message);
-  if (loadingCached) {
-    return trf("status.loadingCachedAccidents", { current: loadingCached[1], total: loadingCached[2] });
-  }
-
-  const cachingParsed = /^Caching parsed accidents (\d+)\/(\d+)\.$/.exec(message);
-  if (cachingParsed) {
-    return trf("status.cachingParsedAccidents", { current: cachingParsed[1], total: cachingParsed[2] });
-  }
-
-  return message;
-}
-
 function formatInteger(value: number): string {
   return new Intl.NumberFormat(NUMBER_LOCALE, { maximumFractionDigits: 0 }).format(value);
 }
@@ -4741,7 +4832,7 @@ function enqueuePostRenderCacheWrites(
   initializationTelemetry: InitializationTelemetry | null,
   writes: PostRenderCacheWrites
 ): void {
-  if (!writes.parsedData && !writes.analysis) {
+  if (!writes.analysis) {
     return;
   }
 
@@ -4756,30 +4847,6 @@ function enqueuePostRenderCacheWrites(
 
 async function writePostRenderCaches(telemetry: InitializationTelemetry | null, writes: PostRenderCacheWrites): Promise<void> {
   let status: Exclude<InitializationTelemetryStatus, "running"> = "done";
-
-  if (writes.parsedData) {
-    try {
-      await measureInitializationStep(
-        telemetry,
-        "write parsed data cache",
-        writes.parsedData.dataVersion,
-        () =>
-          writeParsedDataCache(writes.parsedData!.dataVersion, writes.parsedData!.accidents, ignoreCacheWriteProgress, {
-            chunkSize: POST_RENDER_PARSED_CACHE_CHUNK_SIZE,
-            delayBetweenChunksMs: POST_RENDER_PARSED_CACHE_CHUNK_DELAY_MS
-          }),
-        () => ({
-          accidentCount: writes.parsedData?.accidents.length ?? 0,
-          chunkSize: POST_RENDER_PARSED_CACHE_CHUNK_SIZE,
-          chunkDelayMs: POST_RENDER_PARSED_CACHE_CHUNK_DELAY_MS,
-          afterFirstRender: true
-        })
-      );
-    } catch (error) {
-      status = "error";
-      console.warn("[Safe Intersections] Could not write parsed data cache after startup.", error);
-    }
-  }
 
   if (writes.analysis) {
     try {
@@ -4847,8 +4914,6 @@ function scheduleIdleWork(work: () => void): void {
     globalThis.setTimeout(work, 0);
   }
 }
-
-function ignoreCacheWriteProgress(_message: string, _progress: number): void {}
 
 async function measureInitializationStep<T>(
   telemetry: InitializationTelemetry | null,
