@@ -38,6 +38,22 @@ interface EmbeddedAccidentChunk {
   chunks: string[];
 }
 
+interface EmbeddedAccidentShardFile {
+  stateCode: string;
+  fileName: string;
+  recordCount: number;
+}
+
+interface EmbeddedAccidentShard {
+  id: string;
+  stateCode: string;
+  encoding: "gzip-base64-json-compact-v1" | "gzip-base64-json-compact-v2";
+  recordCount: number;
+  size: number;
+  compressedSize: number;
+  chunks: string[];
+}
+
 interface SerializedAnalysisOptions {
   clusterRadiusMeters: number;
   minAccidents: number;
@@ -67,6 +83,8 @@ interface EmbeddedDefaultAnalysis {
 interface EmbeddedDataBundle {
   version?: string;
   files: EmbeddedDataFile[];
+  accidentShardFiles?: EmbeddedAccidentShardFile[];
+  accidentShards?: EmbeddedAccidentShard[];
   accidentChunkFiles?: string[];
   accidentChunks?: EmbeddedAccidentChunk[];
   defaultAnalysisFile?: string;
@@ -106,7 +124,8 @@ type CompactAccidentRecord = [
   boolean | null,
   boolean | null,
   boolean | null,
-  boolean | null
+  boolean | null,
+  number | null | undefined
 ];
 
 declare global {
@@ -912,6 +931,7 @@ interface PostRenderCacheWrites {
 
 interface AccidentIndexCache {
   key: string;
+  source: AccidentRecord[];
   index: GeoGridIndex<AccidentRecord>;
 }
 
@@ -920,9 +940,19 @@ interface AccidentKeyLookupCache {
   map: Map<string, AccidentRecord>;
 }
 
+interface AccidentRecordIndexLookupCache {
+  source: AccidentRecord[];
+  map: Map<number, AccidentRecord>;
+}
+
 interface CrossingAccident {
   accident: AccidentRecord;
   distanceMeters: number;
+}
+
+interface ClusterAccidentRecordsSnapshot {
+  records: CrossingAccident[];
+  loading: boolean;
 }
 
 let accidents: AccidentRecord[] = [];
@@ -935,8 +965,12 @@ let userLocation: { lat: number; lon: number; accuracyMeters: number | null } | 
 let activeAnalysisOptions: AnalysisOptions | null = null;
 let crossingAccidentIndexCache: AccidentIndexCache | null = null;
 let accidentKeyLookupCache: AccidentKeyLookupCache | null = null;
+let accidentRecordIndexLookupCache: AccidentRecordIndexLookupCache | null = null;
 let severityRankCache: SeverityRankCache | null = null;
 let accidentDataLoadPromise: Promise<AccidentRecord[]> | null = null;
+let accidentStateRecords = new Map<string, AccidentRecord[]>();
+let accidentStateLoadPromises = new Map<string, Promise<AccidentRecord[]>>();
+let selectedAccidentRecordsRequestId = 0;
 let postRenderCacheWriteQueue: Promise<void> = Promise.resolve();
 let isStreetViewOpen = readStoredStreetViewOpen();
 let activeView: ViewKey = "map";
@@ -1273,8 +1307,11 @@ async function loadBundledData(): Promise<void> {
     activeAnalysisOptions = null;
     crossingAccidentIndexCache = null;
     accidentKeyLookupCache = null;
+    accidentRecordIndexLookupCache = null;
     severityRankCache = null;
     accidentDataLoadPromise = null;
+    accidentStateRecords = new Map();
+    accidentStateLoadPromises = new Map();
     analysisSettingsDirty = false;
     activeDataVersion = null;
     updateAnalyzeButton();
@@ -1299,6 +1336,7 @@ async function loadBundledData(): Promise<void> {
       activeAnalysisOptions = cloneAnalysisOptions(options);
       crossingAccidentIndexCache = null;
       accidentKeyLookupCache = null;
+      accidentRecordIndexLookupCache = null;
       severityRankCache = null;
       analysisSettingsDirty = false;
       await measureInitializationStep(
@@ -1314,7 +1352,6 @@ async function loadBundledData(): Promise<void> {
       setStatus(trf("status.intersectionClustersLoadedFromBundle", { count: formatInteger(result.clusters.length) }), 100);
       setBusy(false);
       logInitializationTelemetry(telemetry, "done");
-      scheduleBackgroundAccidentDataLoad(telemetry);
       return;
     }
 
@@ -1335,6 +1372,7 @@ async function loadBundledData(): Promise<void> {
       activeAnalysisOptions = cloneAnalysisOptions(options);
       crossingAccidentIndexCache = null;
       accidentKeyLookupCache = null;
+      accidentRecordIndexLookupCache = null;
       severityRankCache = null;
       analysisSettingsDirty = false;
       await measureInitializationStep(
@@ -1350,7 +1388,6 @@ async function loadBundledData(): Promise<void> {
       setStatus(trf("status.intersectionClustersLoadedFromCache", { count: formatInteger(result.clusters.length) }), 100);
       setBusy(false);
       logInitializationTelemetry(telemetry, "done");
-      scheduleBackgroundAccidentDataLoad(telemetry);
       return;
     }
 
@@ -1384,9 +1421,6 @@ async function runAnalysisWhenAccidentsReady(
   initializationTelemetry: InitializationTelemetry | null
 ): Promise<void> {
   try {
-    if (accidents.length === 0) {
-      await loadAccidentData(initializationTelemetry, { updateStatus: true });
-    }
     await runAnalysisWithCache(options, cacheContext, initializationTelemetry);
   } catch (error) {
     setStatus(errorMessage(error), 0, "problem");
@@ -1399,7 +1433,8 @@ async function runAnalysisWithCache(
   options: AnalysisOptions,
   cacheContext: AnalysisCacheContext | null,
   initializationTelemetry: InitializationTelemetry | null = null,
-  skipAnalysisCacheReason: string | null = null
+  skipAnalysisCacheReason: string | null = null,
+  analysisAccidents: AccidentRecord[] | null = null
 ): Promise<void> {
   let telemetryStatus: InitializationTelemetryStatus = "done";
   try {
@@ -1425,6 +1460,7 @@ async function runAnalysisWithCache(
         activeAnalysisOptions = cloneAnalysisOptions(options);
         crossingAccidentIndexCache = null;
         accidentKeyLookupCache = null;
+        accidentRecordIndexLookupCache = null;
         severityRankCache = null;
         analysisSettingsDirty = false;
         await measureInitializationStep(
@@ -1445,17 +1481,18 @@ async function runAnalysisWithCache(
     setStatus(tr("status.analyzingIntersections"), 75);
     await yieldToBrowser();
     let analysisPlan: AnalysisExecutionPlan | null = null;
+    const sourceAccidents = analysisAccidents ?? (await loadAccidentsForAnalysis(options, initializationTelemetry));
     result = await measureInitializationStep(
       initializationTelemetry,
       "analyze intersections",
       analysisTelemetryDetail(options),
       () =>
-        analyzeDangerousIntersectionsInBackground(accidents, options, (plan) => {
+        analyzeDangerousIntersectionsInBackground(sourceAccidents, options, (plan) => {
           analysisPlan = plan;
           updateAnalysisPlanStatus();
         }),
       (analysisResult) => ({
-        accidentCount: accidents.length,
+        accidentCount: sourceAccidents.length,
         filteredAccidentCount: analysisResult.filteredAccidentCount,
         clusterCount: analysisResult.clusters.length,
         workerCount: analysisPlan?.workerCount ?? 0,
@@ -1469,8 +1506,8 @@ async function runAnalysisWithCache(
     activeAnalysisOptions = cloneAnalysisOptions(options);
     crossingAccidentIndexCache = null;
     accidentKeyLookupCache = null;
+    accidentRecordIndexLookupCache = null;
     severityRankCache = null;
-    accidentDataLoadPromise = null;
     analysisSettingsDirty = false;
     await measureInitializationStep(
       initializationTelemetry,
@@ -2319,15 +2356,16 @@ function renderSelection(cluster: IntersectionCluster | null): void {
     }),
     () => ({ urlCount: 4 })
   );
-  const accidentRecords = measureActiveInteractionStep(
+  const accidentRecordSnapshot = measureActiveInteractionStep(
     "find selected accident records",
     cluster.id,
-    () => clusterAccidentRecords(cluster),
-    (records) => ({
-      recordCount: records.length,
+    () => clusterAccidentRecordsSnapshot(cluster),
+    (snapshot) => ({
+      recordCount: snapshot.records.length,
       clusterAccidentCount: cluster.accidentCount
     })
   );
+  const accidentRecords = accidentRecordSnapshot.records;
   const pressSearchUrl = measureActiveInteractionStep("build press search URL", cluster.id, () =>
     pressSearchUrlForCluster(cluster, accidentRecords)
   );
@@ -2347,7 +2385,7 @@ function renderSelection(cluster: IntersectionCluster | null): void {
   const recordPanel = measureActiveInteractionStep(
     "render accident record list html",
     cluster.id,
-    () => renderSidebarAccidentRecords(accidentRecords, cluster.accidentCount, streetNames),
+    () => renderSidebarAccidentRecords(accidentRecords, cluster.accidentCount, streetNames, accidentRecordSnapshot.loading),
     () => ({ recordCount: accidentRecords.length })
   );
   measureActiveInteractionStep(
@@ -2390,6 +2428,9 @@ function renderSelection(cluster: IntersectionCluster | null): void {
   measureActiveInteractionStep("update street view panel", cluster.id, updateStreetViewPanel, () => ({
     streetViewOpen: isStreetViewOpen
   }));
+  if (accidentRecordSnapshot.loading) {
+    queueSelectedAccidentRecordsLoad(cluster);
+  }
 }
 
 function renderClusterStreetDetailRow(streetNames: string[]): string {
@@ -2642,10 +2683,10 @@ function renderAccidentActionLinks(accident: AccidentRecord): string {
   `;
 }
 
-function renderSidebarAccidentRecords(records: CrossingAccident[], totalCount: number, streetOrder: string[] = []): string {
+function renderSidebarAccidentRecords(records: CrossingAccident[], totalCount: number, streetOrder: string[] = [], isLoading = false): string {
   const countText = trf("records.countOf", { shown: formatInteger(records.length), total: formatInteger(totalCount) });
   if (records.length === 0) {
-    const emptyMessage = accidentDataLoadPromise && accidents.length === 0 ? tr("records.loading") : tr("records.empty");
+    const emptyMessage = isLoading ? tr("records.loading") : tr("records.empty");
     return `
       <section class="sidebar-accident-records">
         <div class="section-heading-row">
@@ -2719,19 +2760,71 @@ function addRecordRow(rows: Array<{ label: string; value: string }>, label: stri
   }
 }
 
-function clusterAccidentRecords(cluster: IntersectionCluster): CrossingAccident[] {
-  if (accidents.length === 0) {
+function clusterAccidentRecordsSnapshot(cluster: IntersectionCluster): ClusterAccidentRecordsSnapshot {
+  const sourceRecords = cachedAccidentRecordsForCluster(cluster);
+  if (sourceRecords) {
+    return {
+      records: clusterAccidentRecords(cluster, sourceRecords),
+      loading: false
+    };
+  }
+
+  return {
+    records: [],
+    loading: hasAccidentStateShard(cluster.stateCode)
+  };
+}
+
+function cachedAccidentRecordsForCluster(cluster: IntersectionCluster): AccidentRecord[] | null {
+  if (accidents.length > 0) {
+    return accidents;
+  }
+  return accidentStateRecords.get(cluster.stateCode) ?? null;
+}
+
+function hasAccidentStateShard(stateCode: string): boolean {
+  const bundle = globalThis.__SICHERE_KNOTEN_DATA__;
+  return Boolean(
+    bundle?.accidentShardFiles?.some((entry) => entry.stateCode === stateCode) ||
+      bundle?.accidentChunkFiles?.length ||
+      bundle?.accidentChunks?.length
+  );
+}
+
+function queueSelectedAccidentRecordsLoad(cluster: IntersectionCluster): void {
+  const requestId = ++selectedAccidentRecordsRequestId;
+  void loadAccidentsForState(cluster.stateCode)
+    .then(() => {
+      if (selectedCluster?.id !== cluster.id || requestId !== selectedAccidentRecordsRequestId) {
+        return;
+      }
+      renderSelection(cluster);
+    })
+    .catch((error) => {
+      if (selectedCluster?.id === cluster.id) {
+        console.warn("[Safe Intersections] Could not load selected accident records.", error);
+      }
+    });
+}
+
+async function clusterAccidentRecordsReady(cluster: IntersectionCluster): Promise<CrossingAccident[]> {
+  const sourceRecords = cachedAccidentRecordsForCluster(cluster) ?? (await loadAccidentsForState(cluster.stateCode));
+  return clusterAccidentRecords(cluster, sourceRecords);
+}
+
+function clusterAccidentRecords(cluster: IntersectionCluster, sourceRecords: AccidentRecord[] = accidents): CrossingAccident[] {
+  if (sourceRecords.length === 0) {
     return [];
   }
 
-  const exactRecords = exactClusterAccidentRecords(cluster);
+  const exactRecords = exactClusterAccidentRecords(cluster, sourceRecords);
   if (exactRecords.length > 0) {
     return exactRecords.sort(compareCrossingAccidents);
   }
 
   const options = activeAnalysisOptions ?? readOptions();
   const searchRadiusMeters = clusterAccidentSearchRadius(options);
-  const index = accidentIndexForCrossings(options, searchRadiusMeters);
+  const index = accidentIndexForCrossings(options, searchRadiusMeters, sourceRecords);
   const candidates = index
     .nearby(cluster)
     .map((accident) => ({ accident, distanceMeters: distanceMeters(cluster, accident) }))
@@ -2741,8 +2834,8 @@ function clusterAccidentRecords(cluster: IntersectionCluster): CrossingAccident[
   return pickClusterAccidents(candidates, cluster).sort(compareCrossingAccidents);
 }
 
-function exactClusterAccidentRecords(cluster: IntersectionCluster): CrossingAccident[] {
-  const indexedRecords = exactClusterAccidentRecordsByIndex(cluster);
+function exactClusterAccidentRecords(cluster: IntersectionCluster, sourceRecords: AccidentRecord[]): CrossingAccident[] {
+  const indexedRecords = exactClusterAccidentRecordsByIndex(cluster, sourceRecords);
   if (indexedRecords.length > 0) {
     return indexedRecords;
   }
@@ -2751,25 +2844,26 @@ function exactClusterAccidentRecords(cluster: IntersectionCluster): CrossingAcci
     return [];
   }
 
-  const lookup = accidentKeyLookup();
+  const lookup = accidentKeyLookup(sourceRecords);
   return cluster.accidentKeys
     .map((key) => lookup.get(key))
     .filter((accident): accident is AccidentRecord => Boolean(accident))
     .map((accident) => ({ accident, distanceMeters: distanceMeters(cluster, accident) }));
 }
 
-function exactClusterAccidentRecordsByIndex(cluster: IntersectionCluster): CrossingAccident[] {
+function exactClusterAccidentRecordsByIndex(cluster: IntersectionCluster, sourceRecords: AccidentRecord[]): CrossingAccident[] {
   const indexes = cluster.accidentIndexes;
   if (!indexes?.length) {
     return [];
   }
 
+  const lookup = accidentRecordIndexLookup(sourceRecords);
   return measureActiveInteractionStep(
     "read indexed accident records",
     cluster.id,
     () =>
       indexes
-        .map((index) => accidents[index])
+        .map((index) => lookup.get(index))
         .filter((accident): accident is AccidentRecord => Boolean(accident))
         .map((accident) => ({ accident, distanceMeters: distanceMeters(cluster, accident) })),
     (records) => ({
@@ -2779,28 +2873,42 @@ function exactClusterAccidentRecordsByIndex(cluster: IntersectionCluster): Cross
   );
 }
 
-function accidentKeyLookup(): Map<string, AccidentRecord> {
-  if (accidentKeyLookupCache?.source === accidents) {
+function accidentRecordIndexLookup(sourceRecords: AccidentRecord[]): Map<number, AccidentRecord> {
+  if (accidentRecordIndexLookupCache?.source === sourceRecords) {
+    return accidentRecordIndexLookupCache.map;
+  }
+
+  const map = new Map<number, AccidentRecord>();
+  for (let index = 0; index < sourceRecords.length; index += 1) {
+    const accident = sourceRecords[index];
+    map.set(accident.recordIndex ?? index, accident);
+  }
+  accidentRecordIndexLookupCache = { source: sourceRecords, map };
+  return map;
+}
+
+function accidentKeyLookup(sourceRecords: AccidentRecord[] = accidents): Map<string, AccidentRecord> {
+  if (accidentKeyLookupCache?.source === sourceRecords) {
     return accidentKeyLookupCache.map;
   }
 
   return measureActiveInteractionStep(
     "build accident key lookup",
     "all accident records",
-    buildAccidentKeyLookup,
+    () => buildAccidentKeyLookup(sourceRecords),
     (map) => ({
-      accidentCount: accidents.length,
+      accidentCount: sourceRecords.length,
       recordCount: map.size
     })
   );
 }
 
-function buildAccidentKeyLookup(): Map<string, AccidentRecord> {
+function buildAccidentKeyLookup(sourceRecords: AccidentRecord[]): Map<string, AccidentRecord> {
   const map = new Map<string, AccidentRecord>();
-  for (const accident of accidents) {
+  for (const accident of sourceRecords) {
     map.set(accidentKey(accident), accident);
   }
-  accidentKeyLookupCache = { source: accidents, map };
+  accidentKeyLookupCache = { source: sourceRecords, map };
   return map;
 }
 
@@ -2840,19 +2948,23 @@ function pickClusterAccidents(candidates: CrossingAccident[], cluster: Intersect
   return selectedRecords;
 }
 
-function accidentIndexForCrossings(options: AnalysisOptions, searchRadiusMeters: number): GeoGridIndex<AccidentRecord> {
+function accidentIndexForCrossings(
+  options: AnalysisOptions,
+  searchRadiusMeters: number,
+  sourceRecords: AccidentRecord[] = accidents
+): GeoGridIndex<AccidentRecord> {
   const key = analysisOptionsIndexKey(options, searchRadiusMeters);
-  if (crossingAccidentIndexCache?.key === key) {
+  if (crossingAccidentIndexCache?.key === key && crossingAccidentIndexCache.source === sourceRecords) {
     return crossingAccidentIndexCache.index;
   }
 
   const index = new GeoGridIndex<AccidentRecord>(searchRadiusMeters);
-  for (const accident of accidents) {
+  for (const accident of sourceRecords) {
     if (accidentMatchesAnalysisOptions(accident, options)) {
       index.insert(accident);
     }
   }
-  crossingAccidentIndexCache = { key, index };
+  crossingAccidentIndexCache = { key, source: sourceRecords, index };
   return index;
 }
 
@@ -3420,10 +3532,7 @@ async function downloadSelectedFactsheet(): Promise<void> {
   });
   setStatus(tr("status.factsheetCreating"), 100);
   try {
-    if (accidents.length === 0) {
-      await loadAccidentData(null, { updateStatus: true });
-    }
-    const records = clusterAccidentRecords(cluster);
+    const records = await clusterAccidentRecordsReady(cluster);
     const blob = await createFactsheetPdf(cluster, records);
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -4510,9 +4619,10 @@ async function loadAccidentData(
   if (!accidentDataLoadPromise) {
     accidentDataLoadPromise = readBundledAccidents(telemetry, { updateStatus: options.updateStatus ?? true })
       .then((records) => {
-        accidents = assignAccidentRecordIndexes(records);
+        accidents = normalizeAccidentRecordIndexes(records);
         crossingAccidentIndexCache = null;
         accidentKeyLookupCache = null;
+        accidentRecordIndexLookupCache = null;
         populateFilters();
         return accidents;
       })
@@ -4522,25 +4632,6 @@ async function loadAccidentData(
       });
   }
   return accidentDataLoadPromise;
-}
-
-function scheduleBackgroundAccidentDataLoad(initializationTelemetry: InitializationTelemetry | null): void {
-  const telemetry = createPostRenderCacheTelemetry(initializationTelemetry);
-  scheduleAfterFirstRender(() => {
-    setStatus(tr("status.loadingAccidentsInBackground"), 100);
-    void loadAccidentData(telemetry, { updateStatus: false })
-      .then((records) => {
-        setStatus(trf("status.accidentRecordsLoaded", { count: formatInteger(records.length) }), 100);
-        if (selectedCluster) {
-          renderSelection(selectedCluster);
-        }
-        logInitializationTelemetry(telemetry, "done", "background accident data telemetry");
-      })
-      .catch((error) => {
-        console.warn("[Safe Intersections] Could not load accident records after cached startup.", error);
-        logInitializationTelemetry(telemetry, "error", "background accident data telemetry");
-      });
-  });
 }
 
 function bundledDataVersion(): string {
@@ -4554,11 +4645,58 @@ function bundledDataVersion(): string {
   return "missing-normalized-data";
 }
 
-function assignAccidentRecordIndexes(records: AccidentRecord[]): AccidentRecord[] {
+function normalizeAccidentRecordIndexes(records: AccidentRecord[]): AccidentRecord[] {
+  if (records.every((record) => typeof record.recordIndex === "number")) {
+    return records.sort((a, b) => (a.recordIndex ?? 0) - (b.recordIndex ?? 0));
+  }
   for (let index = 0; index < records.length; index += 1) {
     records[index].recordIndex = index;
   }
   return records;
+}
+
+async function loadAccidentsForAnalysis(
+  options: AnalysisOptions,
+  telemetry: InitializationTelemetry | null
+): Promise<AccidentRecord[]> {
+  if (options.stateCode !== "all") {
+    return loadAccidentsForState(options.stateCode, telemetry);
+  }
+  return loadAccidentData(telemetry, { updateStatus: true });
+}
+
+async function loadAccidentsForState(stateCode: string, telemetry: InitializationTelemetry | null = null): Promise<AccidentRecord[]> {
+  if (accidents.length > 0) {
+    const cachedRecords = accidentStateRecords.get(stateCode);
+    if (cachedRecords) {
+      return cachedRecords;
+    }
+    const records = accidents.filter((accident) => accident.stateCode === stateCode);
+    accidentStateRecords.set(stateCode, records);
+    return records;
+  }
+
+  const cachedRecords = accidentStateRecords.get(stateCode);
+  if (cachedRecords) {
+    return cachedRecords;
+  }
+
+  const existingPromise = accidentStateLoadPromises.get(stateCode);
+  if (existingPromise) {
+    return existingPromise;
+  }
+
+  const promise = readBundledAccidentState(stateCode, telemetry)
+    .then((records) => {
+      accidentStateRecords.set(stateCode, records);
+      return records;
+    })
+    .catch((error) => {
+      accidentStateLoadPromises.delete(stateCode);
+      throw error;
+    });
+  accidentStateLoadPromises.set(stateCode, promise);
+  return promise;
 }
 
 async function readBundledAccidents(
@@ -4566,6 +4704,26 @@ async function readBundledAccidents(
   options: { updateStatus?: boolean } = {}
 ): Promise<AccidentRecord[]> {
   const bundle = await ensureBundledDataManifest(telemetry);
+  const shardFiles = bundle.accidentShardFiles ?? [];
+  if (shardFiles.length > 0) {
+    const shardLoadPromises = shardFiles.map((entry) => ensureBundledAccidentShard(entry.fileName, telemetry));
+    const loadedAccidents: AccidentRecord[] = [];
+    for (let index = 0; index < shardFiles.length; index += 1) {
+      const shard = await shardLoadPromises[index];
+      const records = await readBundledAccidentRecords(shard, telemetry, shardFiles.length);
+      accidentStateRecords.set(shard.stateCode, records);
+      loadedAccidents.push(...records);
+      if (options.updateStatus ?? true) {
+        setStatus(
+          trf("status.loadingBundledChunk", { current: index + 1, total: shardFiles.length }),
+          Math.min(60, 10 + Math.floor(((index + 1) / shardFiles.length) * 50))
+        );
+      }
+    }
+
+    return loadedAccidents;
+  }
+
   const chunkFiles = bundle.accidentChunkFiles ?? [];
   const preloadedChunks = bundle.accidentChunks ?? [];
   const totalChunks = chunkFiles.length || preloadedChunks.length;
@@ -4577,25 +4735,7 @@ async function readBundledAccidents(
   const loadedAccidents: AccidentRecord[] = [];
   for (let index = 0; index < totalChunks; index += 1) {
     const chunk = chunkLoadPromises.length > 0 ? await chunkLoadPromises[index] : preloadedChunks[index];
-    const records = await measureInitializationStep(
-      telemetry,
-      "read normalized accident chunk",
-      chunk.id,
-      async () => {
-        const compressed = decodeBase64Chunks(chunk.chunks);
-        const bytes = gunzipSync(compressed);
-        const text = new TextDecoder().decode(bytes);
-        const parsed = (JSON.parse(text) as CompactAccidentRecord[]).map(accidentFromCompactRecord);
-        await yieldToBrowser();
-        return parsed;
-      },
-      (parsed) => ({
-        accidentCount: parsed.length,
-        bytes: chunk.size,
-        compressedBytes: chunk.compressedSize,
-        chunkCount: totalChunks
-      })
-    );
+    const records = await readBundledAccidentRecords(chunk, telemetry, totalChunks);
     loadedAccidents.push(...records);
     if (options.updateStatus ?? true) {
       setStatus(
@@ -4606,6 +4746,47 @@ async function readBundledAccidents(
   }
 
   return loadedAccidents;
+}
+
+async function readBundledAccidentState(stateCode: string, telemetry: InitializationTelemetry | null): Promise<AccidentRecord[]> {
+  const bundle = await ensureBundledDataManifest(telemetry);
+  const shardInfo = bundle.accidentShardFiles?.find((entry) => entry.stateCode === stateCode);
+  if (shardInfo) {
+    const shard = await ensureBundledAccidentShard(shardInfo.fileName, telemetry);
+    return readBundledAccidentRecords(shard, telemetry, 1);
+  }
+
+  const allRecords = await loadAccidentData(telemetry, { updateStatus: true });
+  return allRecords.filter((accident) => accident.stateCode === stateCode);
+}
+
+async function readBundledAccidentRecords(
+  bundlePart: EmbeddedAccidentChunk | EmbeddedAccidentShard,
+  telemetry: InitializationTelemetry | null,
+  totalParts: number
+): Promise<AccidentRecord[]> {
+  const isShard = "stateCode" in bundlePart;
+  return measureInitializationStep(
+    telemetry,
+    isShard ? "read normalized accident state shard" : "read normalized accident chunk",
+    bundlePart.id,
+    async () => {
+      const compressed = decodeBase64Chunks(bundlePart.chunks);
+      const bytes = gunzipSync(compressed);
+      const text = new TextDecoder().decode(bytes);
+      const parsed = (JSON.parse(text) as CompactAccidentRecord[]).map(accidentFromCompactRecord);
+      await yieldToBrowser();
+      return parsed;
+    },
+    (parsed) => ({
+      accidentCount: parsed.length,
+      stateCode: isShard ? bundlePart.stateCode : null,
+      bytes: bundlePart.size,
+      compressedBytes: bundlePart.compressedSize,
+      shardCount: isShard ? totalParts : null,
+      chunkCount: isShard ? null : totalParts
+    })
+  );
 }
 
 async function readBundledDefaultAnalysis(
@@ -4698,6 +4879,30 @@ async function ensureBundledDefaultAnalysis(
   return loadedAnalysis;
 }
 
+async function ensureBundledAccidentShard(fileName: string, telemetry: InitializationTelemetry | null): Promise<EmbeddedAccidentShard> {
+  const existingShard = findBundledAccidentShard(fileName);
+  if (existingShard) {
+    return existingShard;
+  }
+
+  await measureInitializationStep(
+    telemetry,
+    "load normalized accident state shard script",
+    fileName,
+    () => loadOfflineBundleScript(fileName),
+    (url) => ({
+      url,
+      automatic: true
+    })
+  );
+
+  const loadedShard = findBundledAccidentShard(fileName);
+  if (!loadedShard) {
+    throw new Error(`Bundled accident state shard ${fileName} did not register itself.`);
+  }
+  return loadedShard;
+}
+
 async function ensureBundledAccidentChunk(fileName: string, telemetry: InitializationTelemetry | null): Promise<EmbeddedAccidentChunk> {
   const existingChunk = findBundledAccidentChunk(fileName);
   if (existingChunk) {
@@ -4720,6 +4925,11 @@ async function ensureBundledAccidentChunk(fileName: string, telemetry: Initializ
     throw new Error(`Bundled accident chunk ${fileName} did not register itself.`);
   }
   return loadedChunk;
+}
+
+function findBundledAccidentShard(fileName: string): EmbeddedAccidentShard | null {
+  const shardId = fileName.replace(/\.js$/i, "");
+  return globalThis.__SICHERE_KNOTEN_DATA__?.accidentShards?.find((shard) => shard.id === shardId || `${shard.id}.js` === fileName) ?? null;
 }
 
 function findBundledAccidentChunk(fileName: string): EmbeddedAccidentChunk | null {
@@ -4814,8 +5024,10 @@ function accidentFromCompactRecord(record: CompactAccidentRecord): AccidentRecor
   const administrativeRegionCode = record[5];
   const districtCode = record[6];
   const municipalityCode = record[7];
+  const recordIndex = typeof record[32] === "number" ? record[32] : undefined;
   return {
     id: record[0],
+    recordIndex,
     serialNumber: record[1],
     source: record[2],
     sourceType: "csv",

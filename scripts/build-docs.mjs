@@ -10,7 +10,6 @@ const root = process.cwd();
 const docsDir = path.join(root, "docs");
 const assetsDir = path.join(docsDir, "assets");
 const sourceDataDir = path.join(root, "data");
-const NORMALIZED_ACCIDENT_CHUNK_SIZE = 100000;
 
 await mkdir(assetsDir, { recursive: true });
 await cleanGeneratedAssets();
@@ -63,56 +62,54 @@ async function writeDataBundle(files, streetLookup, analysisCacheVersion) {
   const dataVersion = await hashFiles(files, streetLookup);
   const fileMetadata = await sourceFileMetadata(files);
   const defaultAnalysisOptions = await defaultAnalysisOptionsFromHtml(files);
-  const reusableAccidentChunkFiles = await reusableAccidentChunks(dataVersion);
-  const accidentChunkFiles = reusableAccidentChunkFiles ?? (await writeAccidentChunks(dataVersion, files, streetLookup));
+  const reusableAccidentShardFiles = await reusableAccidentShards(dataVersion);
+  const accidentShardFiles = reusableAccidentShardFiles ?? (await writeAccidentShards(dataVersion, files, streetLookup));
   const defaultAnalysis =
     (await reusableDefaultAnalysis(dataVersion, analysisCacheVersion, defaultAnalysisOptions)) ??
-    (await writeDefaultAnalysis(dataVersion, analysisCacheVersion, accidentChunkFiles, defaultAnalysisOptions));
+    (await writeDefaultAnalysis(dataVersion, analysisCacheVersion, accidentShardFiles, defaultAnalysisOptions));
 
-  if (reusableAccidentChunkFiles) {
-    await removeGeneratedAccidentChunks(new Set(reusableAccidentChunkFiles));
+  if (reusableAccidentShardFiles) {
+    await removeGeneratedAccidentDataFiles(new Set(reusableAccidentShardFiles.map((file) => file.fileName)));
     console.log(
-      `Reused ${reusableAccidentChunkFiles.length.toLocaleString("en-US")} normalized accident chunk scripts for data version ${dataVersion}.`
+      `Reused ${reusableAccidentShardFiles.length.toLocaleString("en-US")} normalized accident state shard scripts for data version ${dataVersion}.`
     );
   }
 
-  await writeDataManifest(dataVersion, fileMetadata, accidentChunkFiles, defaultAnalysis);
+  await writeDataManifest(dataVersion, fileMetadata, accidentShardFiles, defaultAnalysis);
   return ["data-manifest.js"];
 }
 
-async function writeAccidentChunks(dataVersion, files, streetLookup) {
+async function writeAccidentShards(dataVersion, files, streetLookup) {
+  const legacyChunkFiles = await reusableAccidentChunks(dataVersion);
+  if (legacyChunkFiles) {
+    return writeAccidentShardsFromLegacyChunks(dataVersion, legacyChunkFiles);
+  }
+
   const parseAccidentCsvFiles = await loadCsvParser();
   globalThis.__SICHERE_KNOTEN_STREETS__ = streetLookup;
-  let accidentChunkIndex = 1;
-  let pendingRecords = [];
-  const accidentChunkFiles = [];
+  let recordIndex = 0;
+  const recordsByState = new Map();
 
   for (const file of files) {
     const parsed = await parseCsvFile(file, parseAccidentCsvFiles);
     for (const accident of parsed) {
-      pendingRecords.push(compactAccidentRecord(accident));
-      if (pendingRecords.length >= NORMALIZED_ACCIDENT_CHUNK_SIZE) {
-        accidentChunkFiles.push(await writeAccidentChunk(dataVersion, accidentChunkIndex, pendingRecords));
-        accidentChunkIndex += 1;
-        pendingRecords = [];
-      }
+      accident.recordIndex = recordIndex;
+      recordIndex += 1;
+      const stateRecords = recordsByState.get(accident.stateCode) ?? [];
+      stateRecords.push(compactAccidentRecord(accident));
+      recordsByState.set(accident.stateCode, stateRecords);
     }
   }
 
-  if (pendingRecords.length > 0) {
-    accidentChunkFiles.push(await writeAccidentChunk(dataVersion, accidentChunkIndex, pendingRecords));
-  }
-
-  await removeGeneratedAccidentChunks(new Set(accidentChunkFiles));
-  return accidentChunkFiles;
+  return writeAccidentShardFiles(dataVersion, recordsByState);
 }
 
-async function writeDataManifest(dataVersion, fileMetadata, accidentChunkFiles, defaultAnalysis) {
+async function writeDataManifest(dataVersion, fileMetadata, accidentShardFiles, defaultAnalysis) {
   await writeFile(
     path.join(assetsDir, "data-manifest.js"),
     `globalThis.__SICHERE_KNOTEN_DATA__={version:${JSON.stringify(dataVersion)},files:${JSON.stringify(
       fileMetadata
-    )},accidentChunkFiles:${JSON.stringify(accidentChunkFiles)},accidentChunks:[],defaultAnalysisFile:${JSON.stringify(
+    )},accidentShardFiles:${JSON.stringify(accidentShardFiles)},accidentShards:[],defaultAnalysisFile:${JSON.stringify(
       defaultAnalysis.fileName
     )},defaultAnalysisMetadata:${JSON.stringify(defaultAnalysis.metadata)},defaultAnalysis:null};\n`
   );
@@ -161,6 +158,33 @@ async function reusableAccidentChunks(dataVersion) {
   return chunkFiles;
 }
 
+async function reusableAccidentShards(dataVersion) {
+  const manifest = await readExistingDataManifest();
+  if (!manifest || manifest.version !== dataVersion || !Array.isArray(manifest.accidentShardFiles)) {
+    return null;
+  }
+  if (manifest.accidentShardFiles.length === 0) {
+    return null;
+  }
+
+  const shardFiles = [];
+  for (const entry of manifest.accidentShardFiles) {
+    if (!entry || typeof entry.stateCode !== "string" || typeof entry.fileName !== "string" || !/^accidents-state-[\w-]+\.js$/.test(entry.fileName)) {
+      return null;
+    }
+    if (!(await fileExists(path.join(assetsDir, entry.fileName)))) {
+      return null;
+    }
+    shardFiles.push({
+      stateCode: entry.stateCode,
+      fileName: entry.fileName,
+      recordCount: Number(entry.recordCount) || 0
+    });
+  }
+
+  return shardFiles.sort((a, b) => a.stateCode.localeCompare(b.stateCode));
+}
+
 async function reusableDefaultAnalysis(dataVersion, analysisCacheVersion, options) {
   const manifest = await readExistingDataManifest();
   const fileName = manifest?.defaultAnalysisFile;
@@ -182,9 +206,9 @@ async function reusableDefaultAnalysis(dataVersion, analysisCacheVersion, option
   return { fileName, metadata };
 }
 
-async function writeDefaultAnalysis(dataVersion, analysisCacheVersion, accidentChunkFiles, options) {
+async function writeDefaultAnalysis(dataVersion, analysisCacheVersion, accidentShardFiles, options) {
   const analyzeDangerousIntersections = await loadAnalysisModule();
-  const accidents = await loadNormalizedAccidentsFromChunks(accidentChunkFiles);
+  const accidents = await loadNormalizedAccidentsFromShards(accidentShardFiles);
   const result = compactAnalysisResult(analyzeDangerousIntersections(accidents, options));
   const metadata = {
     dataVersion,
@@ -206,7 +230,7 @@ async function writeDefaultAnalysis(dataVersion, analysisCacheVersion, accidentC
   };
   const script = `globalThis.__SICHERE_KNOTEN_DATA__=globalThis.__SICHERE_KNOTEN_DATA__||{version:${JSON.stringify(
     dataVersion
-  )},files:[],accidentChunks:[]};globalThis.__SICHERE_KNOTEN_DATA__.defaultAnalysis=${JSON.stringify(bundle)};\n`;
+  )},files:[],accidentShards:[]};globalThis.__SICHERE_KNOTEN_DATA__.defaultAnalysis=${JSON.stringify(bundle)};\n`;
   await writeFile(path.join(assetsDir, fileName), script);
   console.log(`Wrote ${fileName} with ${result.clusters.length.toLocaleString("en-US")} default intersection clusters.`);
   return { fileName, metadata };
@@ -233,31 +257,75 @@ async function readExistingDataManifest() {
   }
 }
 
-async function loadNormalizedAccidentsFromChunks(accidentChunkFiles) {
-  const accidents = [];
+async function writeAccidentShardsFromLegacyChunks(dataVersion, accidentChunkFiles) {
+  const recordsByState = new Map();
+  let recordCount = 0;
   for (const fileName of accidentChunkFiles) {
-    const script = await readFile(path.join(assetsDir, fileName), "utf8");
-    const sandbox = { globalThis: {} };
-    runInNewContext(script, sandbox, { timeout: 1000 });
-    const chunk = sandbox.globalThis.__SICHERE_KNOTEN_DATA__?.accidentChunks?.[0];
-    if (!chunk?.chunks) {
-      throw new Error(`Could not load normalized accident chunk ${fileName}.`);
-    }
-
+    const chunk = await loadLegacyAccidentChunk(fileName);
     const compactRecords = JSON.parse(gunzipSync(Buffer.from(chunk.chunks.join(""), "base64")).toString("utf8"));
+    for (const record of compactRecords) {
+      const accident = accidentFromCompactRecord(record, recordCount);
+      recordCount += 1;
+      const stateRecords = recordsByState.get(accident.stateCode) ?? [];
+      stateRecords.push(compactAccidentRecord(accident));
+      recordsByState.set(accident.stateCode, stateRecords);
+    }
+  }
+  console.log(`Loaded ${recordCount.toLocaleString("en-US")} legacy normalized accident records for state sharding.`);
+  return writeAccidentShardFiles(dataVersion, recordsByState);
+}
+
+async function writeAccidentShardFiles(dataVersion, recordsByState) {
+  const shardFiles = [];
+  for (const [stateCode, records] of Array.from(recordsByState.entries()).sort((a, b) => a[0].localeCompare(b[0]))) {
+    shardFiles.push(await writeAccidentShard(dataVersion, stateCode, records));
+  }
+
+  await removeGeneratedAccidentDataFiles(new Set(shardFiles.map((file) => file.fileName)));
+  return shardFiles;
+}
+
+async function loadNormalizedAccidentsFromShards(accidentShardFiles) {
+  const accidents = [];
+  for (const entry of accidentShardFiles) {
+    const shard = await loadAccidentShard(entry.fileName);
+    const compactRecords = JSON.parse(gunzipSync(Buffer.from(shard.chunks.join(""), "base64")).toString("utf8"));
     for (const record of compactRecords) {
       accidents.push(accidentFromCompactRecord(record, accidents.length));
     }
   }
+  accidents.sort((a, b) => (a.recordIndex ?? 0) - (b.recordIndex ?? 0));
   console.log(`Loaded ${accidents.length.toLocaleString("en-US")} normalized accident records for default analysis.`);
   return accidents;
 }
 
-async function removeGeneratedAccidentChunks(keep = new Set()) {
+async function loadLegacyAccidentChunk(fileName) {
+  const script = await readFile(path.join(assetsDir, fileName), "utf8");
+  const sandbox = { globalThis: {} };
+  runInNewContext(script, sandbox, { timeout: 1000 });
+  const chunk = sandbox.globalThis.__SICHERE_KNOTEN_DATA__?.accidentChunks?.[0];
+  if (!chunk?.chunks) {
+    throw new Error(`Could not load normalized accident chunk ${fileName}.`);
+  }
+  return chunk;
+}
+
+async function loadAccidentShard(fileName) {
+  const script = await readFile(path.join(assetsDir, fileName), "utf8");
+  const sandbox = { globalThis: {} };
+  runInNewContext(script, sandbox, { timeout: 1000 });
+  const shard = sandbox.globalThis.__SICHERE_KNOTEN_DATA__?.accidentShards?.[0];
+  if (!shard?.chunks) {
+    throw new Error(`Could not load normalized accident shard ${fileName}.`);
+  }
+  return shard;
+}
+
+async function removeGeneratedAccidentDataFiles(keep = new Set()) {
   const entries = await readdir(assetsDir);
   await Promise.all(
     entries
-      .filter((entry) => /^accidents-\d+\.js$/.test(entry) && !keep.has(entry))
+      .filter((entry) => (/^accidents-\d+\.js$/.test(entry) || /^accidents-state-[\w-]+\.js$/.test(entry)) && !keep.has(entry))
       .map((entry) => rm(path.join(assetsDir, entry), { force: true }))
   );
 }
@@ -372,22 +440,34 @@ function numericInputDefault(html, id) {
   return number;
 }
 
-async function writeAccidentChunk(dataVersion, index, records) {
+async function writeAccidentShard(dataVersion, stateCode, records) {
   const bytes = Buffer.from(JSON.stringify(records));
   const compressed = gzipSync(bytes, { level: 9 });
-  const scriptFileName = `accidents-${index}.js`;
-  const chunk = {
-    id: `accidents-${index}`,
-    encoding: "gzip-base64-json-compact-v1",
+  const scriptFileName = accidentShardFileName(stateCode);
+  const shard = {
+    id: scriptFileName.replace(/\.js$/i, ""),
+    stateCode,
+    encoding: "gzip-base64-json-compact-v2",
     recordCount: records.length,
     size: bytes.byteLength,
     compressedSize: compressed.byteLength,
     chunks: chunkString(compressed.toString("base64"), 256 * 1024)
   };
-  const script = `globalThis.__SICHERE_KNOTEN_DATA__=globalThis.__SICHERE_KNOTEN_DATA__||{version:${JSON.stringify(dataVersion)},files:[],accidentChunks:[]};globalThis.__SICHERE_KNOTEN_DATA__.accidentChunks=globalThis.__SICHERE_KNOTEN_DATA__.accidentChunks||[];globalThis.__SICHERE_KNOTEN_DATA__.accidentChunks.push(${JSON.stringify(chunk)});\n`;
+  const script = `globalThis.__SICHERE_KNOTEN_DATA__=globalThis.__SICHERE_KNOTEN_DATA__||{version:${JSON.stringify(dataVersion)},files:[],accidentShards:[]};globalThis.__SICHERE_KNOTEN_DATA__.accidentShards=globalThis.__SICHERE_KNOTEN_DATA__.accidentShards||[];globalThis.__SICHERE_KNOTEN_DATA__.accidentShards.push(${JSON.stringify(shard)});\n`;
   await writeFile(path.join(assetsDir, scriptFileName), script);
   console.log(`Wrote ${scriptFileName} with ${records.length.toLocaleString("en-US")} normalized accident records.`);
-  return scriptFileName;
+  return {
+    stateCode,
+    fileName: scriptFileName,
+    recordCount: records.length
+  };
+}
+
+function accidentShardFileName(stateCode) {
+  const normalizedStateCode = String(stateCode || "unknown")
+    .toLowerCase()
+    .replace(/[^\w-]+/g, "-");
+  return `accidents-state-${normalizedStateCode}.js`;
 }
 
 function compactAccidentRecord(accident) {
@@ -423,16 +503,18 @@ function compactAccidentRecord(accident) {
     accident.involvesMotorcycle,
     accident.involvesCar,
     accident.involvesTruck,
-    accident.involvesOther
+    accident.involvesOther,
+    accident.recordIndex ?? null
   ];
 }
 
 function accidentFromCompactRecord(record, recordIndex) {
   const streetNames = record[3];
   const stateCode = record[4];
+  const normalizedRecordIndex = typeof record[32] === "number" ? record[32] : recordIndex;
   return {
     id: record[0],
-    recordIndex,
+    recordIndex: normalizedRecordIndex,
     serialNumber: record[1],
     source: record[2],
     sourceType: "csv",
