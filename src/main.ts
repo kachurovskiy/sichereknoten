@@ -937,13 +937,17 @@ const requestGate = new RequestGate();
 const map = new MapCanvas(elements.mapCanvas, handleClusterSelection);
 const mobileLayout = window.matchMedia(MOBILE_LAYOUT_QUERY);
 
-applyStaticTranslations();
-resetAnalysisControlsToDefaults();
-wireEvents();
-setView(initialView());
-renderAll();
-void checkForFreshDeploymentHtml();
-void loadBundledData();
+startApp();
+
+function startApp(): void {
+  applyStaticTranslations();
+  resetAnalysisControlsToDefaults();
+  wireEvents();
+  setView(initialView());
+  renderAll();
+  void checkForFreshDeploymentHtml();
+  void loadBundledData();
+}
 
 function detectLocale(): AppLocale {
   const languages = navigator.languages?.length ? navigator.languages : [navigator.language];
@@ -994,11 +998,21 @@ function applyStaticTranslations(): void {
 }
 
 function wireEvents(): void {
+  wireApplicationCommands();
+  wireAnalysisControlEvents();
+  wireMapControlEvents();
+  wireNavigationEvents();
+  wireClusterSortEvents();
+}
+
+function wireApplicationCommands(): void {
   elements.resetAppBtn.addEventListener("click", () => void resetApp());
   elements.analyzeBtn.addEventListener("click", () => runAnalysis());
   elements.exportBtn.addEventListener("click", exportClusters);
   elements.selectionDetails.addEventListener("click", handleSelectionDetailsClick);
+}
 
+function wireAnalysisControlEvents(): void {
   wireLinkedNumberRange(elements.clusterRadius, elements.clusterRadiusOut, markAnalysisSettingsDirty);
 
   wireClampedNumberInput(elements.minAccidents, markAnalysisSettingsDirty);
@@ -1009,7 +1023,9 @@ function wireEvents(): void {
   elements.stateFilter.addEventListener("input", markAnalysisSettingsDirty);
   elements.stateFilter.addEventListener("change", markAnalysisSettingsDirty);
   roadUserFocusInputs().forEach((input) => input.addEventListener("change", markAnalysisSettingsDirty));
+}
 
+function wireMapControlEvents(): void {
   [elements.showFatalPoints, elements.showSeriousPoints, elements.showOtherPoints].forEach((input) => {
     input.addEventListener("change", applySeverityFilter);
   });
@@ -1017,7 +1033,9 @@ function wireEvents(): void {
   elements.findNearbyBtn.addEventListener("click", () => locateUser({ selectNearest: true }));
   elements.streetViewToggle.addEventListener("click", toggleStreetViewPanel);
   elements.browseState.addEventListener("change", renderExplore);
+}
 
+function wireNavigationEvents(): void {
   elements.exploreTab.addEventListener("click", () => setView("explore"));
   elements.mapTab.addEventListener("click", () => setView("map"));
   elements.detailsTab.addEventListener("click", () => setView("details"));
@@ -1038,7 +1056,9 @@ function wireEvents(): void {
     setMobileMoreMenuOpen(false);
     scheduleMapRefresh();
   });
+}
 
+function wireClusterSortEvents(): void {
   for (const button of clusterSortButtons()) {
     button.addEventListener("click", () => {
       const key = button.dataset.clusterSort as ClusterSortKey | undefined;
