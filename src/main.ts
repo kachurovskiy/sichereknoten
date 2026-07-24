@@ -1,7 +1,6 @@
 import "./styles.css";
-import { gunzipSync } from "fflate";
 import { analyzeDangerousIntersectionsInBackground, type AnalysisExecutionPlan } from "./analysisRunner";
-import { readAnalysisCache, resetAppStorage, writeAnalysisCache } from "./cache";
+import { DataRepository, type AnalysisCacheContext, type DataRepositoryTelemetry } from "./dataRepository";
 import { GeoGridIndex } from "./geo";
 import { MapCanvas } from "./mapCanvas";
 import { accidentMatchesRoadUserFocus, ROAD_USER_DEFINITIONS, RoadUserDefinition, roadUserFocusKey } from "./roadUsers";
@@ -20,117 +19,6 @@ import {
 const TABLE_ROWS_PER_STATE = 10;
 const STATE_BROWSE_MIN_SEVERITY_PERCENT = 0.1;
 const STATE_BROWSE_MAX_INTERSECTIONS = 100;
-
-interface EmbeddedDataFile {
-  path: string;
-  name: string;
-  type: string;
-  size: number;
-  modifiedTime?: string;
-}
-
-interface EmbeddedAccidentChunk {
-  id: string;
-  encoding: "gzip-base64-json-compact-v1";
-  recordCount: number;
-  size: number;
-  compressedSize: number;
-  chunks: string[];
-}
-
-interface EmbeddedAccidentShardFile {
-  stateCode: string;
-  fileName: string;
-  recordCount: number;
-}
-
-interface EmbeddedAccidentShard {
-  id: string;
-  stateCode: string;
-  encoding: "gzip-base64-json-compact-v1" | "gzip-base64-json-compact-v2";
-  recordCount: number;
-  size: number;
-  compressedSize: number;
-  chunks: string[];
-}
-
-interface SerializedAnalysisOptions {
-  clusterRadiusMeters: number;
-  minAccidents: number;
-  years: number[];
-  roadUserFocus: RoadUserKey[];
-  stateCode: string | "all";
-  severityPercent: SeverityPercentOptions;
-}
-
-interface EmbeddedDefaultAnalysisMetadata {
-  dataVersion: string;
-  analysisCacheVersion: string;
-  options: SerializedAnalysisOptions;
-}
-
-interface EmbeddedDefaultAnalysis {
-  id: string;
-  encoding: "gzip-base64-json-v1";
-  metadata: EmbeddedDefaultAnalysisMetadata;
-  clusterCount: number;
-  filteredAccidentCount: number;
-  size: number;
-  compressedSize: number;
-  chunks: string[];
-}
-
-interface EmbeddedDataBundle {
-  version?: string;
-  files: EmbeddedDataFile[];
-  accidentShardFiles?: EmbeddedAccidentShardFile[];
-  accidentShards?: EmbeddedAccidentShard[];
-  accidentChunkFiles?: string[];
-  accidentChunks?: EmbeddedAccidentChunk[];
-  defaultAnalysisFile?: string;
-  defaultAnalysisMetadata?: EmbeddedDefaultAnalysisMetadata;
-  defaultAnalysis?: EmbeddedDefaultAnalysis | null;
-}
-
-type CompactAccidentRecord = [
-  string,
-  string | null,
-  string,
-  string[],
-  string,
-  string | null,
-  string | null,
-  string | null,
-  string | null,
-  string | null,
-  string | null,
-  number,
-  number | null,
-  number | null,
-  number | null,
-  number | null,
-  number | null,
-  number | null,
-  number | null,
-  number | null,
-  number | null,
-  number | null,
-  number | null,
-  number | null,
-  number,
-  number,
-  boolean | null,
-  boolean | null,
-  boolean | null,
-  boolean | null,
-  boolean | null,
-  boolean | null,
-  number | null | undefined
-];
-
-declare global {
-  var __SICHERE_KNOTEN_DATA__: EmbeddedDataBundle | undefined;
-}
 
 declare const __SICHERE_KNOTEN_APP_VERSION__: string | undefined;
 declare const __SICHERE_KNOTEN_ANALYSIS_CACHE_VERSION__: string | undefined;
@@ -250,7 +138,6 @@ const APP_CACHE_VERSION =
   typeof __SICHERE_KNOTEN_APP_VERSION__ === "string" ? __SICHERE_KNOTEN_APP_VERSION__ : "dev-cluster-streets";
 const ANALYSIS_CACHE_VERSION =
   typeof __SICHERE_KNOTEN_ANALYSIS_CACHE_VERSION__ === "string" ? __SICHERE_KNOTEN_ANALYSIS_CACHE_VERSION__ : APP_CACHE_VERSION;
-const offlineBundleScriptPromises = new Map<string, Promise<string>>();
 const STREET_VIEW_OPEN_STORAGE_KEY = "sichere-knoten:street-view-open";
 const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
   en: {
@@ -919,11 +806,6 @@ interface TrendSeriesPoint extends ClusterYearStat {
   accidentY: number;
 }
 
-interface AnalysisCacheContext {
-  dataVersion: string;
-  appVersion: string;
-}
-
 interface PendingAnalysisCacheWrite {
   cacheContext: AnalysisCacheContext;
   options: AnalysisOptions;
@@ -972,9 +854,6 @@ let crossingAccidentIndexCache: AccidentIndexCache | null = null;
 let accidentKeyLookupCache: AccidentKeyLookupCache | null = null;
 let accidentRecordIndexLookupCache: AccidentRecordIndexLookupCache | null = null;
 let severityRankCache: SeverityRankCache | null = null;
-let accidentDataLoadPromise: Promise<AccidentRecord[]> | null = null;
-let accidentStateRecords = new Map<string, AccidentRecord[]>();
-let accidentStateLoadPromises = new Map<string, Promise<AccidentRecord[]>>();
 let selectedAccidentRecordsRequestId = 0;
 let postRenderCacheWriteQueue: Promise<void> = Promise.resolve();
 let isStreetViewOpen = readStoredStreetViewOpen();
@@ -1047,6 +926,7 @@ const elements = {
   exportBtn: byId<HTMLButtonElement>("exportBtn")
 };
 
+const dataRepository = new DataRepository();
 const map = new MapCanvas(elements.mapCanvas, handleClusterSelection);
 const mobileLayout = window.matchMedia(MOBILE_LAYOUT_QUERY);
 
@@ -1341,6 +1221,17 @@ function reloadFreshDeploymentHtml(latestAppVersion: string): void {
   window.location.replace(url.href);
 }
 
+function repositoryTelemetry(telemetry: InitializationTelemetry | null): DataRepositoryTelemetry | null {
+  if (!telemetry) {
+    return null;
+  }
+
+  return {
+    measure: (name, detail, work, metadata) => measureInitializationStep(telemetry, name, detail, work, metadata),
+    record: (name, detail, metadata) => recordInitializationStep(telemetry, name, detail, metadata)
+  };
+}
+
 async function loadBundledData(): Promise<void> {
   const telemetry = createInitializationTelemetry();
   setBusy(true);
@@ -1354,17 +1245,15 @@ async function loadBundledData(): Promise<void> {
     accidentKeyLookupCache = null;
     accidentRecordIndexLookupCache = null;
     severityRankCache = null;
-    accidentDataLoadPromise = null;
-    accidentStateRecords = new Map();
-    accidentStateLoadPromises = new Map();
+    dataRepository.resetRuntimeState();
     analysisSettingsDirty = false;
     activeDataVersion = null;
     updateAnalyzeButton();
     populateFilters();
     renderAll();
     setStatus(tr("status.loadingDataManifest"), 2);
-    await ensureBundledDataManifest(telemetry);
-    const dataVersion = bundledDataVersion();
+    await dataRepository.ensureManifest(repositoryTelemetry(telemetry));
+    const dataVersion = dataRepository.dataVersion();
     telemetry.dataVersion = dataVersion;
     activeDataVersion = dataVersion;
     populateFilters();
@@ -1374,7 +1263,13 @@ async function loadBundledData(): Promise<void> {
 
     const options = readOptions();
     const cacheContext = { dataVersion, appVersion: ANALYSIS_CACHE_VERSION };
-    const bundledDefaultAnalysis = await readBundledDefaultAnalysis(telemetry, dataVersion, ANALYSIS_CACHE_VERSION, options);
+    const bundledDefaultAnalysis = await dataRepository.readDefaultAnalysis(
+      dataVersion,
+      ANALYSIS_CACHE_VERSION,
+      options,
+      analysisTelemetryDetail(options),
+      repositoryTelemetry(telemetry)
+    );
     if (bundledDefaultAnalysis) {
       result = bundledDefaultAnalysis;
       selectedCluster = null;
@@ -1405,7 +1300,7 @@ async function loadBundledData(): Promise<void> {
       telemetry,
       "read analysis cache",
       analysisTelemetryDetail(options),
-      () => readAnalysisCache(cacheContext.dataVersion, cacheContext.appVersion, options),
+      () => dataRepository.readCachedAnalysis(cacheContext, options),
       (cachedResult) => ({
         cacheHit: Boolean(cachedResult),
         clusterCount: cachedResult?.clusters.length ?? 0
@@ -1493,7 +1388,7 @@ async function runAnalysisWithCache(
         initializationTelemetry,
         "read analysis cache",
         analysisTelemetryDetail(options),
-        () => readAnalysisCache(cacheContext.dataVersion, cacheContext.appVersion, options),
+        () => dataRepository.readCachedAnalysis(cacheContext, options),
         (cachedResult) => ({
           cacheHit: Boolean(cachedResult),
           clusterCount: cachedResult?.clusters.length ?? 0
@@ -1707,14 +1602,7 @@ function yearsForFilters(): number[] {
 }
 
 function bundledDataYears(): number[] {
-  const years = new Set<number>();
-  for (const file of globalThis.__SICHERE_KNOTEN_DATA__?.files ?? []) {
-    const label = `${file.path} ${file.name}`;
-    for (const match of label.matchAll(/(20\d{2})/g)) {
-      years.add(Number(match[1]));
-    }
-  }
-  return Array.from(years).sort((a, b) => a - b);
+  return dataRepository.bundledYears();
 }
 
 function renderAll(): void {
@@ -2821,19 +2709,11 @@ function clusterAccidentRecordsSnapshot(cluster: IntersectionCluster): ClusterAc
 }
 
 function cachedAccidentRecordsForCluster(cluster: IntersectionCluster): AccidentRecord[] | null {
-  if (accidents.length > 0) {
-    return accidents;
-  }
-  return accidentStateRecords.get(cluster.stateCode) ?? null;
+  return dataRepository.cachedAccidentsForStateOrAll(cluster.stateCode) ?? (accidents.length > 0 ? accidents : null);
 }
 
 function hasAccidentStateShard(stateCode: string): boolean {
-  const bundle = globalThis.__SICHERE_KNOTEN_DATA__;
-  return Boolean(
-    bundle?.accidentShardFiles?.some((entry) => entry.stateCode === stateCode) ||
-      bundle?.accidentChunkFiles?.length ||
-      bundle?.accidentChunks?.length
-  );
+  return dataRepository.hasStateShard(stateCode);
 }
 
 function queueSelectedAccidentRecordsLoad(cluster: IntersectionCluster): void {
@@ -3514,7 +3394,7 @@ async function resetApp(): Promise<void> {
   setBusy(true);
   setStatus(tr("status.resettingApp"), 0);
   try {
-    await resetAppStorage();
+    await dataRepository.resetStorage();
   } finally {
     window.location.reload();
   }
@@ -4315,12 +4195,7 @@ function factsheetPeriodLabel(cluster: IntersectionCluster, records: CrossingAcc
 }
 
 function latestBundledFileDate(): Date | null {
-  const files = globalThis.__SICHERE_KNOTEN_DATA__?.files ?? [];
-  const timestamps = files
-    .map((file) => (file.modifiedTime ? new Date(file.modifiedTime) : null))
-    .filter((date): date is Date => date instanceof Date && Number.isFinite(date.getTime()))
-    .sort((a, b) => b.getTime() - a.getTime());
-  return timestamps[0] ?? null;
+  return dataRepository.latestBundledFileDate();
 }
 
 function factsheetFileName(cluster: IntersectionCluster): string {
@@ -4630,505 +4505,51 @@ function loadingTitle(step: LoadingStepKey, progress: number, isProblem: boolean
   }
 }
 
-async function ensureBundledDataManifest(telemetry: InitializationTelemetry | null): Promise<EmbeddedDataBundle> {
-  const existingBundle = globalThis.__SICHERE_KNOTEN_DATA__;
-  if (existingBundle?.version) {
-    return existingBundle;
-  }
-
-  await measureInitializationStep(
-    telemetry,
-    "load data manifest",
-    "data-manifest.js",
-    () => loadOfflineBundleScript("data-manifest.js"),
-    (url) => ({
-      url,
-      automatic: true
-    })
-  );
-
-  const loadedBundle = globalThis.__SICHERE_KNOTEN_DATA__;
-  if (!loadedBundle?.version) {
-    throw new Error("Bundled data manifest is missing. Run npm run build so docs/assets contains the generated offline bundle.");
-  }
-  return loadedBundle;
-}
-
 async function loadAccidentData(
   telemetry: InitializationTelemetry | null,
   options: { updateStatus?: boolean } = {}
 ): Promise<AccidentRecord[]> {
-  if (accidents.length > 0) {
-    return accidents;
+  const records = await dataRepository.loadAllAccidents(
+    repositoryTelemetry(telemetry),
+    options.updateStatus ?? true
+      ? ({ current, total }) => {
+          setStatus(trf("status.loadingBundledChunk", { current, total }), Math.min(60, 10 + Math.floor((current / total) * 50)));
+        }
+      : null
+  );
+  if (accidents !== records) {
+    accidents = records;
+    crossingAccidentIndexCache = null;
+    accidentKeyLookupCache = null;
+    accidentRecordIndexLookupCache = null;
+    populateFilters();
   }
-  if (!accidentDataLoadPromise) {
-    accidentDataLoadPromise = readBundledAccidents(telemetry, { updateStatus: options.updateStatus ?? true })
-      .then((records) => {
-        accidents = normalizeAccidentRecordIndexes(records);
-        crossingAccidentIndexCache = null;
-        accidentKeyLookupCache = null;
-        accidentRecordIndexLookupCache = null;
-        populateFilters();
-        return accidents;
-      })
-      .catch((error) => {
-        accidentDataLoadPromise = null;
-        throw error;
-      });
-  }
-  return accidentDataLoadPromise;
-}
-
-function bundledDataVersion(): string {
-  const bundle = globalThis.__SICHERE_KNOTEN_DATA__;
-  if (bundle?.version) {
-    return bundle.version;
-  }
-  if (bundle?.files.length) {
-    return `legacy:${bundle.files.map((file) => `${file.path}:${file.size}:${file.modifiedTime ?? ""}`).join("|")}`;
-  }
-  return "missing-normalized-data";
-}
-
-function normalizeAccidentRecordIndexes(records: AccidentRecord[]): AccidentRecord[] {
-  if (records.every((record) => typeof record.recordIndex === "number")) {
-    return records.sort((a, b) => (a.recordIndex ?? 0) - (b.recordIndex ?? 0));
-  }
-  for (let index = 0; index < records.length; index += 1) {
-    records[index].recordIndex = index;
-  }
-  return records;
+  return accidents;
 }
 
 async function loadAccidentsForAnalysis(
   options: AnalysisOptions,
   telemetry: InitializationTelemetry | null
 ): Promise<AccidentRecord[]> {
-  if (options.stateCode !== "all") {
-    return loadAccidentsForState(options.stateCode, telemetry);
+  const records = await dataRepository.loadAccidentsForAnalysis(
+    options,
+    repositoryTelemetry(telemetry),
+    ({ current, total }) => {
+      setStatus(trf("status.loadingBundledChunk", { current, total }), Math.min(60, 10 + Math.floor((current / total) * 50)));
+    }
+  );
+  if (options.stateCode === "all" && accidents !== records) {
+    accidents = records;
+    crossingAccidentIndexCache = null;
+    accidentKeyLookupCache = null;
+    accidentRecordIndexLookupCache = null;
+    populateFilters();
   }
-  return loadAccidentData(telemetry, { updateStatus: true });
+  return records;
 }
 
 async function loadAccidentsForState(stateCode: string, telemetry: InitializationTelemetry | null = null): Promise<AccidentRecord[]> {
-  if (accidents.length > 0) {
-    const cachedRecords = accidentStateRecords.get(stateCode);
-    if (cachedRecords) {
-      return cachedRecords;
-    }
-    const records = accidents.filter((accident) => accident.stateCode === stateCode);
-    accidentStateRecords.set(stateCode, records);
-    return records;
-  }
-
-  const cachedRecords = accidentStateRecords.get(stateCode);
-  if (cachedRecords) {
-    return cachedRecords;
-  }
-
-  const existingPromise = accidentStateLoadPromises.get(stateCode);
-  if (existingPromise) {
-    return existingPromise;
-  }
-
-  const promise = readBundledAccidentState(stateCode, telemetry)
-    .then((records) => {
-      accidentStateRecords.set(stateCode, records);
-      return records;
-    })
-    .catch((error) => {
-      accidentStateLoadPromises.delete(stateCode);
-      throw error;
-    });
-  accidentStateLoadPromises.set(stateCode, promise);
-  return promise;
-}
-
-async function readBundledAccidents(
-  telemetry: InitializationTelemetry | null,
-  options: { updateStatus?: boolean } = {}
-): Promise<AccidentRecord[]> {
-  const bundle = await ensureBundledDataManifest(telemetry);
-  const shardFiles = bundle.accidentShardFiles ?? [];
-  if (shardFiles.length > 0) {
-    const shardLoadPromises = shardFiles.map((entry) => ensureBundledAccidentShard(entry.fileName, telemetry));
-    const loadedAccidents: AccidentRecord[] = [];
-    for (let index = 0; index < shardFiles.length; index += 1) {
-      const shard = await shardLoadPromises[index];
-      const records = await readBundledAccidentRecords(shard, telemetry, shardFiles.length);
-      accidentStateRecords.set(shard.stateCode, records);
-      loadedAccidents.push(...records);
-      if (options.updateStatus ?? true) {
-        setStatus(
-          trf("status.loadingBundledChunk", { current: index + 1, total: shardFiles.length }),
-          Math.min(60, 10 + Math.floor(((index + 1) / shardFiles.length) * 50))
-        );
-      }
-    }
-
-    return loadedAccidents;
-  }
-
-  const chunkFiles = bundle.accidentChunkFiles ?? [];
-  const preloadedChunks = bundle.accidentChunks ?? [];
-  const totalChunks = chunkFiles.length || preloadedChunks.length;
-  if (totalChunks === 0) {
-    throw new Error("Bundled normalized accident data is missing. Run npm run build so docs/assets contains accidents-*.js.");
-  }
-
-  const chunkLoadPromises = chunkFiles.length > 0 ? chunkFiles.map((fileName) => ensureBundledAccidentChunk(fileName, telemetry)) : [];
-  const loadedAccidents: AccidentRecord[] = [];
-  for (let index = 0; index < totalChunks; index += 1) {
-    const chunk = chunkLoadPromises.length > 0 ? await chunkLoadPromises[index] : preloadedChunks[index];
-    const records = await readBundledAccidentRecords(chunk, telemetry, totalChunks);
-    loadedAccidents.push(...records);
-    if (options.updateStatus ?? true) {
-      setStatus(
-        trf("status.loadingBundledChunk", { current: index + 1, total: totalChunks }),
-        Math.min(60, 10 + Math.floor(((index + 1) / totalChunks) * 50))
-      );
-    }
-  }
-
-  return loadedAccidents;
-}
-
-async function readBundledAccidentState(stateCode: string, telemetry: InitializationTelemetry | null): Promise<AccidentRecord[]> {
-  const bundle = await ensureBundledDataManifest(telemetry);
-  const shardInfo = bundle.accidentShardFiles?.find((entry) => entry.stateCode === stateCode);
-  if (shardInfo) {
-    const shard = await ensureBundledAccidentShard(shardInfo.fileName, telemetry);
-    return readBundledAccidentRecords(shard, telemetry, 1);
-  }
-
-  const allRecords = await loadAccidentData(telemetry, { updateStatus: true });
-  return allRecords.filter((accident) => accident.stateCode === stateCode);
-}
-
-async function readBundledAccidentRecords(
-  bundlePart: EmbeddedAccidentChunk | EmbeddedAccidentShard,
-  telemetry: InitializationTelemetry | null,
-  totalParts: number
-): Promise<AccidentRecord[]> {
-  const isShard = "stateCode" in bundlePart;
-  return measureInitializationStep(
-    telemetry,
-    isShard ? "read normalized accident state shard" : "read normalized accident chunk",
-    bundlePart.id,
-    async () => {
-      const compressed = decodeBase64Chunks(bundlePart.chunks);
-      const bytes = gunzipSync(compressed);
-      const text = new TextDecoder().decode(bytes);
-      const parsed = (JSON.parse(text) as CompactAccidentRecord[]).map(accidentFromCompactRecord);
-      await yieldToBrowser();
-      return parsed;
-    },
-    (parsed) => ({
-      accidentCount: parsed.length,
-      stateCode: isShard ? bundlePart.stateCode : null,
-      bytes: bundlePart.size,
-      compressedBytes: bundlePart.compressedSize,
-      shardCount: isShard ? totalParts : null,
-      chunkCount: isShard ? null : totalParts
-    })
-  );
-}
-
-async function readBundledDefaultAnalysis(
-  telemetry: InitializationTelemetry | null,
-  dataVersion: string,
-  analysisCacheVersion: string,
-  options: AnalysisOptions
-): Promise<AnalysisResult | null> {
-  const bundle = globalThis.__SICHERE_KNOTEN_DATA__;
-  const fileName = bundle?.defaultAnalysisFile;
-  const metadata = bundle?.defaultAnalysisMetadata;
-  if (typeof fileName !== "string" || !metadata) {
-    recordInitializationStep(telemetry, "skip bundled default analysis", analysisTelemetryDetail(options), {
-      reason: "bundled default analysis is missing"
-    });
-    return null;
-  }
-  if (!defaultAnalysisMetadataMatches(metadata, dataVersion, analysisCacheVersion, options)) {
-    recordInitializationStep(telemetry, "skip bundled default analysis", analysisTelemetryDetail(options), {
-      reason: "settings or version mismatch"
-    });
-    return null;
-  }
-
-  try {
-    const bundledAnalysis = await ensureBundledDefaultAnalysis(fileName, telemetry);
-    if (!defaultAnalysisMetadataMatches(bundledAnalysis.metadata, dataVersion, analysisCacheVersion, options)) {
-      recordInitializationStep(telemetry, "skip bundled default analysis", analysisTelemetryDetail(options), {
-        reason: "loaded bundle metadata mismatch"
-      });
-      return null;
-    }
-
-    return await measureInitializationStep(
-      telemetry,
-      "read bundled default analysis",
-      bundledAnalysis.id,
-      async () => {
-        const compressed = decodeBase64Chunks(bundledAnalysis.chunks);
-        const bytes = gunzipSync(compressed);
-        const text = new TextDecoder().decode(bytes);
-        const parsed = JSON.parse(text) as AnalysisResult;
-        await yieldToBrowser();
-        return parsed;
-      },
-      (analysisResult) => ({
-        cacheHit: true,
-        clusterCount: analysisResult.clusters.length,
-        filteredAccidentCount: analysisResult.filteredAccidentCount,
-        bytes: bundledAnalysis.size,
-        compressedBytes: bundledAnalysis.compressedSize
-      })
-    );
-  } catch (error) {
-    console.warn("[Safe Intersections] Could not load bundled default analysis; falling back to runtime analysis.", error);
-    recordInitializationStep(telemetry, "skip bundled default analysis", analysisTelemetryDetail(options), {
-      reason: errorMessage(error)
-    });
-    return null;
-  }
-}
-
-async function ensureBundledDefaultAnalysis(
-  fileName: string,
-  telemetry: InitializationTelemetry | null
-): Promise<EmbeddedDefaultAnalysis> {
-  const existingAnalysis = globalThis.__SICHERE_KNOTEN_DATA__?.defaultAnalysis;
-  if (existingAnalysis) {
-    return existingAnalysis;
-  }
-
-  await measureInitializationStep(
-    telemetry,
-    "load default analysis script",
-    fileName,
-    () => loadOfflineBundleScript(fileName),
-    (url) => ({
-      url,
-      automatic: true
-    })
-  );
-
-  const loadedAnalysis = globalThis.__SICHERE_KNOTEN_DATA__?.defaultAnalysis;
-  if (!loadedAnalysis) {
-    throw new Error(`Bundled default analysis ${fileName} did not register itself.`);
-  }
-  if (loadedAnalysis.encoding !== "gzip-base64-json-v1") {
-    throw new Error(`Bundled default analysis ${fileName} uses unsupported encoding ${loadedAnalysis.encoding}.`);
-  }
-  return loadedAnalysis;
-}
-
-async function ensureBundledAccidentShard(fileName: string, telemetry: InitializationTelemetry | null): Promise<EmbeddedAccidentShard> {
-  const existingShard = findBundledAccidentShard(fileName);
-  if (existingShard) {
-    return existingShard;
-  }
-
-  await measureInitializationStep(
-    telemetry,
-    "load normalized accident state shard script",
-    fileName,
-    () => loadOfflineBundleScript(fileName),
-    (url) => ({
-      url,
-      automatic: true
-    })
-  );
-
-  const loadedShard = findBundledAccidentShard(fileName);
-  if (!loadedShard) {
-    throw new Error(`Bundled accident state shard ${fileName} did not register itself.`);
-  }
-  return loadedShard;
-}
-
-async function ensureBundledAccidentChunk(fileName: string, telemetry: InitializationTelemetry | null): Promise<EmbeddedAccidentChunk> {
-  const existingChunk = findBundledAccidentChunk(fileName);
-  if (existingChunk) {
-    return existingChunk;
-  }
-
-  await measureInitializationStep(
-    telemetry,
-    "load normalized accident chunk script",
-    fileName,
-    () => loadOfflineBundleScript(fileName),
-    (url) => ({
-      url,
-      automatic: true
-    })
-  );
-
-  const loadedChunk = findBundledAccidentChunk(fileName);
-  if (!loadedChunk) {
-    throw new Error(`Bundled accident chunk ${fileName} did not register itself.`);
-  }
-  return loadedChunk;
-}
-
-function findBundledAccidentShard(fileName: string): EmbeddedAccidentShard | null {
-  const shardId = fileName.replace(/\.js$/i, "");
-  return globalThis.__SICHERE_KNOTEN_DATA__?.accidentShards?.find((shard) => shard.id === shardId || `${shard.id}.js` === fileName) ?? null;
-}
-
-function findBundledAccidentChunk(fileName: string): EmbeddedAccidentChunk | null {
-  const chunkId = fileName.replace(/\.js$/i, "");
-  return globalThis.__SICHERE_KNOTEN_DATA__?.accidentChunks?.find((chunk) => chunk.id === chunkId || `${chunk.id}.js` === fileName) ?? null;
-}
-
-function defaultAnalysisMetadataMatches(
-  metadata: EmbeddedDefaultAnalysisMetadata,
-  dataVersion: string,
-  analysisCacheVersion: string,
-  options: AnalysisOptions
-): boolean {
-  return (
-    metadata.dataVersion === dataVersion &&
-    metadata.analysisCacheVersion === analysisCacheVersion &&
-    JSON.stringify(metadata.options) === JSON.stringify(serializeAnalysisOptionsForBundle(options))
-  );
-}
-
-function serializeAnalysisOptionsForBundle(options: AnalysisOptions): SerializedAnalysisOptions {
-  return {
-    clusterRadiusMeters: options.clusterRadiusMeters,
-    minAccidents: options.minAccidents,
-    years: Array.from(options.years).sort((a, b) => a - b),
-    roadUserFocus: Array.from(options.roadUserFocus).sort(),
-    stateCode: options.stateCode,
-    severityPercent: { ...options.severityPercent }
-  };
-}
-
-async function loadOfflineBundleScript(fileName: string): Promise<string> {
-  const urls = offlineBundleScriptUrls(fileName);
-  let lastError: unknown = null;
-
-  for (const url of urls) {
-    try {
-      await appendOfflineBundleScript(url);
-      return url;
-    } catch (error) {
-      lastError = error;
-    }
-  }
-
-  const detail = lastError ? ` Last error: ${errorMessage(lastError)}` : "";
-  throw new Error(`Could not load offline data asset ${fileName}.${detail}`);
-}
-
-function offlineBundleScriptUrls(fileName: string): string[] {
-  const baseUrls = offlineBundleAssetBaseUrls();
-  return baseUrls.map((baseUrl) => new URL(fileName, baseUrl).href);
-}
-
-function offlineBundleAssetBaseUrls(): string[] {
-  const sourceModuleScript = document.querySelector<HTMLScriptElement>(
-    'script[type="module"][src$="/src/main.ts"], script[type="module"][src$="src/main.ts"]'
-  );
-  const preferred = sourceModuleScript ? "./docs/assets/" : "./assets/";
-  const fallback = sourceModuleScript ? "./assets/" : "./docs/assets/";
-  return uniqueStrings([new URL(preferred, document.baseURI).href, new URL(fallback, document.baseURI).href]);
-}
-
-function uniqueStrings(values: string[]): string[] {
-  return Array.from(new Set(values));
-}
-
-function appendOfflineBundleScript(url: string): Promise<string> {
-  const existingPromise = offlineBundleScriptPromises.get(url);
-  if (existingPromise) {
-    return existingPromise;
-  }
-
-  const promise = new Promise<string>((resolve, reject) => {
-    const script = document.createElement("script");
-    script.src = url;
-    script.async = false;
-    script.onload = () => resolve(url);
-    script.onerror = () => {
-      script.remove();
-      offlineBundleScriptPromises.delete(url);
-      reject(new Error(`Failed to load ${url}`));
-    };
-    document.head.append(script);
-  });
-  offlineBundleScriptPromises.set(url, promise);
-  return promise;
-}
-
-function accidentFromCompactRecord(record: CompactAccidentRecord): AccidentRecord {
-  const streetNames = record[3];
-  const stateCode = record[4];
-  const administrativeRegionCode = record[5];
-  const districtCode = record[6];
-  const municipalityCode = record[7];
-  const recordIndex = typeof record[32] === "number" ? record[32] : undefined;
-  return {
-    id: record[0],
-    recordIndex,
-    serialNumber: record[1],
-    source: record[2],
-    sourceType: "csv",
-    streetName: streetNames[0] ?? null,
-    streetNames,
-    stateCode,
-    stateName: STATE_NAMES[stateCode] ?? `Bundesland ${stateCode || "unknown"}`,
-    administrativeRegionCode,
-    administrativeRegionName: record[8],
-    districtCode,
-    districtName: record[9],
-    municipalityCode,
-    municipalityName: record[10],
-    year: record[11],
-    month: record[12],
-    day: record[13],
-    hour: record[14],
-    weekday: record[15],
-    category: record[16],
-    accidentKind: record[17],
-    accidentType: record[18],
-    lightCondition: record[19],
-    roadSurface: record[20],
-    plausibilityLevel: record[21],
-    linRefX: record[22],
-    linRefY: record[23],
-    lon: record[24],
-    lat: record[25],
-    involvesBike: record[26],
-    involvesPedestrian: record[27],
-    involvesMotorcycle: record[28],
-    involvesCar: record[29],
-    involvesTruck: record[30],
-    involvesOther: record[31]
-  };
-}
-
-function decodeBase64Chunks(chunks: string[]): Uint8Array {
-  const decodedChunks = chunks.map((chunk) => {
-    const binary = atob(chunk);
-    const bytes = new Uint8Array(binary.length);
-    for (let index = 0; index < binary.length; index += 1) {
-      bytes[index] = binary.charCodeAt(index);
-    }
-    return bytes;
-  });
-  const length = decodedChunks.reduce((total, chunk) => total + chunk.byteLength, 0);
-  const output = new Uint8Array(length);
-  let offset = 0;
-
-  for (const chunk of decodedChunks) {
-    output.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-
-  return output;
+  return dataRepository.loadAccidentsForState(stateCode, repositoryTelemetry(telemetry));
 }
 
 function formatInteger(value: number): string {
@@ -5285,13 +4706,7 @@ async function writePostRenderCaches(telemetry: InitializationTelemetry | null, 
         telemetry,
         "write analysis cache",
         analysisTelemetryDetail(writes.analysis.options),
-        () =>
-          writeAnalysisCache(
-            writes.analysis!.cacheContext.dataVersion,
-            writes.analysis!.cacheContext.appVersion,
-            writes.analysis!.options,
-            writes.analysis!.result
-          ),
+        () => dataRepository.writeCachedAnalysis(writes.analysis!.cacheContext, writes.analysis!.options, writes.analysis!.result),
         () => ({
           clusterCount: writes.analysis?.result.clusters.length ?? 0,
           afterFirstRender: true
