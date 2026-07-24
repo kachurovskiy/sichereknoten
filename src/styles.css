@@ -1017,7 +1017,10 @@ button.map-service-link {
 }
 
 .details dt {
+  min-width: 0;
   color: #53636d;
+  overflow-wrap: anywhere;
+  hyphens: auto;
 }
 
 .details dd {
@@ -1827,7 +1830,7 @@ tbody tr:focus {
   }
 
   .details dl div {
-    grid-template-columns: 96px minmax(0, 1fr);
+    grid-template-columns: minmax(120px, 38%) minmax(0, 1fr);
   }
 
   .hotspot-button {

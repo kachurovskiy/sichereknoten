@@ -273,6 +273,7 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "details.title": "Selected intersection",
     "details.none": "No intersection selected.",
     "details.selectFirst": "Select an intersection first.",
+    "details.region": "Region",
     "details.state": "State",
     "details.adminRegion": "Administrative region",
     "details.district": "District",
@@ -283,6 +284,8 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "details.years": "Years",
     "details.accidents": "Accidents",
     "details.fatalSerious": "Fatal / serious",
+    "details.fatalCount": "fatal",
+    "details.seriousCount": "serious",
     "details.severityPercent": "Severity %",
     "metric.severityPercent": "Severity %",
     "metric.severity": "Severity",
@@ -565,6 +568,7 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "details.title": "Ausgewählte Kreuzung",
     "details.none": "Keine Kreuzung ausgewählt.",
     "details.selectFirst": "Wähle zuerst eine Kreuzung aus.",
+    "details.region": "Region",
     "details.state": "Bundesland",
     "details.adminRegion": "Regierungsbezirk",
     "details.district": "Kreis",
@@ -575,6 +579,8 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "details.years": "Jahre",
     "details.accidents": "Unfälle",
     "details.fatalSerious": "Tödlich / schwer",
+    "details.fatalCount": "tödlich",
+    "details.seriousCount": "schwer",
     "details.severityPercent": "Schweregrad %",
     "metric.severityPercent": "Schweregrad %",
     "metric.severity": "Schweregrad",
@@ -2793,15 +2799,11 @@ function renderSelectedPanelHtml(viewModel: SelectedIntersectionViewModel): stri
   const { cluster, urls, pressSearchUrl, streetNames, trendPanel, roadUserPanel, recordPanel } = viewModel;
   return `
       <dl>
-        <div><dt>${escapeHtml(tr("details.state"))}</dt><dd>${escapeHtml(cluster.stateName)}</dd></div>
-        ${cluster.administrativeRegionName ? `<div><dt>${escapeHtml(tr("details.adminRegion"))}</dt><dd>${escapeHtml(cluster.administrativeRegionName)}</dd></div>` : ""}
-        ${cluster.districtName ? `<div><dt>${escapeHtml(tr("details.district"))}</dt><dd>${escapeHtml(cluster.districtName)}</dd></div>` : ""}
-        ${cluster.municipalityName ? `<div><dt>${escapeHtml(tr("details.municipality"))}</dt><dd>${escapeHtml(cluster.municipalityName)}</dd></div>` : ""}
+        <div><dt>${escapeHtml(tr("details.region"))}</dt><dd>${escapeHtml(clusterAreaText(cluster))}</dd></div>
         ${renderClusterStreetDetailRow(streetNames)}
         <div><dt>${escapeHtml(tr("details.coordinates"))}</dt><dd>${cluster.lat.toFixed(5)}, ${cluster.lon.toFixed(5)}</dd></div>
         <div><dt>${escapeHtml(tr("details.years"))}</dt><dd>${escapeHtml(formatYearSelection(cluster.years))}</dd></div>
-        <div><dt>${escapeHtml(tr("details.accidents"))}</dt><dd>${formatInteger(cluster.accidentCount)}</dd></div>
-        <div><dt>${escapeHtml(tr("details.fatalSerious"))}</dt><dd>${formatInteger(cluster.fatalCount)} / ${formatInteger(cluster.seriousCount)}</dd></div>
+        <div><dt>${escapeHtml(tr("details.accidents"))}</dt><dd>${escapeHtml(selectedAccidentCountText(cluster))}</dd></div>
         <div><dt>${escapeHtml(tr("details.severityPercent"))}</dt><dd>${escapeHtml(formatSeverityPercentWithContext(cluster))}</dd></div>
       </dl>
       ${renderMapServiceActions(urls.openStreetMapUrl, urls.googleMapsUrl, urls.streetViewUrl)}
@@ -2810,6 +2812,10 @@ function renderSelectedPanelHtml(viewModel: SelectedIntersectionViewModel): stri
       ${roadUserPanel}
       ${recordPanel}
     `;
+}
+
+function selectedAccidentCountText(cluster: IntersectionCluster): string {
+  return `${formatInteger(cluster.accidentCount)} (${formatInteger(cluster.fatalCount)} ${tr("details.fatalCount")}, ${formatInteger(cluster.seriousCount)} ${tr("details.seriousCount")})`;
 }
 
 function renderClusterStreetDetailRow(streetNames: string[]): string {
@@ -3000,7 +3006,7 @@ function isCityTitleSuffix(value: string): boolean {
     .normalize("NFKD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLocaleLowerCase("de");
-  return normalized === "stadt" || normalized.endsWith("stadt");
+  return normalized === "stadt" || normalized.endsWith("stadt") || normalized.startsWith("stadt ");
 }
 
 function accidentSearchDateLabel(accident: AccidentRecord): string {
@@ -4650,9 +4656,51 @@ function localMeterOffset(center: { lat: number; lon: number }, point: { lat: nu
 }
 
 function clusterAreaText(cluster: IntersectionCluster): string {
+  const seen = new Set<string>();
   return [cluster.stateName, cluster.administrativeRegionName, cluster.districtName, cluster.municipalityName]
-    .filter((part, index, parts): part is string => Boolean(part) && parts.indexOf(part) === index)
+    .map((part) => (part ? cleanAreaNameForDisplay(part) : ""))
+    .filter((part): part is string => Boolean(part))
+    .filter((part) => {
+      const key = normalizedAreaNameKey(part);
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    })
     .join(", ");
+}
+
+function cleanAreaNameForDisplay(name: string): string {
+  const withoutAdministrativePrefix = name
+    .trim()
+    .replace(/^früher:\s*/i, "")
+    .replace(/^Reg\.-Bez\.\s*/i, "")
+    .replace(/^Regierungsbezirk\s+/i, "");
+  const parts = withoutAdministrativePrefix
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  while (parts.length > 1 && isOfficialAreaSuffix(parts[parts.length - 1])) {
+    parts.pop();
+  }
+
+  return parts.join(", ") || withoutAdministrativePrefix || name;
+}
+
+function isOfficialAreaSuffix(value: string): boolean {
+  const normalized = normalizedAreaNameKey(value);
+  return isCityTitleSuffix(value) || normalized === "stadtkreis" || normalized === "landkreis" || normalized === "kreisfreie stadt";
+}
+
+function normalizedAreaNameKey(value: string): string {
+  return value
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLocaleLowerCase("de");
 }
 
 function factsheetPeriodLabel(cluster: IntersectionCluster, records: CrossingAccident[]): string {
