@@ -106,7 +106,7 @@ export class MapCanvas {
 
   setData(clusters: IntersectionCluster[]): void {
     this.clusters = clusters;
-    this.maxSeverityPercent = Math.max(0.01, ...clusters.map((cluster) => cluster.severityPercent));
+    this.maxSeverityPercent = maxClusterSeverityPercent(clusters, 0.01);
     this.projectedClusters = clusters
       .map((cluster) => ({ cluster, projected: project(cluster.lon, cluster.lat) }))
       .sort((a, b) => drawPriority(a.cluster) - drawPriority(b.cluster));
@@ -343,9 +343,9 @@ export class MapCanvas {
   }
 
   private fit(): void {
-    const projected = this.projectedClusters.filter((point) => this.shouldShowCluster(point.cluster)).map((point) => point.projected);
+    const bounds = this.visibleProjectedBounds();
 
-    if (projected.length === 0) {
+    if (!bounds) {
       this.bounds = null;
       if (this.userLocation) {
         this.scale = 4_000_000;
@@ -358,11 +358,8 @@ export class MapCanvas {
       return;
     }
 
-    const minX = Math.min(...projected.map((point) => point.x));
-    const maxX = Math.max(...projected.map((point) => point.x));
-    const minY = Math.min(...projected.map((point) => point.y));
-    const maxY = Math.max(...projected.map((point) => point.y));
-    this.bounds = { minX, maxX, minY, maxY };
+    const { minX, maxX, minY, maxY } = bounds;
+    this.bounds = bounds;
     const pad = 64 * window.devicePixelRatio;
     const width = Math.max(maxX - minX, 0.0001);
     const height = Math.max(maxY - minY, 0.0001);
@@ -690,7 +687,33 @@ export class MapCanvas {
     if (visibleClusters.length === 0) {
       return this.maxSeverityPercent;
     }
-    return Math.max(0.01, ...visibleClusters.map((item) => item.cluster.severityPercent));
+    let maxSeverityPercent = 0.01;
+    for (const item of visibleClusters) {
+      maxSeverityPercent = Math.max(maxSeverityPercent, item.cluster.severityPercent);
+    }
+    return maxSeverityPercent;
+  }
+
+  private visibleProjectedBounds(): { minX: number; maxX: number; minY: number; maxY: number } | null {
+    let bounds: { minX: number; maxX: number; minY: number; maxY: number } | null = null;
+
+    for (const point of this.projectedClusters) {
+      if (!this.shouldShowCluster(point.cluster)) {
+        continue;
+      }
+
+      const { x, y } = point.projected;
+      if (!bounds) {
+        bounds = { minX: x, maxX: x, minY: y, maxY: y };
+      } else {
+        bounds.minX = Math.min(bounds.minX, x);
+        bounds.maxX = Math.max(bounds.maxX, x);
+        bounds.minY = Math.min(bounds.minY, y);
+        bounds.maxY = Math.max(bounds.maxY, y);
+      }
+    }
+
+    return bounds;
   }
 
   private isVisible(point: ProjectedPoint): boolean {
@@ -751,6 +774,14 @@ function pointerCenter(a: ProjectedPoint, b: ProjectedPoint): ProjectedPoint {
 
 function drawPriority(cluster: IntersectionCluster): number {
   return cluster.severityPercent + Math.min(10, cluster.accidentCount) * 0.001;
+}
+
+function maxClusterSeverityPercent(clusters: IntersectionCluster[], fallback: number): number {
+  let maxSeverityPercent = fallback;
+  for (const cluster of clusters) {
+    maxSeverityPercent = Math.max(maxSeverityPercent, cluster.severityPercent);
+  }
+  return maxSeverityPercent;
 }
 
 function compareSeverityMetric(a: IntersectionCluster, b: IntersectionCluster): number {

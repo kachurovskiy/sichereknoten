@@ -63,7 +63,7 @@ export async function readParsedDataCache(version: string, onProgress: CacheProg
         db.close();
         return null;
       }
-      accidents.push(...chunk);
+      appendItems(accidents, chunk);
       onProgress(`Loading cached accidents ${index + 1}/${meta.accidentChunks}.`, Math.min(45, 8 + index));
       await yieldToBrowser();
     }
@@ -321,6 +321,12 @@ function analysisOptionsKey(options: AnalysisOptions): string {
     `trendMax=${options.severityPercent.maxTrendAdjustment}`,
     `severityCap=${options.severityPercent.maxSeverityPercent}`
   ].join("|");
+}
+
+function appendItems<T>(target: T[], items: T[]): void {
+  for (const item of items) {
+    target.push(item);
+  }
 }
 
 function yieldToBrowser(delayMs = 0): Promise<void> {

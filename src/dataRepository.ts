@@ -381,7 +381,7 @@ export class DataRepository {
         const shard = await shardLoadPromises[index];
         const records = await this.readBundledAccidentRecords(shard, telemetry, shardFiles.length);
         this.accidentStateRecords.set(shard.stateCode, records);
-        loadedAccidents.push(...records);
+        appendItems(loadedAccidents, records);
         onProgress?.({ current: index + 1, total: shardFiles.length });
       }
 
@@ -400,7 +400,7 @@ export class DataRepository {
     for (let index = 0; index < totalChunks; index += 1) {
       const chunk = chunkLoadPromises.length > 0 ? await chunkLoadPromises[index] : preloadedChunks[index];
       const records = await this.readBundledAccidentRecords(chunk, telemetry, totalChunks);
-      loadedAccidents.push(...records);
+      appendItems(loadedAccidents, records);
       onProgress?.({ current: index + 1, total: totalChunks });
     }
 
@@ -704,6 +704,12 @@ function serializeAnalysisOptionsForBundle(options: AnalysisOptions): Serialized
 
 function uniqueStrings(values: string[]): string[] {
   return Array.from(new Set(values));
+}
+
+function appendItems<T>(target: T[], items: T[]): void {
+  for (const item of items) {
+    target.push(item);
+  }
 }
 
 function errorMessage(error: unknown): string {

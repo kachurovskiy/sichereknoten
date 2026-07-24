@@ -36,7 +36,9 @@ export class GeoGridIndex<T extends GeoPoint> {
       for (let dy = -1; dy <= 1; dy += 1) {
         const bucket = this.buckets.get(this.key(cell.cx + dx, cell.cy + dy));
         if (bucket) {
-          items.push(...bucket);
+          for (const item of bucket) {
+            items.push(item);
+          }
         }
       }
     }

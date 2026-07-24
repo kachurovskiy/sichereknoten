@@ -57,7 +57,9 @@ export async function parseAccidentDbfFiles(files: File[], onProgress: ProgressC
 
   for (const file of dbfFiles) {
     const parsed = await parseDbfAccidents(file, onProgress);
-    accidents.push(...parsed);
+    for (const accident of parsed) {
+      accidents.push(accident);
+    }
   }
 
   return accidents;

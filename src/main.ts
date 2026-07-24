@@ -2711,7 +2711,7 @@ function chooseSelectedPreviewMapZoom(
 ): number {
   const offsets = incidentPoints.map((point) => localMeterOffset(cluster, point));
   const baseRadiusMeters = Math.max(55, committedAnalysis?.options.clusterRadiusMeters ?? 50);
-  const radiusMeters = Math.max(baseRadiusMeters, ...offsets.flatMap((offset) => [Math.abs(offset.x), Math.abs(offset.y)])) + 24;
+  const radiusMeters = maxAbsoluteOffset(baseRadiusMeters, offsets) + 24;
   const usableWidth = Math.max(120, width - 36);
   const usableHeight = Math.max(80, height - 36);
 
@@ -3688,7 +3688,7 @@ function renderTrendChart(series: ClusterYearStat[], direction: AccidentTrendDir
   }
 
   const chart = { left: 38, top: 12, width: 218, height: 80, bottom: 92 };
-  const maxAccidents = Math.max(1, ...series.map((point) => point.accidentCount));
+  const maxAccidents = maxSeriesAccidents(series, 1);
   const yAxisTicks = uniqueNumbers([0, Math.ceil(maxAccidents / 2), maxAccidents]).sort((a, b) => b - a);
 
   const plotted = series.map((point, index): TrendSeriesPoint => {
@@ -4169,7 +4169,7 @@ function drawFactsheetTrendChart(
   };
   const chartWidth = chart.right - chart.left;
   const chartHeight = chart.bottom - chart.top;
-  const maxAccidents = Math.max(1, ...series.map((point) => point.accidentCount));
+  const maxAccidents = maxSeriesAccidents(series, 1);
   const yAxisTicks = uniqueNumbers([0, Math.ceil(maxAccidents / 2), maxAccidents]).sort((a, b) => a - b);
 
   context.font = factsheetFont(18, 500);
@@ -4604,7 +4604,7 @@ function drawFactsheetMapAttribution(context: CanvasRenderingContext2D, x: numbe
 
 function chooseFactsheetMapZoom(cluster: IntersectionCluster, records: CrossingAccident[], width: number, height: number): number {
   const offsets = records.map(({ accident }) => localMeterOffset(cluster, accident));
-  const radiusMeters = Math.max(90, ...offsets.flatMap((offset) => [Math.abs(offset.x), Math.abs(offset.y)])) + 70;
+  const radiusMeters = maxAbsoluteOffset(90, offsets) + 70;
   for (let zoom = 19; zoom >= 10; zoom -= 1) {
     const metersPerPixel = (156_543.03392 * Math.cos(radians(cluster.lat))) / 2 ** zoom;
     if (width * metersPerPixel >= radiusMeters * 2 && height * metersPerPixel >= radiusMeters * 2) {
@@ -4653,6 +4653,22 @@ function localMeterOffset(center: { lat: number; lon: number }, point: { lat: nu
     x: (point.lon - center.lon) * 111_320 * Math.cos(radians(center.lat)),
     y: (point.lat - center.lat) * 110_540
   };
+}
+
+function maxAbsoluteOffset(fallback: number, offsets: Array<{ x: number; y: number }>): number {
+  let maximum = fallback;
+  for (const offset of offsets) {
+    maximum = Math.max(maximum, Math.abs(offset.x), Math.abs(offset.y));
+  }
+  return maximum;
+}
+
+function maxSeriesAccidents(series: ClusterYearStat[], fallback: number): number {
+  let maximum = fallback;
+  for (const point of series) {
+    maximum = Math.max(maximum, point.accidentCount);
+  }
+  return maximum;
 }
 
 function clusterAreaText(cluster: IntersectionCluster): string {
