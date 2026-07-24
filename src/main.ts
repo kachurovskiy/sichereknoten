@@ -31,12 +31,14 @@ import {
   ClusterYearStat,
   SeverityPercentOptions,
   IntersectionCluster,
+  PopulationAccidentSummary,
   RoadUserKey
 } from "./types";
 
 const TABLE_ROWS_PER_STATE = 10;
 const STATE_BROWSE_MIN_SEVERITY_PERCENT = 0.1;
 const STATE_BROWSE_MAX_INTERSECTIONS = 100;
+const POPULATION_RATE_DENOMINATOR = 100_000;
 
 declare const __SICHERE_KNOTEN_APP_VERSION__: string | undefined;
 declare const __SICHERE_KNOTEN_ANALYSIS_CACHE_VERSION__: string | undefined;
@@ -281,10 +283,34 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "stateChart.aria": "Average severity percentage among top ranked intersections by state",
     "stateChart.xAxis": "Top-N ranked intersections",
     "stateChart.yAxis": "Avg. severity %",
+    "statePopulation.title": "Accidents per population",
+    "statePopulation.caption": "Filtered accident outcomes per 100,000 residents by state",
     "regionChart.title": "Average severity by ranked intersections",
     "regionChart.caption": "Smoothed Top-N average per region",
     "regionChart.empty": "Run an analysis to show ranked intersection severity by region.",
     "regionChart.aria": "Average severity percentage among top ranked intersections by region",
+    "regionPopulation.title": "Accidents per population",
+    "regionPopulation.caption": "Filtered accident outcomes per 100,000 residents by region",
+    "populationRate.empty": "Run an analysis to show accident rates per population.",
+    "populationRate.area": "Area",
+    "populationRate.outcomeMix": "Outcome mix / 100k",
+    "populationRate.total": "Total / 100k",
+    "populationRate.fatal": "Fatal / 100k",
+    "populationRate.serious": "Serious / 100k",
+    "populationRate.other": "Other / 100k",
+    "populationRate.population": "Population",
+    "stateScatter.title": "Population-scaled outcome rates",
+    "stateScatter.caption": "Total accident rate compared with fatal and serious injury rates",
+    "regionScatter.title": "Population-scaled outcome rates",
+    "regionScatter.caption": "Total accident rate compared with fatal and serious injury rates",
+    "populationScatter.empty": "Run an analysis to show population-scaled outcome charts.",
+    "populationScatter.fatalTitle": "Fatal accidents by total accident rate",
+    "populationScatter.seriousTitle": "Serious injury accidents by total accident rate",
+    "populationScatter.fatalVsSeriousTitle": "Fatal accidents by serious injury rate",
+    "populationScatter.xAxis": "Total accidents / 100k",
+    "populationScatter.fatalYAxis": "Fatal / 100k",
+    "populationScatter.seriousYAxis": "Serious / 100k",
+    "populationScatter.sizeLegend": "Bubble size: population",
     "severity.fatal": "Fatal",
     "severity.serious": "Serious",
     "severity.light": "Light",
@@ -591,10 +617,34 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "stateChart.aria": "Mittlerer Schweregrad-Prozentwert unter den ranghoechsten Kreuzungen je Bundesland",
     "stateChart.xAxis": "Top-N Kreuzungen nach Rang",
     "stateChart.yAxis": "Mittl. Schweregrad %",
+    "statePopulation.title": "Unfaelle je Einwohnerzahl",
+    "statePopulation.caption": "Gefilterte Unfallfolgen je 100.000 Einwohner nach Bundesland",
     "regionChart.title": "Mittlerer Schweregrad nach Kreuzungsrang",
     "regionChart.caption": "Geglaetteter Top-N-Mittelwert je Region",
     "regionChart.empty": "Führe eine Analyse aus, um den Schweregrad nach Kreuzungsrang je Region zu sehen.",
     "regionChart.aria": "Mittlerer Schweregrad-Prozentwert unter den ranghoechsten Kreuzungen je Region",
+    "regionPopulation.title": "Unfaelle je Einwohnerzahl",
+    "regionPopulation.caption": "Gefilterte Unfallfolgen je 100.000 Einwohner nach Region",
+    "populationRate.empty": "Fuehre eine Analyse aus, um Unfallraten je Einwohnerzahl zu sehen.",
+    "populationRate.area": "Gebiet",
+    "populationRate.outcomeMix": "Folgenmix / 100k",
+    "populationRate.total": "Gesamt / 100k",
+    "populationRate.fatal": "Toedlich / 100k",
+    "populationRate.serious": "Schwer / 100k",
+    "populationRate.other": "Andere / 100k",
+    "populationRate.population": "Einwohner",
+    "stateScatter.title": "Einwohnergewichtete Unfallraten",
+    "stateScatter.caption": "Gesamtrate im Vergleich zu toedlichen und schweren Unfallraten",
+    "regionScatter.title": "Einwohnergewichtete Unfallraten",
+    "regionScatter.caption": "Gesamtrate im Vergleich zu toedlichen und schweren Unfallraten",
+    "populationScatter.empty": "Fuehre eine Analyse aus, um einwohnergewichtete Unfallraten zu sehen.",
+    "populationScatter.fatalTitle": "Toedliche Unfaelle nach Gesamtunfallrate",
+    "populationScatter.seriousTitle": "Schwere Unfaelle nach Gesamtunfallrate",
+    "populationScatter.fatalVsSeriousTitle": "Toedliche Unfaelle nach schwerer Unfallrate",
+    "populationScatter.xAxis": "Unfaelle gesamt / 100k",
+    "populationScatter.fatalYAxis": "Toedlich / 100k",
+    "populationScatter.seriousYAxis": "Schwer / 100k",
+    "populationScatter.sizeLegend": "Punktgroesse: Einwohner",
     "severity.fatal": "Tödlich",
     "severity.serious": "Schwer",
     "severity.light": "Leicht",
@@ -929,6 +979,27 @@ interface RegionSummaryAccumulator extends RegionSummary {
   weightedSeverityPercent: number;
 }
 
+interface PopulationRateRow {
+  name: string;
+  secondaryLabel: string | null;
+  population: number;
+  totalRate: number;
+  fatalRate: number;
+  seriousRate: number;
+  otherRate: number;
+}
+
+type PopulationScatterMetric = "total" | "fatal" | "serious";
+
+interface PopulationScatterChartConfig {
+  titleKey: string;
+  xMetric: PopulationScatterMetric;
+  yMetric: PopulationScatterMetric;
+  xMax: number;
+  yMax: number;
+  pointClass: string;
+}
+
 interface BrowseIndex {
   clusters: IntersectionCluster[];
   regionSummaries: RegionSummary[];
@@ -1095,7 +1166,11 @@ const elements = {
   browseRegion: byId<HTMLSelectElement>("browseRegion"),
   stateHotspotList: byId<HTMLDivElement>("stateHotspotList"),
   stateRankChart: byId<HTMLDivElement>("stateRankChart"),
+  statePopulationRates: byId<HTMLDivElement>("statePopulationRates"),
+  statePopulationScatter: byId<HTMLDivElement>("statePopulationScatter"),
   regionRankChart: byId<HTMLDivElement>("regionRankChart"),
+  regionPopulationRates: byId<HTMLDivElement>("regionPopulationRates"),
+  regionPopulationScatter: byId<HTMLDivElement>("regionPopulationScatter"),
   clusterTableBody: byId<HTMLTableSectionElement>("clusterTableBody"),
   exploreTab: byId<HTMLButtonElement>("exploreTab"),
   mapTab: byId<HTMLButtonElement>("mapTab"),
@@ -2147,6 +2222,10 @@ function renderTables(): void {
   updateClusterSortHeaders();
   renderStateRankChart();
   renderRegionRankChart();
+  renderStatePopulationRates();
+  renderRegionPopulationRates();
+  renderStatePopulationScatter();
+  renderRegionPopulationScatter();
   elements.clusterTableBody.innerHTML = "";
   if (!result) {
     return;
@@ -2195,6 +2274,282 @@ function renderStateRankChart(): void {
 
 function renderRegionRankChart(): void {
   renderRankChart(elements.regionRankChart, result ? regionRankChartSeries() : [], "regionChart.empty", "regionChart.aria");
+}
+
+function renderStatePopulationRates(): void {
+  renderPopulationRateComparison(elements.statePopulationRates, result?.stateAccidentSummaries ?? [], false);
+}
+
+function renderRegionPopulationRates(): void {
+  renderPopulationRateComparison(elements.regionPopulationRates, result?.regionAccidentSummaries ?? [], true);
+}
+
+function renderStatePopulationScatter(): void {
+  renderPopulationScatterComparison(elements.statePopulationScatter, result?.stateAccidentSummaries ?? [], false);
+}
+
+function renderRegionPopulationScatter(): void {
+  renderPopulationScatterComparison(elements.regionPopulationScatter, result?.regionAccidentSummaries ?? [], true);
+}
+
+function renderPopulationScatterComparison(container: HTMLElement, summaries: PopulationAccidentSummary[], showStateLabel: boolean): void {
+  const rows = populationRateRows(summaries, showStateLabel);
+  if (!result || rows.length === 0) {
+    container.innerHTML = `<p class="population-rate-empty">${escapeHtml(tr("populationScatter.empty"))}</p>`;
+    return;
+  }
+
+  const totalMax = niceRateChartMax(Math.max(...rows.map((row) => row.totalRate)));
+  const fatalMax = niceRateChartMax(Math.max(...rows.map((row) => row.fatalRate)));
+  const seriousMax = niceRateChartMax(Math.max(...rows.map((row) => row.seriousRate)));
+  const charts: PopulationScatterChartConfig[] = [
+    {
+      titleKey: "populationScatter.fatalTitle",
+      xMetric: "total",
+      yMetric: "fatal",
+      xMax: totalMax,
+      yMax: fatalMax,
+      pointClass: "fatal"
+    },
+    {
+      titleKey: "populationScatter.seriousTitle",
+      xMetric: "total",
+      yMetric: "serious",
+      xMax: totalMax,
+      yMax: seriousMax,
+      pointClass: "serious"
+    },
+    {
+      titleKey: "populationScatter.fatalVsSeriousTitle",
+      xMetric: "serious",
+      yMetric: "fatal",
+      xMax: seriousMax,
+      yMax: fatalMax,
+      pointClass: "comparison"
+    }
+  ];
+  container.innerHTML = `
+    <div class="population-scatter-size-legend">${escapeHtml(tr("populationScatter.sizeLegend"))}</div>
+    <div class="population-scatter-plots">
+      ${charts.map((chart) => renderPopulationScatterChart(rows, chart)).join("")}
+    </div>
+  `;
+}
+
+function renderPopulationScatterChart(rows: PopulationRateRow[], config: PopulationScatterChartConfig): string {
+  return `
+    <section class="population-scatter-chart">
+      <h3>${escapeHtml(tr(config.titleKey))}</h3>
+      ${renderPopulationScatterSvg(rows, config)}
+    </section>
+  `;
+}
+
+function renderPopulationScatterSvg(rows: PopulationRateRow[], config: PopulationScatterChartConfig): string {
+  const width = 760;
+  const height = 420;
+  const chart = { left: 62, right: 22, top: 20, bottom: 350 };
+  const chartWidth = width - chart.left - chart.right;
+  const chartHeight = chart.bottom - chart.top;
+  const xTicks = uniqueNumbers([0, config.xMax / 2, config.xMax]).sort((a, b) => a - b);
+  const yTicks = uniqueNumbers([0, config.yMax / 2, config.yMax]).sort((a, b) => a - b);
+  const populations = rows.map((row) => row.population);
+  const minPopulation = Math.min(...populations);
+  const maxPopulation = Math.max(...populations);
+  const xForRate = (rate: number) => chart.left + (rate / config.xMax) * chartWidth;
+  const yForRate = (rate: number) => chart.bottom - (rate / config.yMax) * chartHeight;
+  const xAxisTicks = xTicks
+    .map((rate) => {
+      const x = xForRate(rate);
+      return `
+        <line class="population-scatter-grid-line" x1="${round(x, 1)}" y1="${chart.top}" x2="${round(x, 1)}" y2="${chart.bottom}"></line>
+        <text class="population-scatter-tick" x="${round(x, 1)}" y="${chart.bottom + 19}" text-anchor="middle">${formatRate(rate)}</text>
+      `;
+    })
+    .join("");
+  const yAxisTicks = yTicks
+    .map((rate) => {
+      const y = yForRate(rate);
+      return `
+        <line class="population-scatter-grid-line" x1="${chart.left}" y1="${round(y, 1)}" x2="${width - chart.right}" y2="${round(y, 1)}"></line>
+        <text class="population-scatter-tick" x="${chart.left - 10}" y="${round(y + 4, 1)}" text-anchor="end">${formatRate(rate)}</text>
+      `;
+    })
+    .join("");
+  const points = [...rows]
+    .sort((a, b) => b.population - a.population)
+    .map((row) => {
+      const xRate = populationScatterMetricValue(row, config.xMetric);
+      const yRate = populationScatterMetricValue(row, config.yMetric);
+      const label = populationScatterPointLabel(row, config);
+      return `
+        <circle class="population-scatter-point population-scatter-point-${config.pointClass}" cx="${round(xForRate(xRate), 1)}" cy="${round(yForRate(yRate), 1)}" r="${round(populationScatterRadius(row.population, minPopulation, maxPopulation), 1)}" tabindex="0" aria-label="${escapeHtml(label)}">
+          <title>${escapeHtml(label)}</title>
+        </circle>
+      `;
+    })
+    .join("");
+  const ariaLabel = `${tr(config.titleKey)}: ${tr("populationScatter.sizeLegend")}`;
+
+  return `
+    <svg class="population-scatter-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(ariaLabel)}">
+      ${xAxisTicks}
+      ${yAxisTicks}
+      <line class="population-scatter-axis" x1="${chart.left}" y1="${chart.top}" x2="${chart.left}" y2="${chart.bottom}"></line>
+      <line class="population-scatter-axis" x1="${chart.left}" y1="${chart.bottom}" x2="${width - chart.right}" y2="${chart.bottom}"></line>
+      ${points}
+      <text class="population-scatter-axis-label" x="${chart.left + chartWidth / 2}" y="${height - 10}" text-anchor="middle">${escapeHtml(populationScatterAxisLabel(config.xMetric))}</text>
+      <text class="population-scatter-axis-label" x="16" y="${chart.top + chartHeight / 2}" text-anchor="middle" transform="rotate(-90 16 ${chart.top + chartHeight / 2})">${escapeHtml(populationScatterAxisLabel(config.yMetric))}</text>
+    </svg>
+  `;
+}
+
+function populationScatterMetricValue(row: PopulationRateRow, metric: PopulationScatterMetric): number {
+  if (metric === "fatal") {
+    return row.fatalRate;
+  }
+  if (metric === "serious") {
+    return row.seriousRate;
+  }
+  return row.totalRate;
+}
+
+function populationScatterAxisLabel(metric: PopulationScatterMetric): string {
+  if (metric === "fatal") {
+    return tr("populationRate.fatal");
+  }
+  if (metric === "serious") {
+    return tr("populationRate.serious");
+  }
+  return tr("populationRate.total");
+}
+
+function populationScatterPointLabel(row: PopulationRateRow, config: PopulationScatterChartConfig): string {
+  const areaLabel = row.secondaryLabel ? `${row.name}, ${row.secondaryLabel}` : row.name;
+  const xRate = populationScatterMetricValue(row, config.xMetric);
+  const yRate = populationScatterMetricValue(row, config.yMetric);
+  return `${areaLabel}: ${formatRate(xRate)} ${populationScatterAxisLabel(config.xMetric)}, ${formatRate(yRate)} ${populationScatterAxisLabel(config.yMetric)}, ${tr("populationRate.population")}: ${formatInteger(row.population)}`;
+}
+
+function populationScatterRadius(population: number, minPopulation: number, maxPopulation: number): number {
+  if (maxPopulation <= minPopulation) {
+    return 9;
+  }
+  const minSqrt = Math.sqrt(minPopulation);
+  const maxSqrt = Math.sqrt(maxPopulation);
+  const normalized = (Math.sqrt(population) - minSqrt) / (maxSqrt - minSqrt);
+  return 5 + normalized * 12;
+}
+
+function renderPopulationRateComparison(container: HTMLElement, summaries: PopulationAccidentSummary[], showStateLabel: boolean): void {
+  const rows = populationRateRows(summaries, showStateLabel);
+  if (!result || rows.length === 0) {
+    container.innerHTML = `<p class="population-rate-empty">${escapeHtml(tr("populationRate.empty"))}</p>`;
+    return;
+  }
+
+  const maxTotalRate = Math.max(1, ...rows.map((row) => row.totalRate));
+  container.innerHTML = `
+    ${renderPopulationRateLegend()}
+    <div class="population-rate-table" role="table">
+      <div class="population-rate-row population-rate-row-header" role="row">
+        <div role="columnheader">${escapeHtml(tr("populationRate.area"))}</div>
+        <div role="columnheader">${escapeHtml(tr("populationRate.outcomeMix"))}</div>
+        <div role="columnheader">${escapeHtml(tr("populationRate.total"))}</div>
+        <div role="columnheader">${escapeHtml(tr("populationRate.fatal"))}</div>
+        <div role="columnheader">${escapeHtml(tr("populationRate.serious"))}</div>
+        <div role="columnheader">${escapeHtml(tr("populationRate.other"))}</div>
+        <div role="columnheader">${escapeHtml(tr("populationRate.population"))}</div>
+      </div>
+      ${rows.map((row) => renderPopulationRateRow(row, maxTotalRate)).join("")}
+    </div>
+  `;
+}
+
+function populationRateRows(summaries: PopulationAccidentSummary[], showStateLabel: boolean): PopulationRateRow[] {
+  return summaries
+    .filter((summary) => typeof summary.population === "number" && summary.population > 0 && summary.accidentCount > 0)
+    .map((summary) => {
+      const population = summary.population as number;
+      const otherCount = Math.max(0, summary.accidentCount - summary.fatalCount - summary.seriousCount);
+      const name = cleanAreaNameForDisplay(summary.name);
+      const secondaryLabel = showStateLabel && name !== summary.stateName ? summary.stateName : null;
+      return {
+        name,
+        secondaryLabel,
+        population,
+        totalRate: accidentRate(summary.accidentCount, population),
+        fatalRate: accidentRate(summary.fatalCount, population),
+        seriousRate: accidentRate(summary.seriousCount, population),
+        otherRate: accidentRate(otherCount, population)
+      };
+    })
+    .sort(comparePopulationRateRows);
+}
+
+function comparePopulationRateRows(a: PopulationRateRow, b: PopulationRateRow): number {
+  return (
+    b.totalRate - a.totalRate ||
+    b.fatalRate - a.fatalRate ||
+    b.seriousRate - a.seriousRate ||
+    a.name.localeCompare(b.name, "de", { sensitivity: "base" })
+  );
+}
+
+function renderPopulationRateLegend(): string {
+  return `
+    <div class="population-rate-legend" aria-hidden="true">
+      <span class="population-rate-legend-item"><span class="population-rate-swatch population-rate-fatal"></span>${escapeHtml(tr("severity.fatal"))}</span>
+      <span class="population-rate-legend-item"><span class="population-rate-swatch population-rate-serious"></span>${escapeHtml(tr("severity.serious"))}</span>
+      <span class="population-rate-legend-item"><span class="population-rate-swatch population-rate-other"></span>${escapeHtml(tr("severity.other"))}</span>
+    </div>
+  `;
+}
+
+function renderPopulationRateRow(row: PopulationRateRow, maxTotalRate: number): string {
+  const title = `${row.name}: ${formatRate(row.totalRate)} ${tr("populationRate.total")}, ${formatRate(row.fatalRate)} ${tr("populationRate.fatal")}, ${formatRate(row.seriousRate)} ${tr("populationRate.serious")}, ${formatRate(row.otherRate)} ${tr("populationRate.other")}`;
+  return `
+    <div class="population-rate-row" role="row">
+      <div class="population-rate-area" role="cell">
+        <strong>${escapeHtml(row.name)}</strong>
+        ${row.secondaryLabel ? `<span>${escapeHtml(row.secondaryLabel)}</span>` : ""}
+      </div>
+      <div class="population-rate-bar-cell" role="cell">
+        <div class="population-rate-bar-track" title="${escapeHtml(title)}">
+          ${populationRateSegment("fatal", row.fatalRate, maxTotalRate)}
+          ${populationRateSegment("serious", row.seriousRate, maxTotalRate)}
+          ${populationRateSegment("other", row.otherRate, maxTotalRate)}
+        </div>
+      </div>
+      <div class="population-rate-number population-rate-total" role="cell">${formatRate(row.totalRate)}</div>
+      <div class="population-rate-number" role="cell">${formatRate(row.fatalRate)}</div>
+      <div class="population-rate-number" role="cell">${formatRate(row.seriousRate)}</div>
+      <div class="population-rate-number" role="cell">${formatRate(row.otherRate)}</div>
+      <div class="population-rate-number" role="cell">${formatCompactPopulation(row.population)}</div>
+    </div>
+  `;
+}
+
+function populationRateSegment(kind: "fatal" | "serious" | "other", rate: number, maxTotalRate: number): string {
+  if (rate <= 0) {
+    return "";
+  }
+  const width = Math.max(0, Math.min(100, (rate / maxTotalRate) * 100));
+  return `<span class="population-rate-segment population-rate-${kind}" style="width: ${round(width, 2)}%; min-width: 2px"></span>`;
+}
+
+function accidentRate(count: number, population: number): number {
+  return (count / population) * POPULATION_RATE_DENOMINATOR;
+}
+
+function niceRateChartMax(maxRate: number): number {
+  if (!Number.isFinite(maxRate) || maxRate <= 0) {
+    return 1;
+  }
+  const magnitude = 10 ** Math.floor(Math.log10(maxRate));
+  const scaled = maxRate / magnitude;
+  const niceScaled = scaled <= 1 ? 1 : scaled <= 2 ? 2 : scaled <= 5 ? 5 : 10;
+  return niceScaled * magnitude;
 }
 
 function renderRankChart(container: HTMLElement, series: RankChartSeries[], emptyKey: string, ariaLabelKey: string): void {
@@ -5698,6 +6053,11 @@ function formatInteger(value: number): string {
 
 function formatCompactPopulation(value: number): string {
   return new Intl.NumberFormat(NUMBER_LOCALE, { maximumFractionDigits: 1, notation: "compact" }).format(value);
+}
+
+function formatRate(value: number): string {
+  const maximumFractionDigits = value >= 100 ? 0 : 1;
+  return new Intl.NumberFormat(NUMBER_LOCALE, { maximumFractionDigits }).format(value);
 }
 
 function formatNumber(value: number): string {

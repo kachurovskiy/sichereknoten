@@ -122,9 +122,23 @@ export interface StateSummary {
   topCluster: IntersectionCluster | null;
 }
 
+export interface PopulationAccidentSummary {
+  key: string;
+  name: string;
+  stateCode: string;
+  stateName: string;
+  population: number | null;
+  accidentCount: number;
+  fatalCount: number;
+  seriousCount: number;
+  lightCount: number;
+}
+
 export interface AnalysisResult {
   clusters: IntersectionCluster[];
   stateSummaries: StateSummary[];
+  stateAccidentSummaries: PopulationAccidentSummary[];
+  regionAccidentSummaries: PopulationAccidentSummary[];
   filteredAccidentCount: number;
   years: number[];
 }

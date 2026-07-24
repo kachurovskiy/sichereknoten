@@ -9,6 +9,7 @@ import {
   ClusterYearStat,
   SeverityPercentOptions,
   IntersectionCluster,
+  PopulationAccidentSummary,
   StateSummary
 } from "./types";
 
@@ -51,6 +52,8 @@ interface StateSummaryAccumulator extends StateSummary {
   yearStats: Map<number, ClusterYearAccumulator>;
 }
 
+interface PopulationAccidentSummaryAccumulator extends PopulationAccidentSummary {}
+
 export function analyzeDangerousIntersections(accidents: AccidentRecord[], options: AnalysisOptions): AnalysisResult {
   const filtered = accidents.filter((accident) => {
     if (options.years.size > 0 && !options.years.has(accident.year)) {
@@ -75,6 +78,8 @@ export function analyzeDangerousIntersections(accidents: AccidentRecord[], optio
   return {
     clusters,
     stateSummaries: summarizeStates(clusters, analysisYears, options.severityPercent),
+    stateAccidentSummaries: summarizeStateAccidents(filtered),
+    regionAccidentSummaries: summarizeRegionAccidents(filtered),
     filteredAccidentCount: filtered.length,
     years: analysisYears
   };
@@ -108,6 +113,8 @@ export function combineAnalysisResults(results: AnalysisResult[]): AnalysisResul
         };
       })
       .sort((a, b) => b.severityPercent - a.severityPercent || b.accidentCount - a.accidentCount),
+    stateAccidentSummaries: combinePopulationAccidentSummaries(results.flatMap((entry) => entry.stateAccidentSummaries ?? [])),
+    regionAccidentSummaries: combinePopulationAccidentSummaries(results.flatMap((entry) => entry.regionAccidentSummaries ?? [])),
     filteredAccidentCount: results.reduce((total, entry) => total + entry.filteredAccidentCount, 0),
     years
   };
@@ -471,6 +478,106 @@ function summarizeStates(
 function trendAnalysisYears(analysisYears: number[], options: SeverityPercentOptions): number[] {
   const trendYears = Math.max(2, Math.trunc(Number.isFinite(options.trendYears) ? options.trendYears : 4));
   return analysisYears.slice(-trendYears);
+}
+
+function summarizeStateAccidents(accidents: AccidentRecord[]): PopulationAccidentSummary[] {
+  const summaries = new Map<string, PopulationAccidentSummaryAccumulator>();
+  for (const accident of accidents) {
+    const summary =
+      summaries.get(accident.stateCode) ??
+      ({
+        key: accident.stateCode,
+        name: accident.stateName,
+        stateCode: accident.stateCode,
+        stateName: accident.stateName,
+        population: statePopulationFor(accident.stateCode),
+        accidentCount: 0,
+        fatalCount: 0,
+        seriousCount: 0,
+        lightCount: 0
+      } satisfies PopulationAccidentSummaryAccumulator);
+    addAccidentToPopulationSummary(summary, accident);
+    summaries.set(accident.stateCode, summary);
+  }
+  return Array.from(summaries.values()).sort(comparePopulationAccidentSummaries);
+}
+
+function summarizeRegionAccidents(accidents: AccidentRecord[]): PopulationAccidentSummary[] {
+  const summaries = new Map<string, PopulationAccidentSummaryAccumulator>();
+  for (const accident of accidents) {
+    const administrativeRegionPopulation = administrativeRegionPopulationFor(accident.stateCode, accident.administrativeRegionCode);
+    const hasAdministrativeRegionPopulation = administrativeRegionPopulation !== null;
+    const regionKey = hasAdministrativeRegionPopulation ? accidentRegionSummaryKey(accident) : `${accident.stateCode}:state`;
+    const population = hasAdministrativeRegionPopulation ? administrativeRegionPopulation : statePopulationFor(accident.stateCode);
+    const summary =
+      summaries.get(regionKey) ??
+      ({
+        key: regionKey,
+        name: hasAdministrativeRegionPopulation ? accident.administrativeRegionName ?? accident.stateName : accident.stateName,
+        stateCode: accident.stateCode,
+        stateName: accident.stateName,
+        population,
+        accidentCount: 0,
+        fatalCount: 0,
+        seriousCount: 0,
+        lightCount: 0
+      } satisfies PopulationAccidentSummaryAccumulator);
+    summary.population ??= population;
+    addAccidentToPopulationSummary(summary, accident);
+    summaries.set(regionKey, summary);
+  }
+  return Array.from(summaries.values()).sort(comparePopulationAccidentSummaries);
+}
+
+function combinePopulationAccidentSummaries(summaries: PopulationAccidentSummary[]): PopulationAccidentSummary[] {
+  const combined = new Map<string, PopulationAccidentSummaryAccumulator>();
+  for (const summary of summaries) {
+    const current =
+      combined.get(summary.key) ??
+      ({
+        key: summary.key,
+        name: summary.name,
+        stateCode: summary.stateCode,
+        stateName: summary.stateName,
+        population: summary.population,
+        accidentCount: 0,
+        fatalCount: 0,
+        seriousCount: 0,
+        lightCount: 0
+      } satisfies PopulationAccidentSummaryAccumulator);
+    current.population ??= summary.population;
+    current.accidentCount += summary.accidentCount;
+    current.fatalCount += summary.fatalCount;
+    current.seriousCount += summary.seriousCount;
+    current.lightCount += summary.lightCount;
+    combined.set(summary.key, current);
+  }
+  return Array.from(combined.values()).sort(comparePopulationAccidentSummaries);
+}
+
+function addAccidentToPopulationSummary(summary: PopulationAccidentSummaryAccumulator, accident: AccidentRecord): void {
+  summary.accidentCount += 1;
+  if (accident.category === 1) {
+    summary.fatalCount += 1;
+  } else if (accident.category === 2) {
+    summary.seriousCount += 1;
+  } else if (accident.category === 3) {
+    summary.lightCount += 1;
+  }
+}
+
+function accidentRegionSummaryKey(accident: AccidentRecord): string {
+  return `${accident.stateCode}:${accident.administrativeRegionCode ?? "state"}`;
+}
+
+function comparePopulationAccidentSummaries(a: PopulationAccidentSummary, b: PopulationAccidentSummary): number {
+  return (
+    b.accidentCount - a.accidentCount ||
+    b.fatalCount - a.fatalCount ||
+    b.seriousCount - a.seriousCount ||
+    a.stateName.localeCompare(b.stateName, "de", { sensitivity: "base" }) ||
+    a.name.localeCompare(b.name, "de", { sensitivity: "base" })
+  );
 }
 
 function mergeSummaryYearStats(target: Map<number, ClusterYearAccumulator>, yearlyStats: ClusterYearStat[]): void {

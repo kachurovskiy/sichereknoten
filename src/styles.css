@@ -1634,6 +1634,259 @@ button.map-service-link {
   display: none;
 }
 
+.population-rate-panel,
+.population-scatter-panel {
+  display: grid;
+  gap: 10px;
+  width: min(100%, 1000px);
+  max-width: 1000px;
+  min-width: 0;
+  padding: 14px 16px 12px;
+  border: 1px solid #d7ddd7;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.population-rate-header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.population-rate-header h2 {
+  margin: 0;
+  color: #172126;
+  font-size: 1rem;
+}
+
+.population-rate-header span,
+.population-rate-empty {
+  color: #53636d;
+  font-size: 0.84rem;
+}
+
+.population-rate-empty {
+  margin: 0;
+}
+
+.population-rate-chart {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.population-rate-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  color: #38454b;
+  font-size: 0.8rem;
+}
+
+.population-rate-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.population-rate-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+.population-rate-table {
+  display: grid;
+  min-width: 0;
+  overflow-x: auto;
+  border: 1px solid #e1e5df;
+  border-radius: 7px;
+}
+
+.population-rate-row {
+  display: grid;
+  grid-template-columns: minmax(190px, 1.25fr) minmax(180px, 1.7fr) repeat(4, minmax(62px, 0.45fr)) minmax(82px, 0.55fr);
+  min-width: 780px;
+  border-bottom: 1px solid #e5e9e4;
+  background: #ffffff;
+}
+
+.population-rate-row:last-child {
+  border-bottom: 0;
+}
+
+.population-rate-row > div {
+  min-width: 0;
+  padding: 8px 10px;
+  align-content: center;
+}
+
+.population-rate-row-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #f4f6f2;
+  color: #38454b;
+  font-size: 0.74rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.population-rate-area {
+  display: grid;
+  gap: 2px;
+}
+
+.population-rate-area strong {
+  min-width: 0;
+  color: #172126;
+  font-size: 0.86rem;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.population-rate-area span {
+  color: #53636d;
+  font-size: 0.76rem;
+}
+
+.population-rate-bar-cell {
+  display: grid;
+}
+
+.population-rate-bar-track {
+  display: flex;
+  width: 100%;
+  height: 22px;
+  overflow: hidden;
+  border: 1px solid #d7ddd7;
+  border-radius: 6px;
+  background: #eef2ef;
+}
+
+.population-rate-segment {
+  display: block;
+  height: 100%;
+}
+
+.population-rate-fatal {
+  background: #b9392b;
+}
+
+.population-rate-serious {
+  background: #bf8f2f;
+}
+
+.population-rate-other {
+  background: #166b6d;
+}
+
+.population-rate-number {
+  color: #38454b;
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.population-rate-total {
+  color: #172126;
+  font-weight: 700;
+}
+
+.population-scatter-grid {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.population-scatter-size-legend {
+  color: #53636d;
+  font-size: 0.8rem;
+}
+
+.population-scatter-plots {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+  min-width: 0;
+}
+
+.population-scatter-chart {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.population-scatter-chart h3 {
+  margin: 0;
+  color: #172126;
+  font-size: 0.88rem;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.population-scatter-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.population-scatter-grid-line,
+.population-scatter-axis {
+  stroke-width: 1;
+}
+
+.population-scatter-grid-line {
+  stroke: #e1e5df;
+}
+
+.population-scatter-axis {
+  stroke: #8fa09a;
+}
+
+.population-scatter-tick,
+.population-scatter-axis-label {
+  fill: #53636d;
+  font-size: 0.76rem;
+}
+
+.population-scatter-axis-label {
+  font-weight: 600;
+}
+
+.population-scatter-point {
+  stroke: #ffffff;
+  stroke-width: 1.6;
+  opacity: 0.78;
+  outline: none;
+  transition:
+    opacity 0.14s ease,
+    stroke-width 0.14s ease;
+}
+
+.population-scatter-point:hover,
+.population-scatter-point:focus-visible {
+  opacity: 1;
+  stroke-width: 2.4;
+}
+
+.population-scatter-point-fatal {
+  fill: #b9392b;
+}
+
+.population-scatter-point-serious {
+  fill: #bf8f2f;
+}
+
+.population-scatter-point-comparison {
+  fill: #8b3f7a;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
