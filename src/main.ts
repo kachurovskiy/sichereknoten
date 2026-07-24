@@ -43,7 +43,6 @@ declare const __SICHERE_KNOTEN_ANALYSIS_CACHE_VERSION__: string | undefined;
 
 type ClusterSortKey = "state" | "location" | "accidents" | "fatal" | "serious" | "severityPercent";
 type SortDirection = "asc" | "desc";
-type LoadingStepKey = "cache" | "parse" | "analyze";
 type SeverityFilterKey = "fatal" | "serious" | "other";
 type ViewKey = "explore" | "map" | "details" | "state" | "table" | "settings";
 type SelectionReason = "auto" | "program" | "user";
@@ -96,7 +95,6 @@ interface FactsheetPdfTextSpan {
   text: string;
 }
 
-const LOADING_STEP_ORDER: LoadingStepKey[] = ["cache", "parse", "analyze"];
 const MOBILE_LAYOUT_QUERY = "(max-width: 640px)";
 const FACTSHEET_PAGE_WIDTH = 1240;
 const FACTSHEET_PAGE_HEIGHT = 1754;
@@ -114,21 +112,33 @@ const APP_CACHE_VERSION =
 const ANALYSIS_CACHE_VERSION =
   typeof __SICHERE_KNOTEN_ANALYSIS_CACHE_VERSION__ === "string" ? __SICHERE_KNOTEN_ANALYSIS_CACHE_VERSION__ : APP_CACHE_VERSION;
 const STREET_VIEW_OPEN_STORAGE_KEY = "sichere-knoten:street-view-open";
+const LOADING_FACT_STORAGE_KEY = "sichere-knoten:loading-fact-index";
+const LOADING_FACT_META = "Germany · 2025 · Destatis";
+const LOADING_FACTS = [
+  "On an average day, 8 people died and more than 1,000 were injured in road crashes.",
+  "Police recorded about 2.52 million road crashes — nearly five every minute.",
+  "About three out of four recorded crashes happened within built-up areas.",
+  "Two thirds of all injured road users were hurt within built-up areas.",
+  "Within built-up areas, 63% of road deaths were pedestrians or cyclists.",
+  "Failure to yield was cited in 15% of crashes involving injury or death.",
+  "Speeding or inappropriate speed was involved in 29% of road deaths.",
+  "An alcohol-related crash occurred about every 15 minutes.",
+  "A child under 15 was injured in a road crash about every 18 minutes.",
+  "People aged 65 or older accounted for 39% of road deaths.",
+  "Serious injuries fell to about 49,200 — the lowest recorded level since 1991."
+];
 const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
   en: {
     "document.title": "Safe Intersections",
     "loading.preparing": "Preparing data",
     "loading.checkingBundled": "Checking bundled accident data.",
     "loading.bundle": "Automatic offline bundle",
-    "loading.step.cache": "Cache",
-    "loading.step.parse": "Parse",
-    "loading.step.analyze": "Analyze",
     "loading.title.problem": "Data load issue",
     "loading.title.idle": "No results yet",
     "loading.title.noMatches": "No matching intersections",
     "loading.title.ready": "Analysis ready",
-    "loading.title.cache": "Checking data cache",
-    "loading.title.parse": "Parsing accident records",
+    "loading.title.bundle": "Loading offline bundle",
+    "loading.title.result": "Preparing analysis result",
     "loading.title.analyze": "Analyzing intersections",
     "aria.sidebar": "Application sidebar",
     "aria.toolbar": "Workspace toolbar",
@@ -137,7 +147,7 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "aria.map": "High-severity intersections map",
     "aria.selectedDetails": "Selected intersection details",
     "aria.openMapServices": "Open selected intersection in map services",
-    "aria.loadingSteps": "Loading steps",
+    "aria.loadingFact": "Road safety fact",
     "brand.name": "Safe Intersections",
     "brand.description": "Explore German accident data to identify elevated-risk intersections by severity, location, and year.",
     "browse.title": "Browse by state",
@@ -415,15 +425,12 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "loading.preparing": "Daten werden vorbereitet",
     "loading.checkingBundled": "Gebündelte Unfalldaten werden geprüft.",
     "loading.bundle": "Automatisches Offline-Paket",
-    "loading.step.cache": "Cache",
-    "loading.step.parse": "Einlesen",
-    "loading.step.analyze": "Analyse",
     "loading.title.problem": "Problem beim Laden",
     "loading.title.idle": "Noch keine Ergebnisse",
     "loading.title.noMatches": "Keine passenden Kreuzungen",
     "loading.title.ready": "Analyse bereit",
-    "loading.title.cache": "Datencache wird geprüft",
-    "loading.title.parse": "Unfalldatensätze werden eingelesen",
+    "loading.title.bundle": "Offline-Bundle wird geladen",
+    "loading.title.result": "Analyseergebnis wird vorbereitet",
     "loading.title.analyze": "Kreuzungen werden analysiert",
     "aria.sidebar": "Anwendungsseitenleiste",
     "aria.toolbar": "Arbeitsbereich-Werkzeugleiste",
@@ -432,7 +439,7 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "aria.map": "Karte der Kreuzungen mit hohem Schweregrad",
     "aria.selectedDetails": "Details zur ausgewählten Kreuzung",
     "aria.openMapServices": "Ausgewählte Kreuzung in Kartendiensten öffnen",
-    "aria.loadingSteps": "Ladeschritte",
+    "aria.loadingFact": "Fakt zur Verkehrssicherheit",
     "brand.name": "Sichere Knoten",
     "brand.description": "Erkunde deutsche Unfalldaten, um Kreuzungen mit erhöhtem Risiko nach Schwere, Ort und Jahr zu erkennen.",
     "browse.title": "Nach Bundesland suchen",
@@ -866,13 +873,14 @@ let isStreetViewOpen = readStoredStreetViewOpen();
 let activeView: ViewKey = "map";
 let loadingStatusKind: LoadingStatusKind = "normal";
 let activeInteractionTelemetry: InteractionTelemetry | null = null;
+let isSplashDisplayed = false;
+let loadingFactFallbackIndex = 0;
 
 const elements = {
   app: byId<HTMLDivElement>("app"),
   splash: byId<HTMLDivElement>("appSplash"),
-  splashLoadingTitle: byId<HTMLHeadingElement>("splashLoadingTitle"),
-  splashLoadingStatus: byId<HTMLParagraphElement>("splashLoadingStatus"),
-  splashLoadingBar: byId<HTMLDivElement>("splashLoadingBar"),
+  splashLoadingFactMeta: byId<HTMLParagraphElement>("splashLoadingFactMeta"),
+  splashLoadingFact: byId<HTMLParagraphElement>("splashLoadingFact"),
   resetAppBtn: byId<HTMLButtonElement>("resetAppBtn"),
   analyzeBtn: byId<HTMLButtonElement>("analyzeBtn"),
   clusterRadius: byId<HTMLInputElement>("clusterRadius"),
@@ -895,7 +903,6 @@ const elements = {
   mapLoadingTitle: byId<HTMLHeadingElement>("mapLoadingTitle"),
   mapLoadingStatus: byId<HTMLParagraphElement>("mapLoadingStatus"),
   mapLoadingBar: byId<HTMLDivElement>("mapLoadingBar"),
-  loadingSteps: Array.from(document.querySelectorAll<HTMLElement>("[data-loading-step]")),
   selectedAside: byId<HTMLElement>("selectedAside"),
   selectionDetails: byId<HTMLDivElement>("selectionDetails"),
   findNearbyBtn: byId<HTMLButtonElement>("findNearbyBtn"),
@@ -941,6 +948,8 @@ startApp();
 
 function startApp(): void {
   applyStaticTranslations();
+  showNextLoadingFact();
+  isSplashDisplayed = !elements.splash.hidden;
   resetAnalysisControlsToDefaults();
   wireEvents();
   setView(initialView());
@@ -4535,9 +4544,47 @@ function clusterLocationText(cluster: IntersectionCluster): string {
   return cluster.municipalityName ?? cluster.districtName ?? cluster.administrativeRegionName ?? `${cluster.lat.toFixed(5)}, ${cluster.lon.toFixed(5)}`;
 }
 
+function showNextLoadingFact(): void {
+  const factIndex = nextLoadingFactIndex();
+  elements.splashLoadingFactMeta.textContent = LOADING_FACT_META;
+  elements.splashLoadingFact.textContent = LOADING_FACTS[factIndex] ?? LOADING_FACTS[0] ?? "";
+  writeNextLoadingFactIndex(factIndex + 1);
+}
+
+function nextLoadingFactIndex(): number {
+  try {
+    const rawValue = window.localStorage.getItem(LOADING_FACT_STORAGE_KEY);
+    const storedIndex = rawValue === null ? 0 : Number(rawValue);
+    return normalizeLoadingFactIndex(Number.isFinite(storedIndex) ? storedIndex : 0);
+  } catch {
+    return normalizeLoadingFactIndex(loadingFactFallbackIndex);
+  }
+}
+
+function writeNextLoadingFactIndex(nextIndex: number): void {
+  const normalizedIndex = normalizeLoadingFactIndex(nextIndex);
+  loadingFactFallbackIndex = normalizedIndex;
+  try {
+    window.localStorage.setItem(LOADING_FACT_STORAGE_KEY, String(normalizedIndex));
+  } catch {
+    // The rotating fact is optional; blocked storage should not affect loading.
+  }
+}
+
+function normalizeLoadingFactIndex(index: number): number {
+  if (LOADING_FACTS.length === 0) {
+    return 0;
+  }
+  return ((Math.trunc(index) % LOADING_FACTS.length) + LOADING_FACTS.length) % LOADING_FACTS.length;
+}
+
 function setBusy(isBusy: boolean): void {
   elements.analyzeBtn.disabled = isBusy;
   elements.resetAppBtn.disabled = isBusy;
+  if (isBusy && !isSplashDisplayed) {
+    showNextLoadingFact();
+  }
+  isSplashDisplayed = isBusy;
   elements.splash.hidden = !isBusy;
   elements.splash.setAttribute("aria-busy", String(isBusy));
   setAnalysisControlsDisabled(isBusy);
@@ -4577,37 +4624,14 @@ function updateLoadingPanels(message: string, progress: number): void {
   const isProblem = loadingStatusKind === "problem";
   const isIdle = loadingStatusKind === "idle";
   const hasNoClusters = Boolean(result && result.clusters.length === 0 && progress >= 100);
-  const activeStep = loadingStepForProgress(progress);
-  const title = loadingTitle(activeStep, progress, isProblem, isIdle, hasNoClusters);
+  const title = loadingTitle(progress, isProblem, isIdle, hasNoClusters);
 
   elements.mapLoadingStatus.textContent = message;
-  elements.splashLoadingStatus.textContent = message;
   elements.mapLoadingBar.style.width = `${progress}%`;
-  elements.splashLoadingBar.style.width = `${progress}%`;
   elements.mapLoadingTitle.textContent = title;
-  elements.splashLoadingTitle.textContent = title;
-
-  const activeIndex = LOADING_STEP_ORDER.indexOf(activeStep);
-  for (const step of elements.loadingSteps) {
-    const key = step.dataset.loadingStep as LoadingStepKey | undefined;
-    const index = key ? LOADING_STEP_ORDER.indexOf(key) : -1;
-    const isDone = index >= 0 && !isProblem && !isIdle && (index < activeIndex || progress >= 100);
-    step.classList.toggle("done", isDone);
-    step.classList.toggle("active", index === activeIndex && !isDone && !isIdle);
-  }
 }
 
-function loadingStepForProgress(progress: number): LoadingStepKey {
-  if (progress >= 75) {
-    return "analyze";
-  }
-  if (progress >= 10) {
-    return "parse";
-  }
-  return "cache";
-}
-
-function loadingTitle(step: LoadingStepKey, progress: number, isProblem: boolean, isIdle: boolean, hasNoClusters: boolean): string {
+function loadingTitle(progress: number, isProblem: boolean, isIdle: boolean, hasNoClusters: boolean): string {
   if (isProblem) {
     return tr("loading.title.problem");
   }
@@ -4620,14 +4644,13 @@ function loadingTitle(step: LoadingStepKey, progress: number, isProblem: boolean
   if (progress >= 100) {
     return tr("loading.title.ready");
   }
-  switch (step) {
-    case "cache":
-      return tr("loading.title.cache");
-    case "parse":
-      return tr("loading.title.parse");
-    case "analyze":
-      return tr("loading.title.analyze");
+  if (progress >= 75) {
+    return tr("loading.title.analyze");
   }
+  if (progress >= 10) {
+    return tr("loading.title.result");
+  }
+  return tr("loading.title.bundle");
 }
 
 async function loadAccidentData(

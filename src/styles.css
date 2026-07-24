@@ -779,7 +779,9 @@ select {
   display: grid;
   place-items: center;
   padding: 20px;
-  background: rgba(236, 238, 233, 0.96);
+  background:
+    radial-gradient(circle at 24% 18%, rgba(22, 107, 109, 0.1), transparent 32%),
+    linear-gradient(135deg, rgba(236, 238, 233, 0.98), rgba(248, 250, 247, 0.96));
 }
 
 .splash-screen[hidden] {
@@ -787,7 +789,6 @@ select {
 }
 
 .splash-panel {
-  width: min(460px, 100%);
   background: rgba(255, 255, 255, 0.96);
 }
 
@@ -800,6 +801,55 @@ select {
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.92);
   box-shadow: 0 18px 45px rgba(23, 33, 38, 0.12);
+}
+
+.loading-panel.splash-panel {
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 22px;
+  align-items: center;
+  width: min(420px, 100%);
+  text-align: left;
+}
+
+.splash-spinner {
+  width: 34px;
+  height: 34px;
+  border: 3px solid #d7ddd7;
+  border-top-color: #8fa09a;
+  border-radius: 50%;
+  opacity: 0.78;
+  animation: splash-spin 1.35s linear infinite;
+}
+
+.loading-fact {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+  margin: 0;
+}
+
+.loading-fact-meta,
+.loading-fact-text {
+  margin: 0;
+}
+
+.loading-fact-meta {
+  color: #53636d;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.loading-fact-text {
+  color: #172126;
+  font-size: 1.08rem;
+  line-height: 1.38;
+}
+
+@keyframes splash-spin {
+  to {
+    transform: rotate(1turn);
+  }
 }
 
 .loading-eyebrow,
@@ -839,51 +889,10 @@ select {
   transition: width 180ms ease;
 }
 
-.loading-steps {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-  align-items: start;
-}
-
-.loading-step {
-  position: relative;
-  min-width: 0;
-  padding-top: 14px;
-  color: #53636d;
-  font-size: 0.76rem;
-  font-weight: 600;
-  text-align: center;
-}
-
-.loading-step:before {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: 50%;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: #cbd4ce;
-  transform: translateX(-50%);
-}
-
-.loading-step.done {
-  color: #166b6d;
-}
-
-.loading-step.done:before {
-  background: #166b6d;
-}
-
-.loading-step.active {
-  color: #b9392b;
-}
-
-.loading-step.active:before {
-  width: 9px;
-  height: 9px;
-  background: #b9392b;
+@media (prefers-reduced-motion: reduce) {
+  .splash-spinner {
+    animation: none;
+  }
 }
 
 .detail-panel {

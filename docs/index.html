@@ -8,22 +8,16 @@
     <meta http-equiv="Expires" content="0" />
     <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
     <title>Safe Intersections</title>
-    <link rel="stylesheet" href="./assets/app.css?v=29c358fea0399fdf" />
+    <link rel="stylesheet" href="./assets/app.css?v=c5c022f0de71bfce" />
   </head>
   <body>
     <div id="appSplash" class="splash-screen" role="status" aria-live="polite" aria-busy="true">
       <div class="loading-panel splash-panel">
-        <p class="loading-eyebrow" data-i18n="brand.name">Safe Intersections</p>
-        <h2 id="splashLoadingTitle" data-i18n="loading.preparing">Preparing data</h2>
-        <p id="splashLoadingStatus" class="loading-status" data-i18n="loading.checkingBundled">Checking bundled accident data.</p>
-        <div class="loading-progress" aria-hidden="true">
-          <div id="splashLoadingBar" class="loading-progress-bar"></div>
-        </div>
-        <div class="loading-steps" aria-label="Loading steps" data-i18n-aria-label="aria.loadingSteps">
-          <span class="loading-step active" data-loading-step="cache" data-i18n="loading.step.cache">Cache</span>
-          <span class="loading-step" data-loading-step="parse" data-i18n="loading.step.parse">Parse</span>
-          <span class="loading-step" data-loading-step="analyze" data-i18n="loading.step.analyze">Analyze</span>
-        </div>
+        <div class="splash-spinner" aria-hidden="true"></div>
+        <aside class="loading-fact" aria-label="Road safety fact" data-i18n-aria-label="aria.loadingFact">
+          <p id="splashLoadingFact" class="loading-fact-text">On an average day, 8 people died and more than 1,000 were injured in road crashes.</p>
+          <p id="splashLoadingFactMeta" class="loading-fact-meta">Germany · 2025 · Destatis</p>
+        </aside>
       </div>
     </div>
     <div id="app" class="app-shell">
@@ -114,11 +108,6 @@
                   <p id="mapLoadingStatus" class="loading-status" data-i18n="loading.checkingBundled">Checking bundled accident data.</p>
                   <div class="loading-progress" aria-hidden="true">
                     <div id="mapLoadingBar" class="loading-progress-bar"></div>
-                  </div>
-                  <div class="loading-steps" aria-label="Loading steps" data-i18n-aria-label="aria.loadingSteps">
-                    <span class="loading-step active" data-loading-step="cache" data-i18n="loading.step.cache">Cache</span>
-                    <span class="loading-step" data-loading-step="parse" data-i18n="loading.step.parse">Parse</span>
-                    <span class="loading-step" data-loading-step="analyze" data-i18n="loading.step.analyze">Analyze</span>
                   </div>
                 </div>
               </div>
@@ -336,7 +325,7 @@
 
       </main>
     </div>
-    <script src="./assets/data-manifest.js?v=29c358fea0399fdf"></script>
-    <script src="./assets/app.js?v=29c358fea0399fdf"></script>
+    <script src="./assets/data-manifest.js?v=c5c022f0de71bfce"></script>
+    <script src="./assets/app.js?v=c5c022f0de71bfce"></script>
   </body>
 </html>
