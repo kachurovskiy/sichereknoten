@@ -52,10 +52,11 @@ const docsHtml = sourceHtml
   .replace("  </head>", `    <link rel="stylesheet" href="./assets/app.css?v=${appVersion}" />\n  </head>`)
   .replace(
     '    <script type="module" src="/src/main.ts"></script>',
-    `${dataScriptTags.map((fileName) => `    <script src="./assets/${fileName}"></script>`).join("\n")}\n    <script src="./assets/app.js?v=${appVersion}"></script>`
+    `${dataScriptTags.map((fileName) => `    <script src="./assets/${fileName}?v=${appVersion}"></script>`).join("\n")}\n    <script src="./assets/app.js?v=${appVersion}"></script>`
   );
 
 await writeFile(path.join(docsDir, "index.html"), docsHtml);
+await writeSiteVersionManifest(appVersion, analysisCacheVersion);
 await copyFile(path.join(root, "favicon.svg"), path.join(docsDir, "favicon.svg"));
 
 async function writeDataBundle(files, streetLookup, analysisCacheVersion) {
@@ -74,6 +75,7 @@ async function writeDataBundle(files, streetLookup, analysisCacheVersion) {
       `Reused ${reusableAccidentShardFiles.length.toLocaleString("en-US")} normalized accident state shard scripts for data version ${dataVersion}.`
     );
   }
+  await removeGeneratedDefaultAnalysisFiles(new Set([defaultAnalysis.fileName]));
 
   await writeDataManifest(dataVersion, fileMetadata, accidentShardFiles, defaultAnalysis);
   return ["data-manifest.js"];
@@ -115,6 +117,16 @@ async function writeDataManifest(dataVersion, fileMetadata, accidentShardFiles, 
   );
 }
 
+async function writeSiteVersionManifest(appVersion, analysisCacheVersion) {
+  await writeFile(
+    path.join(assetsDir, "site-version.json"),
+    `${JSON.stringify({
+      appVersion,
+      analysisCacheVersion
+    })}\n`
+  );
+}
+
 async function cleanGeneratedAssets() {
   const entries = await readdir(assetsDir);
   await Promise.all(
@@ -131,6 +143,7 @@ function isGeneratedAsset(fileName) {
     fileName === "analysis-worker.js" ||
     fileName === "csv-parser-worker.js" ||
     fileName === "streets.js" ||
+    fileName === "site-version.json" ||
     /^data-\d+\.js$/.test(fileName)
   );
 }
@@ -172,12 +185,18 @@ async function reusableAccidentShards(dataVersion) {
     if (!entry || typeof entry.stateCode !== "string" || typeof entry.fileName !== "string" || !/^accidents-state-[\w-]+\.js$/.test(entry.fileName)) {
       return null;
     }
-    if (!(await fileExists(path.join(assetsDir, entry.fileName)))) {
+    const expectedFileName = accidentShardFileName(entry.stateCode, dataVersion);
+    const existingFilePath = path.join(assetsDir, entry.fileName);
+    if (!(await fileExists(existingFilePath))) {
       return null;
+    }
+    if (entry.fileName !== expectedFileName) {
+      const shard = await loadAccidentShard(entry.fileName);
+      await writeAccidentShardScript(dataVersion, expectedFileName, { ...shard, id: expectedFileName.replace(/\.js$/i, "") });
     }
     shardFiles.push({
       stateCode: entry.stateCode,
-      fileName: entry.fileName,
+      fileName: expectedFileName,
       recordCount: Number(entry.recordCount) || 0
     });
   }
@@ -193,7 +212,7 @@ async function reusableDefaultAnalysis(dataVersion, analysisCacheVersion, option
     !manifest ||
     manifest.version !== dataVersion ||
     typeof fileName !== "string" ||
-    fileName !== "analysis-default.js" ||
+    !/^analysis-default-[\w-]+\.js$/.test(fileName) ||
     !defaultAnalysisMetadataMatches(metadata, dataVersion, analysisCacheVersion, options)
   ) {
     return null;
@@ -217,7 +236,7 @@ async function writeDefaultAnalysis(dataVersion, analysisCacheVersion, accidentS
   };
   const bytes = Buffer.from(JSON.stringify(result));
   const compressed = gzipSync(bytes, { level: 9 });
-  const fileName = "analysis-default.js";
+  const fileName = defaultAnalysisFileName(dataVersion, analysisCacheVersion);
   const bundle = {
     id: "analysis-default",
     encoding: "gzip-base64-json-v1",
@@ -234,6 +253,10 @@ async function writeDefaultAnalysis(dataVersion, analysisCacheVersion, accidentS
   await writeFile(path.join(assetsDir, fileName), script);
   console.log(`Wrote ${fileName} with ${result.clusters.length.toLocaleString("en-US")} default intersection clusters.`);
   return { fileName, metadata };
+}
+
+function defaultAnalysisFileName(dataVersion, analysisCacheVersion) {
+  return `analysis-default-${dataVersion}-${analysisCacheVersion}.js`;
 }
 
 function defaultAnalysisMetadataMatches(metadata, dataVersion, analysisCacheVersion, options) {
@@ -326,6 +349,15 @@ async function removeGeneratedAccidentDataFiles(keep = new Set()) {
   await Promise.all(
     entries
       .filter((entry) => (/^accidents-\d+\.js$/.test(entry) || /^accidents-state-[\w-]+\.js$/.test(entry)) && !keep.has(entry))
+      .map((entry) => rm(path.join(assetsDir, entry), { force: true }))
+  );
+}
+
+async function removeGeneratedDefaultAnalysisFiles(keep = new Set()) {
+  const entries = await readdir(assetsDir);
+  await Promise.all(
+    entries
+      .filter((entry) => (entry === "analysis-default.js" || /^analysis-default-[\w-]+\.js$/.test(entry)) && !keep.has(entry))
       .map((entry) => rm(path.join(assetsDir, entry), { force: true }))
   );
 }
@@ -443,7 +475,7 @@ function numericInputDefault(html, id) {
 async function writeAccidentShard(dataVersion, stateCode, records) {
   const bytes = Buffer.from(JSON.stringify(records));
   const compressed = gzipSync(bytes, { level: 9 });
-  const scriptFileName = accidentShardFileName(stateCode);
+  const scriptFileName = accidentShardFileName(stateCode, dataVersion);
   const shard = {
     id: scriptFileName.replace(/\.js$/i, ""),
     stateCode,
@@ -453,8 +485,7 @@ async function writeAccidentShard(dataVersion, stateCode, records) {
     compressedSize: compressed.byteLength,
     chunks: chunkString(compressed.toString("base64"), 256 * 1024)
   };
-  const script = `globalThis.__SICHERE_KNOTEN_DATA__=globalThis.__SICHERE_KNOTEN_DATA__||{version:${JSON.stringify(dataVersion)},files:[],accidentShards:[]};globalThis.__SICHERE_KNOTEN_DATA__.accidentShards=globalThis.__SICHERE_KNOTEN_DATA__.accidentShards||[];globalThis.__SICHERE_KNOTEN_DATA__.accidentShards.push(${JSON.stringify(shard)});\n`;
-  await writeFile(path.join(assetsDir, scriptFileName), script);
+  await writeAccidentShardScript(dataVersion, scriptFileName, shard);
   console.log(`Wrote ${scriptFileName} with ${records.length.toLocaleString("en-US")} normalized accident records.`);
   return {
     stateCode,
@@ -463,11 +494,16 @@ async function writeAccidentShard(dataVersion, stateCode, records) {
   };
 }
 
-function accidentShardFileName(stateCode) {
+async function writeAccidentShardScript(dataVersion, scriptFileName, shard) {
+  const script = `globalThis.__SICHERE_KNOTEN_DATA__=globalThis.__SICHERE_KNOTEN_DATA__||{version:${JSON.stringify(dataVersion)},files:[],accidentShards:[]};globalThis.__SICHERE_KNOTEN_DATA__.accidentShards=globalThis.__SICHERE_KNOTEN_DATA__.accidentShards||[];globalThis.__SICHERE_KNOTEN_DATA__.accidentShards.push(${JSON.stringify(shard)});\n`;
+  await writeFile(path.join(assetsDir, scriptFileName), script);
+}
+
+function accidentShardFileName(stateCode, dataVersion) {
   const normalizedStateCode = String(stateCode || "unknown")
     .toLowerCase()
     .replace(/[^\w-]+/g, "-");
-  return `accidents-state-${normalizedStateCode}.js`;
+  return `accidents-state-${normalizedStateCode}-${dataVersion}.js`;
 }
 
 function compactAccidentRecord(accident) {

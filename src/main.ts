@@ -188,6 +188,11 @@ interface InteractionTelemetryStep {
   metadata: InitializationTelemetryMetadata;
 }
 
+interface SiteVersionManifest {
+  appVersion?: string;
+  analysisCacheVersion?: string;
+}
+
 interface RoadUserSummaryItem {
   definition: RoadUserDefinition;
   label: string;
@@ -1050,6 +1055,7 @@ resetAnalysisControlsToDefaults();
 wireEvents();
 setView(initialView());
 renderAll();
+void checkForFreshDeploymentHtml();
 void loadBundledData();
 
 function detectLocale(): AppLocale {
@@ -1294,6 +1300,45 @@ function markAnalysisSettingsDirty(): void {
   if (result) {
     setStatus(tr("status.settingsChanged"), 100);
   }
+}
+
+async function checkForFreshDeploymentHtml(): Promise<void> {
+  if (!isBuiltAppVersion(APP_CACHE_VERSION)) {
+    return;
+  }
+
+  try {
+    const url = new URL("./assets/site-version.json", document.baseURI);
+    url.searchParams.set("t", String(Date.now()));
+    const response = await fetch(url.href, { cache: "no-store" });
+    if (!response.ok) {
+      return;
+    }
+
+    const manifest = (await response.json()) as SiteVersionManifest;
+    const latestAppVersion = typeof manifest.appVersion === "string" ? manifest.appVersion : null;
+    if (!latestAppVersion || latestAppVersion === APP_CACHE_VERSION) {
+      return;
+    }
+
+    reloadFreshDeploymentHtml(latestAppVersion);
+  } catch (error) {
+    console.info("[Safe Intersections] Could not check deployment version.", error);
+  }
+}
+
+function isBuiltAppVersion(version: string): boolean {
+  return /^[a-f0-9]{16}$/i.test(version);
+}
+
+function reloadFreshDeploymentHtml(latestAppVersion: string): void {
+  const url = new URL(window.location.href);
+  if (url.searchParams.get("v") === latestAppVersion) {
+    return;
+  }
+
+  url.searchParams.set("v", latestAppVersion);
+  window.location.replace(url.href);
 }
 
 async function loadBundledData(): Promise<void> {
