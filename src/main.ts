@@ -396,7 +396,7 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "status.locationUnavailable": "Your location is currently unavailable.",
     "status.locationTimedOut": "Location request timed out.",
     "status.locationFailed": "Could not get your location.",
-    "status.noSeverityNearby": "No intersections match the active severity filters near this location.",
+    "status.noSeverityNearby": "No analyzed intersections were found near this location.",
     "status.stateHotspotsPending": "State hotspots will appear after the data loads.",
     "status.noAnalysisMatches": "No intersections match the active analysis settings.",
     "status.resettingApp": "Resetting app storage...",
@@ -703,7 +703,7 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "status.locationUnavailable": "Dein Standort ist derzeit nicht verfügbar.",
     "status.locationTimedOut": "Standortanfrage hat zu lange gedauert.",
     "status.locationFailed": "Standort konnte nicht ermittelt werden.",
-    "status.noSeverityNearby": "Keine Kreuzungen in der Nähe passen zu den aktiven Unfallfolge-Filtern.",
+    "status.noSeverityNearby": "Keine analysierten Kreuzungen in der Nähe gefunden.",
     "status.stateHotspotsPending": "Bundesland-Hotspots erscheinen, sobald die Daten geladen sind.",
     "status.noAnalysisMatches": "Keine Kreuzungen passen zu den aktiven Analyse-Einstellungen.",
     "status.resettingApp": "App-Speicher wird zurückgesetzt...",
@@ -2075,7 +2075,6 @@ function applySeverityFilter(): void {
     serious: elements.showSeriousPoints.checked,
     other: elements.showOtherPoints.checked
   });
-  renderExplore();
 }
 
 function locateUser(options: { selectNearest: boolean }): void {
@@ -2832,7 +2831,10 @@ function renderNearbyList(): void {
 
   nearby.forEach((entry) => {
     elements.nearbyList.append(
-      hotspotButton(entry.cluster, trf("label.away", { distance: formatDistance(entry.distanceMeters) }), { telemetrySource: "nearby hotspot" })
+      hotspotButton(entry.cluster, trf("label.away", { distance: formatDistance(entry.distanceMeters) }), {
+        metricPlacement: "header",
+        telemetrySource: "nearby hotspot"
+      })
     );
   });
 }
@@ -2923,7 +2925,7 @@ function nearbyClusters(limit: number): Array<{ cluster: IntersectionCluster; di
     return [];
   }
 
-  return visibleSeverityClusters()
+  return (result?.clusters ?? [])
     .map((cluster) => ({ cluster, distanceMeters: distanceMeters(location, cluster) }))
     .sort((a, b) => a.distanceMeters - b.distanceMeters || compareClusterCoreMetric(a.cluster, b.cluster))
     .slice(0, limit);
@@ -2979,21 +2981,6 @@ function ensureClusterSeverityVisible(cluster: IntersectionCluster): void {
   }
   input.checked = true;
   applySeverityFilter();
-}
-
-function visibleSeverityClusters(): IntersectionCluster[] {
-  return (result?.clusters ?? []).filter(clusterMatchesSeverityFilter);
-}
-
-function clusterMatchesSeverityFilter(cluster: IntersectionCluster): boolean {
-  switch (clusterSeverity(cluster)) {
-    case "fatal":
-      return elements.showFatalPoints.checked;
-    case "serious":
-      return elements.showSeriousPoints.checked;
-    case "other":
-      return elements.showOtherPoints.checked;
-  }
 }
 
 function clusterSeverity(cluster: IntersectionCluster): SeverityFilterKey {

@@ -73,25 +73,6 @@
             <button id="mobileTableTab" class="mobile-more-item" role="menuitem" type="button" data-i18n="tab.intersections">Intersections</button>
             <button id="mobileSettingsTab" class="mobile-more-item" role="menuitem" type="button" data-i18n="tab.settings">Settings</button>
           </div>
-          <div class="toolbar-actions" aria-label="Map display controls" data-i18n-aria-label="aria.mapControls">
-            <div class="toolbar-group" role="group" aria-labelledby="severityControls">
-              <span id="severityControls" class="toolbar-group-label" data-i18n="field.accidentOutcome">Accident outcome</span>
-              <div class="toolbar-group-controls">
-                <label class="toggle-control">
-                  <input id="showFatalPoints" type="checkbox" checked />
-                  <span data-i18n="severity.fatal">Fatal</span>
-                </label>
-                <label class="toggle-control">
-                  <input id="showSeriousPoints" type="checkbox" checked />
-                  <span data-i18n="severity.serious">Serious</span>
-                </label>
-                <label class="toggle-control">
-                  <input id="showOtherPoints" type="checkbox" />
-                  <span data-i18n="severity.other">Other</span>
-                </label>
-              </div>
-            </div>
-          </div>
         </section>
 
         <section id="mapView" class="view active">
@@ -108,6 +89,24 @@
                   <circle cx="12" cy="12" r="1.6"></circle>
                 </svg>
               </button>
+              <div class="map-outcome-controls" aria-label="Map display controls" data-i18n-aria-label="aria.mapControls">
+                <div class="toolbar-group" role="group" aria-label="Accident outcome" data-i18n-aria-label="field.accidentOutcome">
+                  <div class="toolbar-group-controls">
+                    <label class="toggle-control">
+                      <input id="showFatalPoints" type="checkbox" checked />
+                      <span data-i18n="severity.fatal">Fatal</span>
+                    </label>
+                    <label class="toggle-control">
+                      <input id="showSeriousPoints" type="checkbox" checked />
+                      <span data-i18n="severity.serious">Serious</span>
+                    </label>
+                    <label class="toggle-control">
+                      <input id="showOtherPoints" type="checkbox" />
+                      <span data-i18n="severity.other">Other</span>
+                    </label>
+                  </div>
+                </div>
+              </div>
               <div id="mapEmpty" class="empty-state">
                 <div class="loading-panel" aria-live="polite">
                   <p class="loading-eyebrow" data-i18n="loading.bundle">Automatic offline bundle</p>

@@ -169,15 +169,6 @@ select {
   align-items: center;
 }
 
-.toolbar-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  align-items: center;
-  justify-content: flex-end;
-  min-width: 0;
-}
-
 .toolbar-group {
   display: inline-flex;
   align-items: center;
@@ -684,6 +675,22 @@ select {
 
 .map-locate-button.locating svg {
   animation: locating-pulse 900ms ease-in-out infinite;
+}
+
+.map-outcome-controls {
+  position: absolute;
+  right: 64px;
+  bottom: 12px;
+  z-index: 3;
+  display: flex;
+  max-width: calc(100% - 86px);
+  min-width: 0;
+}
+
+.map-outcome-controls .toolbar-group {
+  padding-left: 5px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 10px 24px rgba(23, 33, 38, 0.16);
 }
 
 .street-view-panel {
@@ -1836,31 +1843,13 @@ tbody tr:focus {
     display: inline;
   }
 
-  .tabs,
-  .toolbar-actions {
-    width: 100%;
-  }
-
   .tabs {
     display: flex;
     gap: 3px;
+    width: 100%;
     overflow: visible;
     padding: 4px;
     min-width: 0;
-  }
-
-  .toolbar-actions {
-    display: none;
-  }
-
-  .app-shell[data-active-view="map"] .toolbar-actions {
-    display: flex;
-  }
-
-  .toolbar-actions {
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    padding-bottom: 2px;
   }
 
   .toolbar-group {
@@ -2007,6 +1996,14 @@ tbody tr:focus {
     bottom: 10px;
     width: 46px;
     height: 46px;
+  }
+
+  .map-outcome-controls {
+    right: 66px;
+    bottom: 10px;
+    max-width: calc(100% - 86px);
+    overflow-x: auto;
+    padding-bottom: 2px;
   }
 
   .detail-panel {
