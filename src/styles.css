@@ -517,6 +517,13 @@ select {
   grid-template-columns: minmax(0, 1fr) minmax(360px, 460px);
 }
 
+#stateView.active {
+  grid-template-rows: auto auto;
+  gap: 14px;
+  min-height: 0;
+  overflow: auto;
+}
+
 .settings-view.active {
   grid-template-columns: minmax(0, 520px) minmax(0, 620px);
   gap: 14px;
@@ -1440,6 +1447,184 @@ button.map-service-link {
   background: #ffffff;
 }
 
+#stateView > .table-shell {
+  width: min(100%, 1000px);
+  max-width: 1000px;
+}
+
+.state-rank-chart-panel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 10px;
+  width: min(100%, 1000px);
+  max-width: 1000px;
+  min-width: 0;
+  padding: 14px 16px 12px;
+  border: 1px solid #d7ddd7;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.state-rank-chart-header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.state-rank-chart-header h2 {
+  margin: 0;
+  color: #172126;
+  font-size: 1rem;
+}
+
+.state-rank-chart-header span,
+.state-rank-chart-empty {
+  color: #53636d;
+  font-size: 0.84rem;
+}
+
+.state-rank-chart-empty {
+  margin: 0;
+}
+
+.state-rank-chart {
+  position: relative;
+  display: grid;
+  gap: 12px;
+  align-items: stretch;
+  min-width: 0;
+  min-height: 0;
+}
+
+.state-rank-chart-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.state-rank-chart-grid {
+  stroke: #e1e5df;
+  stroke-width: 1;
+}
+
+.state-rank-chart-axis {
+  stroke: #8fa09a;
+  stroke-width: 1.4;
+}
+
+.state-rank-chart-series {
+  outline: none;
+}
+
+.state-rank-chart-hit-line {
+  fill: none;
+  stroke: transparent;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 14;
+  pointer-events: stroke;
+}
+
+.state-rank-chart-line {
+  fill: none;
+  stroke: var(--series-color);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+  opacity: 0.78;
+  pointer-events: none;
+  transition:
+    opacity 0.14s ease,
+    stroke 0.14s ease,
+    stroke-width 0.14s ease;
+}
+
+.state-rank-chart-dot {
+  fill: var(--series-color);
+  stroke: #ffffff;
+  stroke-width: 1.5;
+  pointer-events: none;
+  transition:
+    fill 0.14s ease,
+    opacity 0.14s ease,
+    stroke-width 0.14s ease;
+}
+
+.state-rank-chart-series.muted .state-rank-chart-line {
+  stroke: #a8b2af;
+  opacity: 0.2;
+}
+
+.state-rank-chart-series.muted .state-rank-chart-dot {
+  fill: #a8b2af;
+  opacity: 0.22;
+}
+
+.state-rank-chart-series.active .state-rank-chart-line {
+  opacity: 1;
+  stroke-width: 3;
+}
+
+.state-rank-chart-series.active .state-rank-chart-dot {
+  opacity: 1;
+  stroke-width: 2;
+}
+
+.state-rank-chart-tick,
+.state-rank-chart-axis-label {
+  fill: #53636d;
+  font-size: 0.78rem;
+}
+
+.state-rank-chart-axis-label {
+  font-weight: 600;
+}
+
+.state-rank-chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+}
+
+.state-rank-chart-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #38454b;
+  font-size: 0.8rem;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.state-rank-chart-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: var(--series-color);
+}
+
+.state-rank-chart-tooltip {
+  position: absolute;
+  z-index: 2;
+  max-width: min(260px, calc(100% - 24px));
+  padding: 6px 8px;
+  border: 1px solid #cbd4ce;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #172126;
+  font-size: 0.82rem;
+  font-weight: 600;
+  line-height: 1.15;
+  pointer-events: none;
+  box-shadow: 0 8px 20px rgba(23, 33, 38, 0.16);
+}
+
+.state-rank-chart-tooltip[hidden] {
+  display: none;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
@@ -1794,16 +1979,25 @@ tbody tr:focus {
     overflow-y: auto;
   }
 
-  #stateView.active,
   #tableView.active,
   .settings-view.active {
     grid-template-rows: minmax(0, 1fr);
     overflow: auto;
   }
 
+  #stateView.active {
+    grid-template-rows: auto auto;
+    gap: 12px;
+    overflow: auto;
+  }
+
   #stateView.active .table-shell,
   #tableView.active .table-shell {
     min-height: 0;
+  }
+
+  .state-rank-chart-panel {
+    padding: 12px;
   }
 
   .map-locate-button {

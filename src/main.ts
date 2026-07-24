@@ -109,6 +109,26 @@ const OSM_TILE_SIZE = 256;
 const SELECTED_PREVIEW_MAP_FALLBACK_WIDTH = 640;
 const SELECTED_PREVIEW_MAP_FALLBACK_HEIGHT = 360;
 const SELECTED_PREVIEW_MAP_MAX_DPR = 2;
+const STATE_RANK_CHART_MAX_RANK = 1000;
+const STATE_RANK_CHART_SAMPLE_RANKS = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000];
+const STATE_RANK_CHART_COLORS = [
+  "#166b6d",
+  "#b9392b",
+  "#425b70",
+  "#8b3f7a",
+  "#7c4d12",
+  "#0b5d87",
+  "#6b7f2a",
+  "#a84f1d",
+  "#5b5f97",
+  "#2f7d55",
+  "#9b2f4a",
+  "#6a6f73",
+  "#bf8f2f",
+  "#1f6f8b",
+  "#8a5a44",
+  "#4f7c85"
+];
 const PROJECT_REPOSITORY_URL = "https://github.com/kachurovskiy/sichereknoten";
 const PROJECT_REPOSITORY_LABEL = "kachurovskiy/sichereknoten";
 const APP_CACHE_VERSION =
@@ -252,6 +272,12 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "tab.state": "State",
     "tab.intersections": "Intersections",
     "tab.settings": "Settings",
+    "stateChart.title": "Average severity by ranked intersections",
+    "stateChart.caption": "Smoothed Top-N average per state",
+    "stateChart.empty": "Run an analysis to show ranked intersection severity.",
+    "stateChart.aria": "Average severity percentage among top ranked intersections by state",
+    "stateChart.xAxis": "Top-N ranked intersections",
+    "stateChart.yAxis": "Avg. severity %",
     "severity.fatal": "Fatal",
     "severity.serious": "Serious",
     "severity.light": "Light",
@@ -547,6 +573,12 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "tab.state": "Bundesland",
     "tab.intersections": "Kreuzungen",
     "tab.settings": "Einstellungen",
+    "stateChart.title": "Mittlerer Schweregrad nach Kreuzungsrang",
+    "stateChart.caption": "Geglaetteter Top-N-Mittelwert je Bundesland",
+    "stateChart.empty": "Führe eine Analyse aus, um den Schweregrad nach Kreuzungsrang zu sehen.",
+    "stateChart.aria": "Mittlerer Schweregrad-Prozentwert unter den ranghoechsten Kreuzungen je Bundesland",
+    "stateChart.xAxis": "Top-N Kreuzungen nach Rang",
+    "stateChart.yAxis": "Mittl. Schweregrad %",
     "severity.fatal": "Tödlich",
     "severity.serious": "Schwer",
     "severity.light": "Leicht",
@@ -1014,6 +1046,7 @@ const elements = {
   nearbyList: byId<HTMLDivElement>("nearbyList"),
   browseState: byId<HTMLSelectElement>("browseState"),
   stateHotspotList: byId<HTMLDivElement>("stateHotspotList"),
+  stateRankChart: byId<HTMLDivElement>("stateRankChart"),
   stateTableBody: byId<HTMLTableSectionElement>("stateTableBody"),
   clusterTableBody: byId<HTMLTableSectionElement>("clusterTableBody"),
   exploreTab: byId<HTMLButtonElement>("exploreTab"),
@@ -1117,6 +1150,7 @@ function wireEvents(): void {
   wireMapControlEvents();
   wireNavigationEvents();
   wireClusterSortEvents();
+  wireStateRankChartEvents();
 }
 
 function wireApplicationCommands(): void {
@@ -1186,6 +1220,109 @@ function wireClusterSortEvents(): void {
       renderTables();
     });
   }
+}
+
+function wireStateRankChartEvents(): void {
+  elements.stateRankChart.addEventListener("pointerover", handleStateRankChartPointerOver);
+  elements.stateRankChart.addEventListener("pointermove", handleStateRankChartPointerMove);
+  elements.stateRankChart.addEventListener("pointerout", handleStateRankChartPointerOut);
+  elements.stateRankChart.addEventListener("focusin", handleStateRankChartFocusIn);
+  elements.stateRankChart.addEventListener("focusout", clearStateRankChartHover);
+}
+
+function handleStateRankChartPointerOver(event: PointerEvent): void {
+  const series = stateRankChartSeriesElement(event.target);
+  if (!series) {
+    return;
+  }
+  setStateRankChartHover(series);
+  positionStateRankChartTooltip(event);
+}
+
+function handleStateRankChartPointerMove(event: PointerEvent): void {
+  if (stateRankChartSeriesElement(event.target)) {
+    positionStateRankChartTooltip(event);
+  }
+}
+
+function handleStateRankChartPointerOut(event: PointerEvent): void {
+  const series = stateRankChartSeriesElement(event.target);
+  if (!series || (event.relatedTarget instanceof Node && series.contains(event.relatedTarget))) {
+    return;
+  }
+  clearStateRankChartHover();
+}
+
+function handleStateRankChartFocusIn(event: FocusEvent): void {
+  const series = stateRankChartSeriesElement(event.target);
+  if (!series) {
+    return;
+  }
+  setStateRankChartHover(series);
+  positionStateRankChartTooltipNearElement(series);
+}
+
+function stateRankChartSeriesElement(target: EventTarget | null): SVGGElement | null {
+  if (!(target instanceof Element)) {
+    return null;
+  }
+  return target.closest<SVGGElement>("[data-state-rank-series]");
+}
+
+function setStateRankChartHover(activeSeries: SVGGElement): void {
+  const svg = activeSeries.closest<SVGSVGElement>(".state-rank-chart-svg");
+  if (!svg) {
+    return;
+  }
+
+  svg.querySelectorAll<SVGGElement>("[data-state-rank-series]").forEach((series) => {
+    series.classList.toggle("active", series === activeSeries);
+    series.classList.toggle("muted", series !== activeSeries);
+  });
+
+  const tooltip = stateRankChartTooltip();
+  if (!tooltip) {
+    return;
+  }
+  tooltip.textContent = activeSeries.dataset.stateName ?? "";
+  tooltip.hidden = false;
+}
+
+function clearStateRankChartHover(): void {
+  elements.stateRankChart.querySelectorAll<SVGGElement>("[data-state-rank-series]").forEach((series) => {
+    series.classList.remove("active", "muted");
+  });
+  const tooltip = stateRankChartTooltip();
+  if (tooltip) {
+    tooltip.hidden = true;
+  }
+}
+
+function positionStateRankChartTooltip(event: PointerEvent): void {
+  const tooltip = stateRankChartTooltip();
+  if (!tooltip || tooltip.hidden) {
+    return;
+  }
+  const bounds = elements.stateRankChart.getBoundingClientRect();
+  const x = event.clientX - bounds.left + 12;
+  const y = event.clientY - bounds.top + 12;
+  tooltip.style.left = `${round(x, 1)}px`;
+  tooltip.style.top = `${round(y, 1)}px`;
+}
+
+function positionStateRankChartTooltipNearElement(series: SVGGElement): void {
+  const tooltip = stateRankChartTooltip();
+  if (!tooltip || tooltip.hidden) {
+    return;
+  }
+  const chartBounds = elements.stateRankChart.getBoundingClientRect();
+  const seriesBounds = series.getBoundingClientRect();
+  tooltip.style.left = `${round(seriesBounds.right - chartBounds.left + 10, 1)}px`;
+  tooltip.style.top = `${round(seriesBounds.top - chartBounds.top, 1)}px`;
+}
+
+function stateRankChartTooltip(): HTMLElement | null {
+  return elements.stateRankChart.querySelector<HTMLElement>(".state-rank-chart-tooltip");
 }
 
 function handleSelectionDetailsClick(event: MouseEvent): void {
@@ -1910,6 +2047,7 @@ function geolocationErrorMessage(error: GeolocationPositionError): string {
 
 function renderTables(): void {
   updateClusterSortHeaders();
+  renderStateRankChart();
   elements.stateTableBody.innerHTML = "";
   elements.clusterTableBody.innerHTML = "";
   if (!result) {
@@ -1956,6 +2094,194 @@ function renderTables(): void {
     });
     elements.clusterTableBody.append(row);
   }
+}
+
+interface StateRankChartSeries {
+  stateCode: string;
+  stateName: string;
+  color: string;
+  clusters: IntersectionCluster[];
+}
+
+interface StateRankChartPoint {
+  rank: number;
+  severityPercent: number;
+}
+
+function renderStateRankChart(): void {
+  if (!result || result.clusters.length === 0) {
+    elements.stateRankChart.innerHTML = `<p class="state-rank-chart-empty">${escapeHtml(tr("stateChart.empty"))}</p>`;
+    return;
+  }
+
+  const allSeries = stateRankChartSeries(result.clusters);
+  if (allSeries.length === 0) {
+    elements.stateRankChart.innerHTML = `<p class="state-rank-chart-empty">${escapeHtml(tr("stateChart.empty"))}</p>`;
+    return;
+  }
+
+  elements.stateRankChart.innerHTML = `
+    ${renderStateRankChartSvg(allSeries)}
+    <div class="state-rank-chart-tooltip" role="tooltip" hidden></div>
+    ${renderStateRankChartLegend(allSeries)}
+  `;
+}
+
+function stateRankChartSeries(clusters: IntersectionCluster[]): StateRankChartSeries[] {
+  const byState = new Map<string, IntersectionCluster[]>();
+  for (const cluster of clusters) {
+    const stateClusters = byState.get(cluster.stateCode) ?? [];
+    stateClusters.push(cluster);
+    byState.set(cluster.stateCode, stateClusters);
+  }
+
+  return Array.from(byState.entries())
+    .map(([stateCode, stateClusters]) => ({
+      stateCode,
+      stateName: stateClusters[0]?.stateName ?? STATE_NAMES[stateCode] ?? stateCode,
+      color: stateRankChartColor(stateCode),
+      clusters: stateClusters.sort(compareClusterCoreMetric).slice(0, STATE_RANK_CHART_MAX_RANK)
+    }))
+    .sort((a, b) => a.stateName.localeCompare(b.stateName, "de", { sensitivity: "base" }));
+}
+
+function renderStateRankChartSvg(series: StateRankChartSeries[]): string {
+  const width = 760;
+  const height = 600;
+  const chart = { left: 54, right: 20, top: 28, bottom: 520 };
+  const chartWidth = width - chart.left - chart.right;
+  const chartHeight = chart.bottom - chart.top;
+  const chartSeries = series.map((item) => ({
+    ...item,
+    points: stateRankChartPoints(item.clusters)
+  }));
+  const maxSeverity = Math.max(1, ...chartSeries.flatMap((item) => item.points.map((point) => point.severityPercent)));
+  const yMax = niceSeverityChartMax(maxSeverity);
+  const xTicks = [1, 10, 100, 1000];
+  const yTicks = uniqueNumbers([0, yMax / 2, yMax].map((value) => Math.round(value))).sort((a, b) => a - b);
+  const xForRank = (rank: number) => chart.left + (Math.log10(Math.max(1, rank)) / Math.log10(STATE_RANK_CHART_MAX_RANK)) * chartWidth;
+  const yForSeverity = (severityPercent: number) => chart.bottom - (severityPercent / yMax) * chartHeight;
+  const xAxisTicks = xTicks
+    .map((rank) => {
+      const x = xForRank(rank);
+      return `
+        <line class="state-rank-chart-grid" x1="${round(x, 1)}" y1="${chart.top}" x2="${round(x, 1)}" y2="${chart.bottom}"></line>
+        <text class="state-rank-chart-tick" x="${round(x, 1)}" y="${chart.bottom + 21}" text-anchor="middle">${rank}</text>
+      `;
+    })
+    .join("");
+  const yAxisTicks = yTicks
+    .map((severity) => {
+      const y = yForSeverity(severity);
+      return `
+        <line class="state-rank-chart-grid" x1="${chart.left}" y1="${round(y, 1)}" x2="${width - chart.right}" y2="${round(y, 1)}"></line>
+        <text class="state-rank-chart-tick" x="${chart.left - 10}" y="${round(y + 4, 1)}" text-anchor="end">${formatInteger(severity)}</text>
+      `;
+    })
+    .join("");
+  const lines = chartSeries
+    .map((item) => {
+      const points = item.points.map((point) => ({
+        x: xForRank(point.rank),
+        y: yForSeverity(point.severityPercent)
+      }));
+      const path = linePath(points);
+      const firstPoint = points[0];
+      const lastPoint = points[points.length - 1] ?? firstPoint;
+      const dots =
+        points.length === 1
+          ? `<circle class="state-rank-chart-dot" cx="${round(firstPoint.x, 1)}" cy="${round(firstPoint.y, 1)}" r="3.5" style="--series-color: ${item.color}"></circle>`
+          : `
+            <circle class="state-rank-chart-dot" cx="${round(firstPoint.x, 1)}" cy="${round(firstPoint.y, 1)}" r="3" style="--series-color: ${item.color}"></circle>
+            <circle class="state-rank-chart-dot" cx="${round(lastPoint.x, 1)}" cy="${round(lastPoint.y, 1)}" r="3" style="--series-color: ${item.color}"></circle>
+          `;
+      return `
+        <g class="state-rank-chart-series" data-state-rank-series="true" data-state-name="${escapeHtml(item.stateName)}" tabindex="0" aria-label="${escapeHtml(item.stateName)}" style="--series-color: ${item.color}">
+          <title>${escapeHtml(item.stateName)}</title>
+          ${path ? `<path class="state-rank-chart-hit-line" d="${path}"></path><path class="state-rank-chart-line" d="${path}"></path>` : ""}
+          ${dots}
+        </g>
+      `;
+    })
+    .join("");
+
+  return `
+    <svg class="state-rank-chart-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(tr("stateChart.aria"))}">
+      ${xAxisTicks}
+      ${yAxisTicks}
+      <line class="state-rank-chart-axis" x1="${chart.left}" y1="${chart.top}" x2="${chart.left}" y2="${chart.bottom}"></line>
+      <line class="state-rank-chart-axis" x1="${chart.left}" y1="${chart.bottom}" x2="${width - chart.right}" y2="${chart.bottom}"></line>
+      ${lines}
+      <text class="state-rank-chart-axis-label" x="${chart.left + chartWidth / 2}" y="${height - 9}" text-anchor="middle">${escapeHtml(tr("stateChart.xAxis"))}</text>
+      <text class="state-rank-chart-axis-label" x="16" y="${chart.top + chartHeight / 2}" text-anchor="middle" transform="rotate(-90 16 ${chart.top + chartHeight / 2})">${escapeHtml(tr("stateChart.yAxis"))}</text>
+    </svg>
+  `;
+}
+
+function stateRankChartPoints(clusters: IntersectionCluster[]): StateRankChartPoint[] {
+  let runningSeverity = 0;
+  const sampledRanks = stateRankChartSampleRanks(clusters.length);
+  const sampledRankSet = new Set(sampledRanks);
+  const points: StateRankChartPoint[] = [];
+
+  for (let index = 0; index < clusters.length && index < STATE_RANK_CHART_MAX_RANK; index += 1) {
+    const rank = index + 1;
+    runningSeverity += clusters[index].severityPercent * 100;
+    if (sampledRankSet.has(rank)) {
+      points.push({
+        rank,
+        severityPercent: runningSeverity / rank
+      });
+    }
+  }
+
+  return points;
+}
+
+function stateRankChartSampleRanks(clusterCount: number): number[] {
+  const maxRank = Math.min(clusterCount, STATE_RANK_CHART_MAX_RANK);
+  if (maxRank <= 0) {
+    return [];
+  }
+
+  const ranks = STATE_RANK_CHART_SAMPLE_RANKS.filter((rank) => rank <= maxRank);
+  if (ranks[ranks.length - 1] !== maxRank) {
+    ranks.push(maxRank);
+  }
+  return ranks;
+}
+
+function renderStateRankChartLegend(series: StateRankChartSeries[]): string {
+  const legend = series
+    .map(
+      (item) => `
+        <span class="state-rank-chart-legend-item">
+          <span class="state-rank-chart-swatch" style="--series-color: ${item.color}"></span>
+          ${escapeHtml(item.stateName)}
+        </span>
+      `
+    )
+    .join("");
+
+  return `
+    <div class="state-rank-chart-legend">${legend}</div>
+  `;
+}
+
+function niceSeverityChartMax(maxSeverity: number): number {
+  if (maxSeverity <= 5) {
+    return 5;
+  }
+  if (maxSeverity <= 20) {
+    return Math.ceil(maxSeverity / 5) * 5;
+  }
+  return Math.min(100, Math.ceil(maxSeverity / 10) * 10);
+}
+
+function stateRankChartColor(stateCode: string): string {
+  const stateCodes = Object.keys(STATE_NAMES).sort();
+  const index = Math.max(0, stateCodes.indexOf(stateCode));
+  return STATE_RANK_CHART_COLORS[index % STATE_RANK_CHART_COLORS.length];
 }
 
 function clustersForTable(clusters: IntersectionCluster[]): IntersectionCluster[] {

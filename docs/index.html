@@ -8,7 +8,7 @@
     <meta http-equiv="Expires" content="0" />
     <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
     <title>Safe Intersections</title>
-    <link rel="stylesheet" href="./assets/app.css?v=9555e40ceb645ba0" />
+    <link rel="stylesheet" href="./assets/app.css?v=6e098d81b4025b30" />
   </head>
   <body>
     <div id="appSplash" class="splash-screen" role="status" aria-live="polite" aria-busy="true">
@@ -144,6 +144,13 @@
         </section>
 
         <section id="stateView" class="view">
+          <div class="state-rank-chart-panel">
+            <div class="state-rank-chart-header">
+              <h2 data-i18n="stateChart.title">Average severity by ranked intersections</h2>
+              <span data-i18n="stateChart.caption">Smoothed Top-N average per state</span>
+            </div>
+            <div id="stateRankChart" class="state-rank-chart"></div>
+          </div>
           <div class="table-shell">
             <table>
               <thead>
@@ -328,7 +335,7 @@
 
       </main>
     </div>
-    <script src="./assets/data-manifest.js?v=9555e40ceb645ba0"></script>
-    <script src="./assets/app.js?v=9555e40ceb645ba0"></script>
+    <script src="./assets/data-manifest.js?v=6e098d81b4025b30"></script>
+    <script src="./assets/app.js?v=6e098d81b4025b30"></script>
   </body>
 </html>
