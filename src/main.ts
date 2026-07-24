@@ -3,6 +3,7 @@ import { analyzeDangerousIntersectionsInBackground, type AnalysisExecutionPlan }
 import { DataRepository, type AnalysisCacheContext, type DataRepositoryTelemetry } from "./dataRepository";
 import { GeoGridIndex } from "./geo";
 import { MapCanvas } from "./mapCanvas";
+import { RequestGate, type RequestToken } from "./requestGate";
 import { accidentMatchesRoadUserFocus, ROAD_USER_DEFINITIONS, RoadUserDefinition, roadUserFocusKey } from "./roadUsers";
 import { STATE_NAMES } from "./states";
 import {
@@ -860,7 +861,6 @@ let crossingAccidentIndexCache: AccidentIndexCache | null = null;
 let accidentKeyLookupCache: AccidentKeyLookupCache | null = null;
 let accidentRecordIndexLookupCache: AccidentRecordIndexLookupCache | null = null;
 let severityRankCache: SeverityRankCache | null = null;
-let selectedAccidentRecordsRequestId = 0;
 let postRenderCacheWriteQueue: Promise<void> = Promise.resolve();
 let isStreetViewOpen = readStoredStreetViewOpen();
 let activeView: ViewKey = "map";
@@ -933,6 +933,7 @@ const elements = {
 };
 
 const dataRepository = new DataRepository();
+const requestGate = new RequestGate();
 const map = new MapCanvas(elements.mapCanvas, handleClusterSelection);
 const mobileLayout = window.matchMedia(MOBILE_LAYOUT_QUERY);
 
@@ -1349,7 +1350,8 @@ async function loadBundledData(): Promise<void> {
     setStatus(trf("status.accidentRecordsLoaded", { count: formatInteger(accidents.length) }), 60);
 
     analysisStarted = true;
-    void runAnalysisWithCache(options, cacheContext, telemetry, "analysis cache already missed before accident records loaded");
+    const requestToken = requestGate.start("analysis", "startup fallback");
+    void runAnalysisWithCache(options, cacheContext, telemetry, "analysis cache already missed before accident records loaded", null, requestToken);
   } catch (error) {
     setStatus(errorMessage(error), 0, "problem");
     logInitializationTelemetry(telemetry, "error");
@@ -1364,21 +1366,25 @@ function runAnalysis(initializationTelemetry: InitializationTelemetry | null = n
   normalizeLinkedNumberRange(elements.clusterRadius, elements.clusterRadiusOut);
   const options = readDraftAnalysisOptions();
   const cacheContext = activeDataVersion ? { dataVersion: activeDataVersion, appVersion: ANALYSIS_CACHE_VERSION } : null;
+  const requestToken = requestGate.start("analysis", analysisTelemetryDetail(options));
   setBusy(true);
-  void runAnalysisWhenAccidentsReady(options, cacheContext, initializationTelemetry);
+  void runAnalysisWhenAccidentsReady(requestToken, options, cacheContext, initializationTelemetry);
 }
 
 async function runAnalysisWhenAccidentsReady(
+  requestToken: RequestToken,
   options: AnalysisOptions,
   cacheContext: AnalysisCacheContext | null,
   initializationTelemetry: InitializationTelemetry | null
 ): Promise<void> {
   try {
-    await runAnalysisWithCache(options, cacheContext, initializationTelemetry);
+    await runAnalysisWithCache(options, cacheContext, initializationTelemetry, null, null, requestToken);
   } catch (error) {
-    setStatus(errorMessage(error), 0, "problem");
-    setBusy(false);
-    logInitializationTelemetry(initializationTelemetry, "error");
+    if (requestGate.isCurrent(requestToken)) {
+      setStatus(errorMessage(error), 0, "problem");
+      setBusy(false);
+      logInitializationTelemetry(initializationTelemetry, "error");
+    }
   }
 }
 
@@ -1387,7 +1393,8 @@ async function runAnalysisWithCache(
   cacheContext: AnalysisCacheContext | null,
   initializationTelemetry: InitializationTelemetry | null = null,
   skipAnalysisCacheReason: string | null = null,
-  analysisAccidents: AccidentRecord[] | null = null
+  analysisAccidents: AccidentRecord[] | null = null,
+  requestToken: RequestToken | null = null
 ): Promise<void> {
   let telemetryStatus: InitializationTelemetryStatus = "done";
   try {
@@ -1408,6 +1415,9 @@ async function runAnalysisWithCache(
         })
       );
       if (cached) {
+        if (requestToken && !requestGate.isCurrent(requestToken)) {
+          return;
+        }
         commitAnalysisState(options, cached);
         await measureInitializationStep(
           initializationTelemetry,
@@ -1424,10 +1434,16 @@ async function runAnalysisWithCache(
       }
     }
 
+    if (requestToken && !requestGate.isCurrent(requestToken)) {
+      return;
+    }
     setStatus(tr("status.analyzingIntersections"), 75);
     await yieldToBrowser();
     let analysisPlan: AnalysisExecutionPlan | null = null;
     const sourceAccidents = analysisAccidents ?? (await loadAccidentsForAnalysis(options, initializationTelemetry));
+    if (requestToken && !requestGate.isCurrent(requestToken)) {
+      return;
+    }
     const analyzedResult = await measureInitializationStep(
       initializationTelemetry,
       "analyze intersections",
@@ -1435,7 +1451,9 @@ async function runAnalysisWithCache(
       () =>
         analyzeDangerousIntersectionsInBackground(sourceAccidents, options, (plan) => {
           analysisPlan = plan;
-          updateAnalysisPlanStatus();
+          if (!requestToken || requestGate.isCurrent(requestToken)) {
+            updateAnalysisPlanStatus();
+          }
         }),
       (analysisResult) => ({
         accidentCount: sourceAccidents.length,
@@ -1448,6 +1466,9 @@ async function runAnalysisWithCache(
         parallel: analysisPlan?.parallel ?? false
       })
     );
+    if (requestToken && !requestGate.isCurrent(requestToken)) {
+      return;
+    }
     commitAnalysisState(options, analyzedResult);
     await measureInitializationStep(
       initializationTelemetry,
@@ -1472,11 +1493,15 @@ async function runAnalysisWithCache(
           : null
     });
   } catch (error) {
-    telemetryStatus = "error";
-    setStatus(errorMessage(error), 0, "problem");
+    if (!requestToken || requestGate.isCurrent(requestToken)) {
+      telemetryStatus = "error";
+      setStatus(errorMessage(error), 0, "problem");
+    }
   } finally {
-    setBusy(false);
-    logInitializationTelemetry(initializationTelemetry, telemetryStatus);
+    if (!requestToken || requestGate.isCurrent(requestToken)) {
+      setBusy(false);
+      logInitializationTelemetry(initializationTelemetry, telemetryStatus);
+    }
   }
 }
 
@@ -1642,9 +1667,14 @@ function renderAll(): void {
 }
 
 function handleClusterSelection(cluster: IntersectionCluster | null, reason: SelectionReason): void {
+  const previousClusterId = selectedCluster?.id ?? null;
   measureActiveInteractionStep("store selected cluster", cluster?.id ?? null, () => {
     selectedCluster = cluster;
   });
+  if (previousClusterId !== (cluster?.id ?? null)) {
+    requestGate.cancel("selectedAccidentRecords");
+    requestGate.cancel("factsheet");
+  }
   measureActiveInteractionStep(
     "render selected intersection panel",
     cluster?.id ?? null,
@@ -2739,16 +2769,16 @@ function hasAccidentStateShard(stateCode: string): boolean {
 }
 
 function queueSelectedAccidentRecordsLoad(cluster: IntersectionCluster): void {
-  const requestId = ++selectedAccidentRecordsRequestId;
+  const requestToken = requestGate.start("selectedAccidentRecords", cluster.id);
   void loadAccidentsForState(cluster.stateCode)
     .then(() => {
-      if (selectedCluster?.id !== cluster.id || requestId !== selectedAccidentRecordsRequestId) {
+      if (selectedCluster?.id !== cluster.id || !requestGate.isCurrent(requestToken)) {
         return;
       }
       renderSelection(cluster);
     })
     .catch((error) => {
-      if (selectedCluster?.id === cluster.id) {
+      if (selectedCluster?.id === cluster.id && requestGate.isCurrent(requestToken)) {
         console.warn("[Safe Intersections] Could not load selected accident records.", error);
       }
     });
@@ -3472,6 +3502,7 @@ async function downloadSelectedFactsheet(): Promise<void> {
     setStatus(tr("details.selectFirst"), 100, "idle");
     return;
   }
+  const requestToken = requestGate.start("factsheet", cluster.id);
 
   const factsheetButtons = selectedFactsheetButtons();
   factsheetButtons.forEach((button) => {
@@ -3480,7 +3511,13 @@ async function downloadSelectedFactsheet(): Promise<void> {
   setStatus(tr("status.factsheetCreating"), 100);
   try {
     const records = await clusterAccidentRecordsReady(cluster);
+    if (selectedCluster?.id !== cluster.id || !requestGate.isCurrent(requestToken)) {
+      return;
+    }
     const blob = await createFactsheetPdf(cluster, records);
+    if (selectedCluster?.id !== cluster.id || !requestGate.isCurrent(requestToken)) {
+      return;
+    }
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
@@ -3489,11 +3526,15 @@ async function downloadSelectedFactsheet(): Promise<void> {
     window.setTimeout(() => URL.revokeObjectURL(url), 0);
     setStatus(tr("status.factsheetDownloaded"), 100);
   } catch (error) {
-    setStatus(trf("status.factsheetFailed", { error: errorMessage(error) }), 100, "problem");
+    if (requestGate.isCurrent(requestToken)) {
+      setStatus(trf("status.factsheetFailed", { error: errorMessage(error) }), 100, "problem");
+    }
   } finally {
-    factsheetButtons.forEach((button) => {
-      button.disabled = false;
-    });
+    if (requestGate.isCurrent(requestToken)) {
+      factsheetButtons.forEach((button) => {
+        button.disabled = false;
+      });
+    }
   }
 }
 
