@@ -38,11 +38,40 @@ interface EmbeddedAccidentChunk {
   chunks: string[];
 }
 
+interface SerializedAnalysisOptions {
+  clusterRadiusMeters: number;
+  minAccidents: number;
+  years: number[];
+  roadUserFocus: RoadUserKey[];
+  stateCode: string | "all";
+  severityPercent: SeverityPercentOptions;
+}
+
+interface EmbeddedDefaultAnalysisMetadata {
+  dataVersion: string;
+  analysisCacheVersion: string;
+  options: SerializedAnalysisOptions;
+}
+
+interface EmbeddedDefaultAnalysis {
+  id: string;
+  encoding: "gzip-base64-json-v1";
+  metadata: EmbeddedDefaultAnalysisMetadata;
+  clusterCount: number;
+  filteredAccidentCount: number;
+  size: number;
+  compressedSize: number;
+  chunks: string[];
+}
+
 interface EmbeddedDataBundle {
   version?: string;
   files: EmbeddedDataFile[];
   accidentChunkFiles?: string[];
   accidentChunks?: EmbeddedAccidentChunk[];
+  defaultAnalysisFile?: string;
+  defaultAnalysisMetadata?: EmbeddedDefaultAnalysisMetadata;
+  defaultAnalysis?: EmbeddedDefaultAnalysis | null;
 }
 
 type CompactAccidentRecord = [
@@ -85,6 +114,7 @@ declare global {
 }
 
 declare const __SICHERE_KNOTEN_APP_VERSION__: string | undefined;
+declare const __SICHERE_KNOTEN_ANALYSIS_CACHE_VERSION__: string | undefined;
 
 type ClusterSortKey = "state" | "location" | "accidents" | "fatal" | "serious" | "severityPercent";
 type SortDirection = "asc" | "desc";
@@ -194,6 +224,8 @@ const PROJECT_REPOSITORY_URL = "https://github.com/kachurovskiy/sichereknoten";
 const PROJECT_REPOSITORY_LABEL = "kachurovskiy/sichereknoten";
 const APP_CACHE_VERSION =
   typeof __SICHERE_KNOTEN_APP_VERSION__ === "string" ? __SICHERE_KNOTEN_APP_VERSION__ : "dev-cluster-streets";
+const ANALYSIS_CACHE_VERSION =
+  typeof __SICHERE_KNOTEN_ANALYSIS_CACHE_VERSION__ === "string" ? __SICHERE_KNOTEN_ANALYSIS_CACHE_VERSION__ : APP_CACHE_VERSION;
 const offlineBundleScriptPromises = new Map<string, Promise<string>>();
 const STREET_VIEW_OPEN_STORAGE_KEY = "sichere-knoten:street-view-open";
 const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
@@ -327,6 +359,7 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "status.loadDataFirst": "Load accident data first.",
     "status.checkingAnalysisCache": "Checking analysis cache.",
     "status.intersectionClustersLoadedFromCache": "{count} intersection clusters loaded from cache.",
+    "status.intersectionClustersLoadedFromBundle": "{count} intersection clusters loaded from bundled default analysis.",
     "status.analyzingIntersections": "Analyzing intersections.",
     "status.cachingAnalysisResult": "Caching analysis result.",
     "status.intersectionClustersAnalyzed": "{count} intersection clusters analyzed.",
@@ -621,6 +654,7 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "status.loadDataFirst": "Lade zuerst Unfalldaten.",
     "status.checkingAnalysisCache": "Analysecache wird geprüft.",
     "status.intersectionClustersLoadedFromCache": "{count} Kreuzungscluster aus dem Cache geladen.",
+    "status.intersectionClustersLoadedFromBundle": "{count} Kreuzungscluster aus der gebündelten Standardanalyse geladen.",
     "status.analyzingIntersections": "Kreuzungen werden analysiert.",
     "status.cachingAnalysisResult": "Analyseergebnis wird gespeichert.",
     "status.intersectionClustersAnalyzed": "{count} Kreuzungscluster analysiert.",
@@ -1257,7 +1291,33 @@ async function loadBundledData(): Promise<void> {
     });
 
     const options = readOptions();
-    const cacheContext = { dataVersion, appVersion: APP_CACHE_VERSION };
+    const cacheContext = { dataVersion, appVersion: ANALYSIS_CACHE_VERSION };
+    const bundledDefaultAnalysis = await readBundledDefaultAnalysis(telemetry, dataVersion, ANALYSIS_CACHE_VERSION, options);
+    if (bundledDefaultAnalysis) {
+      result = bundledDefaultAnalysis;
+      selectedCluster = null;
+      activeAnalysisOptions = cloneAnalysisOptions(options);
+      crossingAccidentIndexCache = null;
+      accidentKeyLookupCache = null;
+      severityRankCache = null;
+      analysisSettingsDirty = false;
+      await measureInitializationStep(
+        telemetry,
+        "render analysis results",
+        analysisTelemetryDetail(options),
+        async () => {
+          renderAll();
+        },
+        () => ({ clusterCount: result?.clusters.length ?? 0 })
+      );
+      scheduleSelectionSupportPrewarm();
+      setStatus(trf("status.intersectionClustersLoadedFromBundle", { count: formatInteger(result.clusters.length) }), 100);
+      setBusy(false);
+      logInitializationTelemetry(telemetry, "done");
+      scheduleBackgroundAccidentDataLoad(telemetry);
+      return;
+    }
+
     setStatus(tr("status.checkingAnalysisCache"), 20);
     const cachedAnalysis = await measureInitializationStep(
       telemetry,
@@ -1313,7 +1373,7 @@ async function loadBundledData(): Promise<void> {
 function runAnalysis(initializationTelemetry: InitializationTelemetry | null = null): void {
   normalizeLinkedNumberRange(elements.clusterRadius, elements.clusterRadiusOut);
   const options = readOptions();
-  const cacheContext = activeDataVersion ? { dataVersion: activeDataVersion, appVersion: APP_CACHE_VERSION } : null;
+  const cacheContext = activeDataVersion ? { dataVersion: activeDataVersion, appVersion: ANALYSIS_CACHE_VERSION } : null;
   setBusy(true);
   void runAnalysisWhenAccidentsReady(options, cacheContext, initializationTelemetry);
 }
@@ -4548,6 +4608,96 @@ async function readBundledAccidents(
   return loadedAccidents;
 }
 
+async function readBundledDefaultAnalysis(
+  telemetry: InitializationTelemetry | null,
+  dataVersion: string,
+  analysisCacheVersion: string,
+  options: AnalysisOptions
+): Promise<AnalysisResult | null> {
+  const bundle = globalThis.__SICHERE_KNOTEN_DATA__;
+  const fileName = bundle?.defaultAnalysisFile;
+  const metadata = bundle?.defaultAnalysisMetadata;
+  if (typeof fileName !== "string" || !metadata) {
+    recordInitializationStep(telemetry, "skip bundled default analysis", analysisTelemetryDetail(options), {
+      reason: "bundled default analysis is missing"
+    });
+    return null;
+  }
+  if (!defaultAnalysisMetadataMatches(metadata, dataVersion, analysisCacheVersion, options)) {
+    recordInitializationStep(telemetry, "skip bundled default analysis", analysisTelemetryDetail(options), {
+      reason: "settings or version mismatch"
+    });
+    return null;
+  }
+
+  try {
+    const bundledAnalysis = await ensureBundledDefaultAnalysis(fileName, telemetry);
+    if (!defaultAnalysisMetadataMatches(bundledAnalysis.metadata, dataVersion, analysisCacheVersion, options)) {
+      recordInitializationStep(telemetry, "skip bundled default analysis", analysisTelemetryDetail(options), {
+        reason: "loaded bundle metadata mismatch"
+      });
+      return null;
+    }
+
+    return await measureInitializationStep(
+      telemetry,
+      "read bundled default analysis",
+      bundledAnalysis.id,
+      async () => {
+        const compressed = decodeBase64Chunks(bundledAnalysis.chunks);
+        const bytes = gunzipSync(compressed);
+        const text = new TextDecoder().decode(bytes);
+        const parsed = JSON.parse(text) as AnalysisResult;
+        await yieldToBrowser();
+        return parsed;
+      },
+      (analysisResult) => ({
+        cacheHit: true,
+        clusterCount: analysisResult.clusters.length,
+        filteredAccidentCount: analysisResult.filteredAccidentCount,
+        bytes: bundledAnalysis.size,
+        compressedBytes: bundledAnalysis.compressedSize
+      })
+    );
+  } catch (error) {
+    console.warn("[Safe Intersections] Could not load bundled default analysis; falling back to runtime analysis.", error);
+    recordInitializationStep(telemetry, "skip bundled default analysis", analysisTelemetryDetail(options), {
+      reason: errorMessage(error)
+    });
+    return null;
+  }
+}
+
+async function ensureBundledDefaultAnalysis(
+  fileName: string,
+  telemetry: InitializationTelemetry | null
+): Promise<EmbeddedDefaultAnalysis> {
+  const existingAnalysis = globalThis.__SICHERE_KNOTEN_DATA__?.defaultAnalysis;
+  if (existingAnalysis) {
+    return existingAnalysis;
+  }
+
+  await measureInitializationStep(
+    telemetry,
+    "load default analysis script",
+    fileName,
+    () => loadOfflineBundleScript(fileName),
+    (url) => ({
+      url,
+      automatic: true
+    })
+  );
+
+  const loadedAnalysis = globalThis.__SICHERE_KNOTEN_DATA__?.defaultAnalysis;
+  if (!loadedAnalysis) {
+    throw new Error(`Bundled default analysis ${fileName} did not register itself.`);
+  }
+  if (loadedAnalysis.encoding !== "gzip-base64-json-v1") {
+    throw new Error(`Bundled default analysis ${fileName} uses unsupported encoding ${loadedAnalysis.encoding}.`);
+  }
+  return loadedAnalysis;
+}
+
 async function ensureBundledAccidentChunk(fileName: string, telemetry: InitializationTelemetry | null): Promise<EmbeddedAccidentChunk> {
   const existingChunk = findBundledAccidentChunk(fileName);
   if (existingChunk) {
@@ -4575,6 +4725,30 @@ async function ensureBundledAccidentChunk(fileName: string, telemetry: Initializ
 function findBundledAccidentChunk(fileName: string): EmbeddedAccidentChunk | null {
   const chunkId = fileName.replace(/\.js$/i, "");
   return globalThis.__SICHERE_KNOTEN_DATA__?.accidentChunks?.find((chunk) => chunk.id === chunkId || `${chunk.id}.js` === fileName) ?? null;
+}
+
+function defaultAnalysisMetadataMatches(
+  metadata: EmbeddedDefaultAnalysisMetadata,
+  dataVersion: string,
+  analysisCacheVersion: string,
+  options: AnalysisOptions
+): boolean {
+  return (
+    metadata.dataVersion === dataVersion &&
+    metadata.analysisCacheVersion === analysisCacheVersion &&
+    JSON.stringify(metadata.options) === JSON.stringify(serializeAnalysisOptionsForBundle(options))
+  );
+}
+
+function serializeAnalysisOptionsForBundle(options: AnalysisOptions): SerializedAnalysisOptions {
+  return {
+    clusterRadiusMeters: options.clusterRadiusMeters,
+    minAccidents: options.minAccidents,
+    years: Array.from(options.years).sort((a, b) => a - b),
+    roadUserFocus: Array.from(options.roadUserFocus).sort(),
+    stateCode: options.stateCode,
+    severityPercent: { ...options.severityPercent }
+  };
 }
 
 async function loadOfflineBundleScript(fileName: string): Promise<string> {

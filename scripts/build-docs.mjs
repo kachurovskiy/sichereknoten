@@ -1,6 +1,6 @@
 import { build } from "esbuild";
 import { createHash } from "node:crypto";
-import { gzipSync } from "node:zlib";
+import { gunzipSync, gzipSync } from "node:zlib";
 import { copyFile, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { runInNewContext } from "node:vm";
@@ -17,8 +17,9 @@ await cleanGeneratedAssets();
 const csvFileList = await csvFiles();
 const normalizedDataCsvFileList = chronologicalCsvFiles(csvFileList);
 const streetLookupBundle = await buildStreetLookupBundle({ root, sourceDataDir, csvFiles: csvFileList });
-const dataScriptTags = await writeDataBundle(normalizedDataCsvFileList, streetLookupBundle);
 const appVersion = await hashAppSources();
+const analysisCacheVersion = await hashAnalysisSources();
+const dataScriptTags = await writeDataBundle(normalizedDataCsvFileList, streetLookupBundle, analysisCacheVersion);
 
 await build({
   entryPoints: [path.join(root, "src/main.ts")],
@@ -31,6 +32,7 @@ await build({
   legalComments: "none",
   define: {
     __SICHERE_KNOTEN_APP_VERSION__: JSON.stringify(appVersion),
+    __SICHERE_KNOTEN_ANALYSIS_CACHE_VERSION__: JSON.stringify(analysisCacheVersion),
     __SICHERE_KNOTEN_ANALYSIS_WORKER_URL__: JSON.stringify(`./assets/analysis-worker.js?v=${appVersion}`)
   }
 });
@@ -57,11 +59,15 @@ const docsHtml = sourceHtml
 await writeFile(path.join(docsDir, "index.html"), docsHtml);
 await copyFile(path.join(root, "favicon.svg"), path.join(docsDir, "favicon.svg"));
 
-async function writeDataBundle(files, streetLookup) {
+async function writeDataBundle(files, streetLookup, analysisCacheVersion) {
   const dataVersion = await hashFiles(files, streetLookup);
   const fileMetadata = await sourceFileMetadata(files);
+  const defaultAnalysisOptions = await defaultAnalysisOptionsFromHtml(files);
   const reusableAccidentChunkFiles = await reusableAccidentChunks(dataVersion);
   const accidentChunkFiles = reusableAccidentChunkFiles ?? (await writeAccidentChunks(dataVersion, files, streetLookup));
+  const defaultAnalysis =
+    (await reusableDefaultAnalysis(dataVersion, analysisCacheVersion, defaultAnalysisOptions)) ??
+    (await writeDefaultAnalysis(dataVersion, analysisCacheVersion, accidentChunkFiles, defaultAnalysisOptions));
 
   if (reusableAccidentChunkFiles) {
     await removeGeneratedAccidentChunks(new Set(reusableAccidentChunkFiles));
@@ -70,7 +76,7 @@ async function writeDataBundle(files, streetLookup) {
     );
   }
 
-  await writeDataManifest(dataVersion, fileMetadata, accidentChunkFiles);
+  await writeDataManifest(dataVersion, fileMetadata, accidentChunkFiles, defaultAnalysis);
   return ["data-manifest.js"];
 }
 
@@ -101,12 +107,14 @@ async function writeAccidentChunks(dataVersion, files, streetLookup) {
   return accidentChunkFiles;
 }
 
-async function writeDataManifest(dataVersion, fileMetadata, accidentChunkFiles) {
+async function writeDataManifest(dataVersion, fileMetadata, accidentChunkFiles, defaultAnalysis) {
   await writeFile(
     path.join(assetsDir, "data-manifest.js"),
     `globalThis.__SICHERE_KNOTEN_DATA__={version:${JSON.stringify(dataVersion)},files:${JSON.stringify(
       fileMetadata
-    )},accidentChunkFiles:${JSON.stringify(accidentChunkFiles)},accidentChunks:[]};\n`
+    )},accidentChunkFiles:${JSON.stringify(accidentChunkFiles)},accidentChunks:[],defaultAnalysisFile:${JSON.stringify(
+      defaultAnalysis.fileName
+    )},defaultAnalysisMetadata:${JSON.stringify(defaultAnalysis.metadata)},defaultAnalysis:null};\n`
   );
 }
 
@@ -153,6 +161,66 @@ async function reusableAccidentChunks(dataVersion) {
   return chunkFiles;
 }
 
+async function reusableDefaultAnalysis(dataVersion, analysisCacheVersion, options) {
+  const manifest = await readExistingDataManifest();
+  const fileName = manifest?.defaultAnalysisFile;
+  const metadata = manifest?.defaultAnalysisMetadata;
+  if (
+    !manifest ||
+    manifest.version !== dataVersion ||
+    typeof fileName !== "string" ||
+    fileName !== "analysis-default.js" ||
+    !defaultAnalysisMetadataMatches(metadata, dataVersion, analysisCacheVersion, options)
+  ) {
+    return null;
+  }
+  if (!(await fileExists(path.join(assetsDir, fileName)))) {
+    return null;
+  }
+
+  console.log(`Reused bundled default analysis for data version ${dataVersion}.`);
+  return { fileName, metadata };
+}
+
+async function writeDefaultAnalysis(dataVersion, analysisCacheVersion, accidentChunkFiles, options) {
+  const analyzeDangerousIntersections = await loadAnalysisModule();
+  const accidents = await loadNormalizedAccidentsFromChunks(accidentChunkFiles);
+  const result = compactAnalysisResult(analyzeDangerousIntersections(accidents, options));
+  const metadata = {
+    dataVersion,
+    analysisCacheVersion,
+    options: serializeAnalysisOptionsForBundle(options)
+  };
+  const bytes = Buffer.from(JSON.stringify(result));
+  const compressed = gzipSync(bytes, { level: 9 });
+  const fileName = "analysis-default.js";
+  const bundle = {
+    id: "analysis-default",
+    encoding: "gzip-base64-json-v1",
+    metadata,
+    clusterCount: result.clusters.length,
+    filteredAccidentCount: result.filteredAccidentCount,
+    size: bytes.byteLength,
+    compressedSize: compressed.byteLength,
+    chunks: chunkString(compressed.toString("base64"), 256 * 1024)
+  };
+  const script = `globalThis.__SICHERE_KNOTEN_DATA__=globalThis.__SICHERE_KNOTEN_DATA__||{version:${JSON.stringify(
+    dataVersion
+  )},files:[],accidentChunks:[]};globalThis.__SICHERE_KNOTEN_DATA__.defaultAnalysis=${JSON.stringify(bundle)};\n`;
+  await writeFile(path.join(assetsDir, fileName), script);
+  console.log(`Wrote ${fileName} with ${result.clusters.length.toLocaleString("en-US")} default intersection clusters.`);
+  return { fileName, metadata };
+}
+
+function defaultAnalysisMetadataMatches(metadata, dataVersion, analysisCacheVersion, options) {
+  return (
+    metadata &&
+    metadata.dataVersion === dataVersion &&
+    metadata.analysisCacheVersion === analysisCacheVersion &&
+    JSON.stringify(metadata.options) === JSON.stringify(serializeAnalysisOptionsForBundle(options))
+  );
+}
+
 async function readExistingDataManifest() {
   try {
     const script = await readFile(path.join(assetsDir, "data-manifest.js"), "utf8");
@@ -163,6 +231,26 @@ async function readExistingDataManifest() {
   } catch {
     return null;
   }
+}
+
+async function loadNormalizedAccidentsFromChunks(accidentChunkFiles) {
+  const accidents = [];
+  for (const fileName of accidentChunkFiles) {
+    const script = await readFile(path.join(assetsDir, fileName), "utf8");
+    const sandbox = { globalThis: {} };
+    runInNewContext(script, sandbox, { timeout: 1000 });
+    const chunk = sandbox.globalThis.__SICHERE_KNOTEN_DATA__?.accidentChunks?.[0];
+    if (!chunk?.chunks) {
+      throw new Error(`Could not load normalized accident chunk ${fileName}.`);
+    }
+
+    const compactRecords = JSON.parse(gunzipSync(Buffer.from(chunk.chunks.join(""), "base64")).toString("utf8"));
+    for (const record of compactRecords) {
+      accidents.push(accidentFromCompactRecord(record, accidents.length));
+    }
+  }
+  console.log(`Loaded ${accidents.length.toLocaleString("en-US")} normalized accident records for default analysis.`);
+  return accidents;
 }
 
 async function removeGeneratedAccidentChunks(keep = new Set()) {
@@ -214,12 +302,74 @@ async function loadCsvParser() {
   return module.parseAccidentCsvFiles;
 }
 
+async function loadAnalysisModule() {
+  const result = await build({
+    entryPoints: [path.join(root, "src/analysis.ts")],
+    bundle: true,
+    write: false,
+    format: "esm",
+    platform: "node",
+    target: "node22",
+    sourcemap: false,
+    legalComments: "none"
+  });
+  const code = result.outputFiles[0].text;
+  const moduleUrl = `data:text/javascript;base64,${Buffer.from(code).toString("base64")}`;
+  const module = await import(moduleUrl);
+  return module.analyzeDangerousIntersections;
+}
+
 async function parseCsvFile(file, parseAccidentCsvFiles) {
   const bytes = await readFile(file.sourcePath);
   const sourceFile = new File([bytes], path.basename(file.publicPath), { type: file.type });
   const accidents = await parseAccidentCsvFiles([sourceFile], () => {});
   console.log(`Parsed ${accidents.length.toLocaleString("en-US")} accident records from ${file.publicPath}.`);
   return accidents;
+}
+
+async function defaultAnalysisOptionsFromHtml(files) {
+  const html = await readFile(path.join(root, "index.html"), "utf8");
+  const trendDeadZonePercent = numericInputDefault(html, "severityTrendDeadZone");
+  const trendFullSignalPercent = Math.max(trendDeadZonePercent + 0.1, numericInputDefault(html, "severityTrendFullSignal"));
+  return {
+    clusterRadiusMeters: numericInputDefault(html, "clusterRadiusOut"),
+    minAccidents: numericInputDefault(html, "minAccidents"),
+    years: new Set(defaultAnalysisYears(files)),
+    roadUserFocus: new Set(),
+    stateCode: "all",
+    severityPercent: {
+      fatalWeight: numericInputDefault(html, "fatalWeight"),
+      seriousWeight: numericInputDefault(html, "seriousWeight"),
+      fullSampleAccidents: numericInputDefault(html, "severityFullSample"),
+      trendYears: numericInputDefault(html, "severityTrendYears"),
+      trendDeadZone: trendDeadZonePercent / 100,
+      trendFullSignal: trendFullSignalPercent / 100,
+      maxTrendAdjustment: numericInputDefault(html, "severityMaxTrendAdjustment") / 100,
+      maxSeverityPercent: numericInputDefault(html, "severityMaxPercent") / 100
+    }
+  };
+}
+
+function defaultAnalysisYears(files) {
+  const years = new Set();
+  for (const file of files) {
+    const label = `${file.publicPath} ${path.basename(file.publicPath)}`;
+    for (const match of label.matchAll(/(20\d{2})/g)) {
+      years.add(Number(match[1]));
+    }
+  }
+  return Array.from(years).sort((a, b) => a - b);
+}
+
+function numericInputDefault(html, id) {
+  const pattern = new RegExp(`<input\\b[^>]*id=["']${id}["'][^>]*>`, "i");
+  const input = pattern.exec(html)?.[0];
+  const value = input ? /\bvalue=["']([^"']+)["']/i.exec(input)?.[1] : null;
+  const number = Number(value);
+  if (!Number.isFinite(number)) {
+    throw new Error(`Could not read default value for #${id}.`);
+  }
+  return number;
 }
 
 async function writeAccidentChunk(dataVersion, index, records) {
@@ -277,6 +427,96 @@ function compactAccidentRecord(accident) {
   ];
 }
 
+function accidentFromCompactRecord(record, recordIndex) {
+  const streetNames = record[3];
+  const stateCode = record[4];
+  return {
+    id: record[0],
+    recordIndex,
+    serialNumber: record[1],
+    source: record[2],
+    sourceType: "csv",
+    streetName: streetNames[0] ?? null,
+    streetNames,
+    stateCode,
+    stateName: stateNameFromCode(stateCode),
+    administrativeRegionCode: record[5],
+    districtCode: record[6],
+    municipalityCode: record[7],
+    administrativeRegionName: record[8],
+    districtName: record[9],
+    municipalityName: record[10],
+    year: record[11],
+    month: record[12],
+    day: record[13],
+    hour: record[14],
+    weekday: record[15],
+    category: record[16],
+    accidentKind: record[17],
+    accidentType: record[18],
+    lightCondition: record[19],
+    roadSurface: record[20],
+    plausibilityLevel: record[21],
+    linRefX: record[22],
+    linRefY: record[23],
+    lon: record[24],
+    lat: record[25],
+    involvesBike: record[26],
+    involvesPedestrian: record[27],
+    involvesMotorcycle: record[28],
+    involvesCar: record[29],
+    involvesTruck: record[30],
+    involvesOther: record[31]
+  };
+}
+
+function compactAnalysisResult(result) {
+  return {
+    ...result,
+    clusters: result.clusters.map(compactAnalysisCluster),
+    stateSummaries: result.stateSummaries.map((summary) => ({
+      ...summary,
+      topCluster: summary.topCluster ? compactAnalysisCluster(summary.topCluster) : null
+    }))
+  };
+}
+
+function compactAnalysisCluster(cluster) {
+  const { accidentKeys: _accidentKeys, ...compact } = cluster;
+  return compact;
+}
+
+function serializeAnalysisOptionsForBundle(options) {
+  return {
+    ...options,
+    years: Array.from(options.years).sort((a, b) => a - b),
+    roadUserFocus: Array.from(options.roadUserFocus).sort(),
+    severityPercent: { ...options.severityPercent }
+  };
+}
+
+function stateNameFromCode(code) {
+  const names = {
+    "01": "Schleswig-Holstein",
+    "02": "Hamburg",
+    "03": "Niedersachsen",
+    "04": "Bremen",
+    "05": "Nordrhein-Westfalen",
+    "06": "Hessen",
+    "07": "Rheinland-Pfalz",
+    "08": "Baden-Wuerttemberg",
+    "09": "Bayern",
+    "10": "Saarland",
+    "11": "Berlin",
+    "12": "Brandenburg",
+    "13": "Mecklenburg-Vorpommern",
+    "14": "Sachsen",
+    "15": "Sachsen-Anhalt",
+    "16": "Thueringen"
+  };
+  return names[code] ?? `Bundesland ${code}`;
+}
+
 async function hashFiles(files, streetLookup) {
   const hash = createHash("sha256");
   for (const file of files) {
@@ -303,6 +543,30 @@ async function hashAppSources() {
     path.join(root, "package-lock.json"),
     path.join(root, "scripts/build-docs.mjs"),
     path.join(root, "scripts/build-streets.mjs")
+  ].sort();
+  const hash = createHash("sha256");
+
+  for (const file of files) {
+    const bytes = await readFile(file);
+    hash.update(path.relative(root, file).replace(/\\/g, "/"));
+    hash.update("\0");
+    hash.update(bytes);
+    hash.update("\0");
+  }
+
+  return hash.digest("hex").slice(0, 16);
+}
+
+async function hashAnalysisSources() {
+  const files = [
+    path.join(root, "src/analysis.ts"),
+    path.join(root, "src/analysisRunner.ts"),
+    path.join(root, "src/analysisWorker.ts"),
+    path.join(root, "src/analysisWorkerProtocol.ts"),
+    path.join(root, "src/cache.ts"),
+    path.join(root, "src/geo.ts"),
+    path.join(root, "src/roadUsers.ts"),
+    path.join(root, "src/types.ts")
   ].sort();
   const hash = createHash("sha256");
 
