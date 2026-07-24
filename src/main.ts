@@ -843,6 +843,32 @@ interface ClusterAccidentRecordsSnapshot {
   loading: boolean;
 }
 
+interface SelectedExternalUrls {
+  openStreetMapUrl: string;
+  googleMapsUrl: string;
+  streetViewUrl: string;
+  authoritySearchUrl: string;
+}
+
+interface SelectedIncidentPoint {
+  lat: number;
+  lon: number;
+  label: string;
+}
+
+interface SelectedIntersectionViewModel {
+  cluster: IntersectionCluster;
+  urls: SelectedExternalUrls;
+  accidentRecordSnapshot: ClusterAccidentRecordsSnapshot;
+  accidentRecords: CrossingAccident[];
+  pressSearchUrl: string;
+  streetNames: string[];
+  trendPanel: string;
+  roadUserPanel: string;
+  recordPanel: string;
+  incidentPoints: SelectedIncidentPoint[];
+}
+
 interface CommittedAnalysisState {
   result: AnalysisResult;
   options: AnalysisOptions;
@@ -2315,21 +2341,31 @@ function clusterSeverity(cluster: IntersectionCluster): SeverityFilterKey {
 
 function renderSelection(cluster: IntersectionCluster | null): void {
   if (!cluster) {
-    elements.selectedAside.hidden = true;
-    elements.mapView.classList.remove("has-selection");
-    elements.selectionDetails.textContent = tr("details.none");
-    map.setSelectedIncidentPoints([]);
-    updateContextTabs();
-    if (activeView === "details") {
-      setView("map");
-    } else {
-      updateStreetViewPanel();
-    }
+    renderEmptySelection();
     return;
   }
 
-  elements.selectedAside.hidden = false;
-  elements.mapView.classList.add("has-selection");
+  const viewModel = buildSelectedIntersectionViewModel(cluster);
+  applySelectedIntersectionViewModel(viewModel);
+  if (viewModel.accidentRecordSnapshot.loading) {
+    queueSelectedAccidentRecordsLoad(cluster);
+  }
+}
+
+function renderEmptySelection(): void {
+  elements.selectedAside.hidden = true;
+  elements.mapView.classList.remove("has-selection");
+  elements.selectionDetails.textContent = tr("details.none");
+  map.setSelectedIncidentPoints([]);
+  updateContextTabs();
+  if (activeView === "details") {
+    setView("map");
+  } else {
+    updateStreetViewPanel();
+  }
+}
+
+function buildSelectedIntersectionViewModel(cluster: IntersectionCluster): SelectedIntersectionViewModel {
   const urls = measureActiveInteractionStep(
     "build selected external URLs",
     cluster.id,
@@ -2373,21 +2409,49 @@ function renderSelection(cluster: IntersectionCluster | null): void {
     () => renderSidebarAccidentRecords(accidentRecords, cluster.accidentCount, streetNames, accidentRecordSnapshot.loading),
     () => ({ recordCount: accidentRecords.length })
   );
+
+  return {
+    cluster,
+    urls,
+    accidentRecordSnapshot,
+    accidentRecords,
+    pressSearchUrl,
+    streetNames,
+    trendPanel,
+    roadUserPanel,
+    recordPanel,
+    incidentPoints: accidentRecords.map(({ accident }, index) => ({
+      lat: accident.lat,
+      lon: accident.lon,
+      label: String(index + 1)
+    }))
+  };
+}
+
+function applySelectedIntersectionViewModel(viewModel: SelectedIntersectionViewModel): void {
+  const { cluster } = viewModel;
+  elements.selectedAside.hidden = false;
+  elements.mapView.classList.add("has-selection");
   measureActiveInteractionStep(
     "update selected incident points",
     cluster.id,
-    () =>
-      map.setSelectedIncidentPoints(
-        accidentRecords.map(({ accident }, index) => ({
-          lat: accident.lat,
-          lon: accident.lon,
-          label: String(index + 1)
-        }))
-      ),
-    () => ({ pointCount: accidentRecords.length })
+    () => map.setSelectedIncidentPoints(viewModel.incidentPoints),
+    () => ({ pointCount: viewModel.incidentPoints.length })
   );
 
-  const detailsHtml = measureActiveInteractionStep("build selected panel html", cluster.id, () => `
+  const detailsHtml = measureActiveInteractionStep("build selected panel html", cluster.id, () => renderSelectedPanelHtml(viewModel));
+  measureActiveInteractionStep("apply selected panel html", cluster.id, () => {
+    elements.selectionDetails.innerHTML = detailsHtml;
+  });
+  measureActiveInteractionStep("update details tabs", cluster.id, updateContextTabs);
+  measureActiveInteractionStep("update street view panel", cluster.id, updateStreetViewPanel, () => ({
+    streetViewOpen: isStreetViewOpen
+  }));
+}
+
+function renderSelectedPanelHtml(viewModel: SelectedIntersectionViewModel): string {
+  const { cluster, urls, pressSearchUrl, streetNames, trendPanel, roadUserPanel, recordPanel } = viewModel;
+  return `
       <dl>
         <div><dt>${escapeHtml(tr("details.state"))}</dt><dd>${escapeHtml(cluster.stateName)}</dd></div>
         ${cluster.administrativeRegionName ? `<div><dt>${escapeHtml(tr("details.adminRegion"))}</dt><dd>${escapeHtml(cluster.administrativeRegionName)}</dd></div>` : ""}
@@ -2405,17 +2469,7 @@ function renderSelection(cluster: IntersectionCluster | null): void {
       ${trendPanel}
       ${roadUserPanel}
       ${recordPanel}
-    `);
-  measureActiveInteractionStep("apply selected panel html", cluster.id, () => {
-    elements.selectionDetails.innerHTML = detailsHtml;
-  });
-  measureActiveInteractionStep("update details tabs", cluster.id, updateContextTabs);
-  measureActiveInteractionStep("update street view panel", cluster.id, updateStreetViewPanel, () => ({
-    streetViewOpen: isStreetViewOpen
-  }));
-  if (accidentRecordSnapshot.loading) {
-    queueSelectedAccidentRecordsLoad(cluster);
-  }
+    `;
 }
 
 function renderClusterStreetDetailRow(streetNames: string[]): string {
