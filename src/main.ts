@@ -842,14 +842,20 @@ interface ClusterAccidentRecordsSnapshot {
   loading: boolean;
 }
 
+interface CommittedAnalysisState {
+  result: AnalysisResult;
+  options: AnalysisOptions;
+  dataVersion: string | null;
+}
+
 let accidents: AccidentRecord[] = [];
 let result: AnalysisResult | null = null;
+let committedAnalysis: CommittedAnalysisState | null = null;
 let selectedCluster: IntersectionCluster | null = null;
 let clusterTableSort: ClusterTableSort = { key: "severityPercent", direction: "desc" };
 let analysisSettingsDirty = false;
 let activeDataVersion: string | null = null;
 let userLocation: { lat: number; lon: number; accuracyMeters: number | null } | null = null;
-let activeAnalysisOptions: AnalysisOptions | null = null;
 let crossingAccidentIndexCache: AccidentIndexCache | null = null;
 let accidentKeyLookupCache: AccidentKeyLookupCache | null = null;
 let accidentRecordIndexLookupCache: AccidentRecordIndexLookupCache | null = null;
@@ -1172,12 +1178,12 @@ function formatInputNumber(value: number): string {
 }
 
 function markAnalysisSettingsDirty(): void {
-  if (!accidents.length && !result) {
+  if (!dataRepository.hasAnyAccidents() && !committedAnalysis) {
     return;
   }
-  analysisSettingsDirty = true;
+  analysisSettingsDirty = !committedAnalysis || !analysisOptionsEqual(readDraftAnalysisOptions(), committedAnalysis.options);
   updateAnalyzeButton();
-  if (result) {
+  if (analysisSettingsDirty && committedAnalysis) {
     setStatus(tr("status.settingsChanged"), 100);
   }
 }
@@ -1232,23 +1238,44 @@ function repositoryTelemetry(telemetry: InitializationTelemetry | null): DataRep
   };
 }
 
+function clearCommittedAnalysisState(): void {
+  result = null;
+  committedAnalysis = null;
+  selectedCluster = null;
+  clearAnalysisDerivedState();
+  analysisSettingsDirty = false;
+  updateAnalyzeButton();
+}
+
+function commitAnalysisState(options: AnalysisOptions, analysisResult: AnalysisResult): void {
+  result = analysisResult;
+  committedAnalysis = {
+    result: analysisResult,
+    options: cloneAnalysisOptions(options),
+    dataVersion: activeDataVersion
+  };
+  selectedCluster = null;
+  clearAnalysisDerivedState();
+  analysisSettingsDirty = false;
+  updateAnalyzeButton();
+}
+
+function clearAnalysisDerivedState(): void {
+  crossingAccidentIndexCache = null;
+  accidentKeyLookupCache = null;
+  accidentRecordIndexLookupCache = null;
+  severityRankCache = null;
+}
+
 async function loadBundledData(): Promise<void> {
   const telemetry = createInitializationTelemetry();
   setBusy(true);
   let analysisStarted = false;
   try {
     accidents = [];
-    result = null;
-    selectedCluster = null;
-    activeAnalysisOptions = null;
-    crossingAccidentIndexCache = null;
-    accidentKeyLookupCache = null;
-    accidentRecordIndexLookupCache = null;
-    severityRankCache = null;
+    clearCommittedAnalysisState();
     dataRepository.resetRuntimeState();
-    analysisSettingsDirty = false;
     activeDataVersion = null;
-    updateAnalyzeButton();
     populateFilters();
     renderAll();
     setStatus(tr("status.loadingDataManifest"), 2);
@@ -1261,7 +1288,7 @@ async function loadBundledData(): Promise<void> {
       reason: "normalized bundle is faster than IndexedDB object cache"
     });
 
-    const options = readOptions();
+    const options = readDraftAnalysisOptions();
     const cacheContext = { dataVersion, appVersion: ANALYSIS_CACHE_VERSION };
     const bundledDefaultAnalysis = await dataRepository.readDefaultAnalysis(
       dataVersion,
@@ -1271,14 +1298,7 @@ async function loadBundledData(): Promise<void> {
       repositoryTelemetry(telemetry)
     );
     if (bundledDefaultAnalysis) {
-      result = bundledDefaultAnalysis;
-      selectedCluster = null;
-      activeAnalysisOptions = cloneAnalysisOptions(options);
-      crossingAccidentIndexCache = null;
-      accidentKeyLookupCache = null;
-      accidentRecordIndexLookupCache = null;
-      severityRankCache = null;
-      analysisSettingsDirty = false;
+      commitAnalysisState(options, bundledDefaultAnalysis);
       await measureInitializationStep(
         telemetry,
         "render analysis results",
@@ -1289,7 +1309,7 @@ async function loadBundledData(): Promise<void> {
         () => ({ clusterCount: result?.clusters.length ?? 0 })
       );
       scheduleSelectionSupportPrewarm();
-      setStatus(trf("status.intersectionClustersLoadedFromBundle", { count: formatInteger(result.clusters.length) }), 100);
+      setStatus(trf("status.intersectionClustersLoadedFromBundle", { count: formatInteger(bundledDefaultAnalysis.clusters.length) }), 100);
       setBusy(false);
       logInitializationTelemetry(telemetry, "done");
       return;
@@ -1307,14 +1327,7 @@ async function loadBundledData(): Promise<void> {
       })
     );
     if (cachedAnalysis) {
-      result = cachedAnalysis;
-      selectedCluster = null;
-      activeAnalysisOptions = cloneAnalysisOptions(options);
-      crossingAccidentIndexCache = null;
-      accidentKeyLookupCache = null;
-      accidentRecordIndexLookupCache = null;
-      severityRankCache = null;
-      analysisSettingsDirty = false;
+      commitAnalysisState(options, cachedAnalysis);
       await measureInitializationStep(
         telemetry,
         "render analysis results",
@@ -1325,7 +1338,7 @@ async function loadBundledData(): Promise<void> {
         () => ({ clusterCount: result?.clusters.length ?? 0 })
       );
       scheduleSelectionSupportPrewarm();
-      setStatus(trf("status.intersectionClustersLoadedFromCache", { count: formatInteger(result.clusters.length) }), 100);
+      setStatus(trf("status.intersectionClustersLoadedFromCache", { count: formatInteger(cachedAnalysis.clusters.length) }), 100);
       setBusy(false);
       logInitializationTelemetry(telemetry, "done");
       return;
@@ -1349,7 +1362,7 @@ async function loadBundledData(): Promise<void> {
 
 function runAnalysis(initializationTelemetry: InitializationTelemetry | null = null): void {
   normalizeLinkedNumberRange(elements.clusterRadius, elements.clusterRadiusOut);
-  const options = readOptions();
+  const options = readDraftAnalysisOptions();
   const cacheContext = activeDataVersion ? { dataVersion: activeDataVersion, appVersion: ANALYSIS_CACHE_VERSION } : null;
   setBusy(true);
   void runAnalysisWhenAccidentsReady(options, cacheContext, initializationTelemetry);
@@ -1395,14 +1408,7 @@ async function runAnalysisWithCache(
         })
       );
       if (cached) {
-        result = cached;
-        selectedCluster = null;
-        activeAnalysisOptions = cloneAnalysisOptions(options);
-        crossingAccidentIndexCache = null;
-        accidentKeyLookupCache = null;
-        accidentRecordIndexLookupCache = null;
-        severityRankCache = null;
-        analysisSettingsDirty = false;
+        commitAnalysisState(options, cached);
         await measureInitializationStep(
           initializationTelemetry,
           "render analysis results",
@@ -1413,7 +1419,7 @@ async function runAnalysisWithCache(
           () => ({ clusterCount: result?.clusters.length ?? 0 })
         );
         scheduleSelectionSupportPrewarm();
-        setStatus(trf("status.intersectionClustersLoadedFromCache", { count: formatInteger(result.clusters.length) }), 100);
+        setStatus(trf("status.intersectionClustersLoadedFromCache", { count: formatInteger(cached.clusters.length) }), 100);
         return;
       }
     }
@@ -1422,7 +1428,7 @@ async function runAnalysisWithCache(
     await yieldToBrowser();
     let analysisPlan: AnalysisExecutionPlan | null = null;
     const sourceAccidents = analysisAccidents ?? (await loadAccidentsForAnalysis(options, initializationTelemetry));
-    result = await measureInitializationStep(
+    const analyzedResult = await measureInitializationStep(
       initializationTelemetry,
       "analyze intersections",
       analysisTelemetryDetail(options),
@@ -1442,13 +1448,7 @@ async function runAnalysisWithCache(
         parallel: analysisPlan?.parallel ?? false
       })
     );
-    selectedCluster = null;
-    activeAnalysisOptions = cloneAnalysisOptions(options);
-    crossingAccidentIndexCache = null;
-    accidentKeyLookupCache = null;
-    accidentRecordIndexLookupCache = null;
-    severityRankCache = null;
-    analysisSettingsDirty = false;
+    commitAnalysisState(options, analyzedResult);
     await measureInitializationStep(
       initializationTelemetry,
       "render analysis results",
@@ -1460,14 +1460,14 @@ async function runAnalysisWithCache(
     );
     scheduleSelectionSupportPrewarm();
 
-    setStatus(trf("status.intersectionClustersAnalyzed", { count: formatInteger(result.clusters.length) }), 100);
+    setStatus(trf("status.intersectionClustersAnalyzed", { count: formatInteger(analyzedResult.clusters.length) }), 100);
     enqueuePostRenderCacheWrites(initializationTelemetry, {
       analysis:
-        cacheContext && result
+        cacheContext
           ? {
               cacheContext,
               options: cloneAnalysisOptions(options),
-              result
+              result: analyzedResult
             }
           : null
     });
@@ -1484,7 +1484,7 @@ function updateAnalysisPlanStatus(): void {
   setStatus(tr("status.analyzingIntersections"), 75);
 }
 
-function readOptions(): AnalysisOptions {
+function readDraftAnalysisOptions(): AnalysisOptions {
   const years = new Set<number>();
   elements.yearFilter.querySelectorAll<HTMLInputElement>("input[type='checkbox']").forEach((input) => {
     if (input.checked) {
@@ -1543,6 +1543,28 @@ function cloneAnalysisOptions(options: AnalysisOptions): AnalysisOptions {
     years: new Set(options.years),
     roadUserFocus: new Set(options.roadUserFocus),
     severityPercent: { ...options.severityPercent }
+  };
+}
+
+function analysisOptionsEqual(left: AnalysisOptions, right: AnalysisOptions): boolean {
+  return JSON.stringify(analysisOptionsSignature(left)) === JSON.stringify(analysisOptionsSignature(right));
+}
+
+function analysisOptionsSignature(options: AnalysisOptions): Record<string, string | number | string[]> {
+  return {
+    clusterRadiusMeters: options.clusterRadiusMeters,
+    minAccidents: options.minAccidents,
+    years: Array.from(options.years).sort((a, b) => a - b).map(String),
+    roadUserFocus: Array.from(options.roadUserFocus).sort(),
+    stateCode: options.stateCode,
+    fatalWeight: options.severityPercent.fatalWeight,
+    seriousWeight: options.severityPercent.seriousWeight,
+    fullSampleAccidents: options.severityPercent.fullSampleAccidents,
+    trendYears: options.severityPercent.trendYears,
+    trendDeadZone: options.severityPercent.trendDeadZone,
+    trendFullSignal: options.severityPercent.trendFullSignal,
+    maxTrendAdjustment: options.severityPercent.maxTrendAdjustment,
+    maxSeverityPercent: options.severityPercent.maxSeverityPercent
   };
 }
 
@@ -2747,7 +2769,7 @@ function clusterAccidentRecords(cluster: IntersectionCluster, sourceRecords: Acc
     return exactRecords.sort(compareCrossingAccidents);
   }
 
-  const options = activeAnalysisOptions ?? readOptions();
+  const options = committedAnalysis?.options ?? readDraftAnalysisOptions();
   const searchRadiusMeters = clusterAccidentSearchRadius(options);
   const index = accidentIndexForCrossings(options, searchRadiusMeters, sourceRecords);
   const candidates = index
@@ -3649,7 +3671,7 @@ function factsheetTrendSummary(trendText: string, cluster: IntersectionCluster, 
 }
 
 function factsheetMethodologyText(cluster: IntersectionCluster): string {
-  const radiusMeters = activeAnalysisOptions?.clusterRadiusMeters ?? Number(elements.clusterRadiusOut.value);
+  const radiusMeters = committedAnalysis?.options.clusterRadiusMeters ?? Number(elements.clusterRadiusOut.value);
   return trf("factsheet.methodologyTextDetailed", {
     radius: formatDistance(radiusMeters),
     trendYears: formatInteger(factsheetTrendPeriodSetting(cluster))
@@ -3657,7 +3679,7 @@ function factsheetMethodologyText(cluster: IntersectionCluster): string {
 }
 
 function factsheetTrendPeriodSetting(cluster: IntersectionCluster): number {
-  const configuredTrendYears = activeAnalysisOptions?.severityPercent.trendYears ?? cluster.accidentTrend.years;
+  const configuredTrendYears = committedAnalysis?.options.severityPercent.trendYears ?? cluster.accidentTrend.years;
   return Math.max(2, Math.trunc(Number.isFinite(configuredTrendYears) ? configuredTrendYears : 4));
 }
 
