@@ -7,6 +7,23 @@ import { RequestGate, type RequestToken } from "./requestGate";
 import { accidentMatchesRoadUserFocus, ROAD_USER_DEFINITIONS, RoadUserDefinition, roadUserFocusKey } from "./roadUsers";
 import { STATE_NAMES } from "./states";
 import {
+  createInitializationTelemetry,
+  createInteractionTelemetry,
+  createPostRenderCacheTelemetry,
+  errorMessage,
+  finishInteractionStep,
+  logInitializationTelemetry,
+  logInteractionTelemetry,
+  measureInitializationStep,
+  measureInteractionStep,
+  recordInitializationStep,
+  startInteractionStep,
+  type InitializationTelemetry,
+  type InitializationTelemetryStatus,
+  type InteractionTelemetry,
+  type TelemetryMetadata
+} from "./telemetry";
+import {
   AccidentRecord,
   AccidentTrendDirection,
   AnalysisOptions,
@@ -33,49 +50,6 @@ type SelectionReason = "auto" | "program" | "user";
 type HotspotMetricPlacement = "header" | "stats";
 type AppLocale = "en" | "de";
 type LoadingStatusKind = "normal" | "problem" | "idle";
-type InitializationTelemetryStatus = "running" | "done" | "error";
-type InitializationTelemetryMetadata = Record<string, string | number | boolean | null>;
-
-interface InitializationTelemetry {
-  startedAt: string;
-  startMark: number;
-  appVersion: string;
-  dataVersion: string | null;
-  steps: InitializationTelemetryStep[];
-  logged: boolean;
-}
-
-interface InitializationTelemetryStep {
-  name: string;
-  detail: string | null;
-  startTime: string;
-  startMark: number;
-  startOffsetMs: number;
-  durationMs: number | null;
-  status: InitializationTelemetryStatus;
-  metadata: InitializationTelemetryMetadata;
-}
-
-interface InteractionTelemetry {
-  label: string;
-  source: string;
-  startedAt: string;
-  startMark: number;
-  clusterId: string | null;
-  clusterLabel: string | null;
-  steps: InteractionTelemetryStep[];
-  logged: boolean;
-}
-
-interface InteractionTelemetryStep {
-  name: string;
-  detail: string | null;
-  startTime: string;
-  startMark: number;
-  startOffsetMs: number;
-  durationMs: number | null;
-  metadata: InitializationTelemetryMetadata;
-}
 
 interface SiteVersionManifest {
   appVersion?: string;
@@ -1295,7 +1269,7 @@ function clearAnalysisDerivedState(): void {
 }
 
 async function loadBundledData(): Promise<void> {
-  const telemetry = createInitializationTelemetry();
+  const telemetry = createInitializationTelemetry(APP_CACHE_VERSION);
   setBusy(true);
   let analysisStarted = false;
   try {
@@ -2279,7 +2253,7 @@ function selectNearestCluster(): { cluster: IntersectionCluster; distanceMeters:
 }
 
 function selectClusterOnMap(cluster: IntersectionCluster, telemetrySource = "cluster selection"): void {
-  const telemetry = createInteractionTelemetry("select cluster from list", telemetrySource, cluster);
+  const telemetry = createInteractionTelemetry("select cluster from list", telemetrySource, cluster.id, clusterLocationText(cluster));
   activeInteractionTelemetry = telemetry;
   measureInteractionStep(telemetry, "ensure severity visible", cluster.id, () => ensureClusterSeverityVisible(cluster), () => ({
     severity: clusterSeverity(cluster),
@@ -4757,46 +4731,6 @@ function escapeHtml(value: string): string {
   });
 }
 
-function createInitializationTelemetry(): InitializationTelemetry {
-  return {
-    startedAt: new Date().toISOString(),
-    startMark: performance.now(),
-    appVersion: APP_CACHE_VERSION,
-    dataVersion: null,
-    steps: [],
-    logged: false
-  };
-}
-
-function createPostRenderCacheTelemetry(source: InitializationTelemetry | null): InitializationTelemetry | null {
-  if (!source) {
-    return null;
-  }
-
-  return {
-    startedAt: new Date().toISOString(),
-    startMark: performance.now(),
-    appVersion: source.appVersion,
-    dataVersion: source.dataVersion,
-    steps: [],
-    logged: false
-  };
-}
-
-function recordInitializationStep(
-  telemetry: InitializationTelemetry | null,
-  name: string,
-  detail: string | null,
-  metadata: InitializationTelemetryMetadata
-): void {
-  if (!telemetry) {
-    return;
-  }
-
-  const step = startInitializationStep(telemetry, name, detail);
-  finishInitializationStep(step, "done", metadata);
-}
-
 function enqueuePostRenderCacheWrites(
   initializationTelemetry: InitializationTelemetry | null,
   writes: PostRenderCacheWrites
@@ -4878,131 +4812,14 @@ function scheduleIdleWork(work: () => void): void {
   }
 }
 
-async function measureInitializationStep<T>(
-  telemetry: InitializationTelemetry | null,
-  name: string,
-  detail: string | null,
-  work: () => Promise<T>,
-  metadata?: (result: T) => InitializationTelemetryMetadata
-): Promise<T> {
-  if (!telemetry) {
-    return work();
-  }
-
-  const step = startInitializationStep(telemetry, name, detail);
-  try {
-    const result = await work();
-    finishInitializationStep(step, "done", metadata?.(result) ?? {});
-    return result;
-  } catch (error) {
-    finishInitializationStep(step, "error", { error: errorMessage(error) });
-    throw error;
-  }
-}
-
-function startInitializationStep(telemetry: InitializationTelemetry, name: string, detail: string | null): InitializationTelemetryStep {
-  const startMark = performance.now();
-  const step: InitializationTelemetryStep = {
-    name,
-    detail,
-    startTime: new Date().toISOString(),
-    startMark,
-    startOffsetMs: startMark - telemetry.startMark,
-    durationMs: null,
-    status: "running",
-    metadata: {}
-  };
-  telemetry.steps.push(step);
-  return step;
-}
-
-function finishInitializationStep(
-  step: InitializationTelemetryStep,
-  status: Exclude<InitializationTelemetryStatus, "running">,
-  metadata: InitializationTelemetryMetadata
-): void {
-  step.durationMs = performance.now() - step.startMark;
-  step.status = status;
-  step.metadata = metadata;
-}
-
-function logInitializationTelemetry(
-  telemetry: InitializationTelemetry | null,
-  status: Exclude<InitializationTelemetryStatus, "running">,
-  label = "initialization telemetry"
-): void {
-  if (!telemetry || telemetry.logged) {
-    return;
-  }
-
-  telemetry.logged = true;
-  const finishedAt = new Date().toISOString();
-  const durationMs = round(performance.now() - telemetry.startMark, 2);
-  const summary = {
-    status,
-    appVersion: telemetry.appVersion,
-    dataVersion: telemetry.dataVersion ?? "unknown",
-    startedAt: telemetry.startedAt,
-    finishedAt,
-    durationMs,
-    stepCount: telemetry.steps.length
-  };
-  const rows = telemetry.steps.map((step, index) => ({
-    "#": index + 1,
-    step: step.name,
-    detail: step.detail ?? "",
-    status: step.status,
-    "start time": step.startTime,
-    "start +ms": round(step.startOffsetMs, 2),
-    "duration ms": step.durationMs === null ? null : round(step.durationMs, 2),
-    ...step.metadata
-  }));
-
-  console.groupCollapsed(`[Safe Intersections] ${label}: ${status} in ${durationMs} ms`);
-  console.info(summary);
-  console.table(rows);
-  console.groupEnd();
-}
-
-function createInteractionTelemetry(label: string, source: string, cluster: IntersectionCluster | null): InteractionTelemetry {
-  return {
-    label,
-    source,
-    startedAt: new Date().toISOString(),
-    startMark: performance.now(),
-    clusterId: cluster?.id ?? null,
-    clusterLabel: cluster ? clusterLocationText(cluster) : null,
-    steps: [],
-    logged: false
-  };
-}
-
 function measureActiveInteractionStep<T>(
   name: string,
   detail: string | null,
   work: () => T,
-  metadata?: (result: T) => InitializationTelemetryMetadata
+  metadata?: (result: T) => TelemetryMetadata
 ): T {
   const telemetry = activeInteractionTelemetry;
   return telemetry ? measureInteractionStep(telemetry, name, detail, work, metadata) : work();
-}
-
-function measureInteractionStep<T>(
-  telemetry: InteractionTelemetry,
-  name: string,
-  detail: string | null,
-  work: () => T,
-  metadata?: (result: T) => InitializationTelemetryMetadata
-): T {
-  const step = startInteractionStep(telemetry, name, detail);
-  try {
-    const result = work();
-    finishInteractionStep(step, metadata?.(result) ?? {});
-    return result;
-  } catch (error) {
-    finishInteractionStep(step, { error: errorMessage(error) });
-    throw error;
-  }
 }
 
 function withInteractionTelemetry<T>(telemetry: InteractionTelemetry, work: () => T): T {
@@ -5015,32 +4832,12 @@ function withInteractionTelemetry<T>(telemetry: InteractionTelemetry, work: () =
   }
 }
 
-function startInteractionStep(telemetry: InteractionTelemetry, name: string, detail: string | null): InteractionTelemetryStep {
-  const startMark = performance.now();
-  const step: InteractionTelemetryStep = {
-    name,
-    detail,
-    startTime: new Date().toISOString(),
-    startMark,
-    startOffsetMs: startMark - telemetry.startMark,
-    durationMs: null,
-    metadata: {}
-  };
-  telemetry.steps.push(step);
-  return step;
-}
-
-function finishInteractionStep(step: InteractionTelemetryStep, metadata: InitializationTelemetryMetadata): void {
-  step.durationMs = performance.now() - step.startMark;
-  step.metadata = metadata;
-}
-
 function scheduleInteractionTelemetryLog(telemetry: InteractionTelemetry): void {
   const paintStep = startInteractionStep(telemetry, "wait for browser paint", telemetry.clusterId);
   window.requestAnimationFrame(() => {
     window.requestAnimationFrame(() => {
       finishInteractionStep(paintStep, { activeView });
-      logInteractionTelemetry(telemetry);
+      logInteractionTelemetry(telemetry, { activeView });
       if (activeInteractionTelemetry === telemetry) {
         activeInteractionTelemetry = null;
       }
@@ -5048,49 +4845,10 @@ function scheduleInteractionTelemetryLog(telemetry: InteractionTelemetry): void 
   });
 }
 
-function logInteractionTelemetry(telemetry: InteractionTelemetry): void {
-  if (telemetry.logged) {
-    return;
-  }
-
-  telemetry.logged = true;
-  const finishedAt = new Date().toISOString();
-  const durationMs = round(performance.now() - telemetry.startMark, 2);
-  const summary = {
-    label: telemetry.label,
-    source: telemetry.source,
-    clusterId: telemetry.clusterId ?? "",
-    cluster: telemetry.clusterLabel ?? "",
-    startedAt: telemetry.startedAt,
-    finishedAt,
-    durationMs,
-    stepCount: telemetry.steps.length,
-    activeView
-  };
-  const rows = telemetry.steps.map((step, index) => ({
-    "#": index + 1,
-    step: step.name,
-    detail: step.detail ?? "",
-    "start time": step.startTime,
-    "start +ms": round(step.startOffsetMs, 2),
-    "duration ms": step.durationMs === null ? null : round(step.durationMs, 2),
-    ...step.metadata
-  }));
-
-  console.groupCollapsed(`[Safe Intersections] interaction telemetry: ${telemetry.source} in ${durationMs} ms`);
-  console.info(summary);
-  console.table(rows);
-  console.groupEnd();
-}
-
 function analysisTelemetryDetail(options: AnalysisOptions): string {
   const years = Array.from(options.years).sort((a, b) => a - b).join(",") || "all";
   const roadUsers = roadUserFocusKey(options.roadUserFocus) || "all";
   return `state=${options.stateCode}; years=${years}; roadUsers=${roadUsers}; radius=${options.clusterRadiusMeters}m; minAccidents=${options.minAccidents}`;
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function readStoredStreetViewOpen(): boolean {
