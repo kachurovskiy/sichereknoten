@@ -118,6 +118,10 @@ button {
   font-size: 0.9rem;
 }
 
+.field-label[hidden] {
+  display: none;
+}
+
 .field-group {
   display: grid;
   gap: 8px;
@@ -517,9 +521,12 @@ select {
   grid-template-columns: minmax(0, 1fr) minmax(360px, 460px);
 }
 
-#stateView.active {
-  grid-template-rows: auto auto;
+#stateView.active,
+#regionView.active {
+  grid-template-rows: auto;
   gap: 14px;
+  align-content: start;
+  align-items: start;
   min-height: 0;
   overflow: auto;
 }
@@ -1447,14 +1454,9 @@ button.map-service-link {
   background: #ffffff;
 }
 
-#stateView > .table-shell {
-  width: min(100%, 1000px);
-  max-width: 1000px;
-}
-
 .state-rank-chart-panel {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto auto;
   gap: 10px;
   width: min(100%, 1000px);
   max-width: 1000px;
@@ -1493,7 +1495,7 @@ button.map-service-link {
   position: relative;
   display: grid;
   gap: 12px;
-  align-items: stretch;
+  align-items: start;
   min-width: 0;
   min-height: 0;
 }
@@ -1985,13 +1987,13 @@ tbody tr:focus {
     overflow: auto;
   }
 
-  #stateView.active {
-    grid-template-rows: auto auto;
+  #stateView.active,
+  #regionView.active {
+    grid-template-rows: auto;
     gap: 12px;
     overflow: auto;
   }
 
-  #stateView.active .table-shell,
   #tableView.active .table-shell {
     min-height: 0;
   }

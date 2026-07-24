@@ -37,6 +37,12 @@
             <select id="browseState" aria-label="Bundesland" data-i18n-aria-label="field.state">
               <option value="all" data-i18n="option.allStates">All Bundeslaender</option>
             </select>
+            <label id="browseRegionField" class="field-label browse-region-field" for="browseRegion" hidden>
+              <span data-i18n="field.region">Region</span>
+              <select id="browseRegion" aria-label="Region" data-i18n-aria-label="field.region">
+                <option value="all" data-i18n="option.allRegions">All regions</option>
+              </select>
+            </label>
             <div id="stateHotspotList" class="hotspot-list"></div>
           </section>
 
@@ -57,11 +63,13 @@
               </svg>
             </button>
             <button id="stateTab" class="tab-button secondary-tab" role="tab" type="button" aria-selected="false" data-i18n="tab.state">Bundesland</button>
+            <button id="regionTab" class="tab-button secondary-tab" role="tab" type="button" aria-selected="false" data-i18n="tab.region">Region</button>
             <button id="tableTab" class="tab-button secondary-tab" role="tab" type="button" aria-selected="false" data-i18n="tab.intersections">Intersections</button>
             <button id="settingsTab" class="tab-button secondary-tab" role="tab" type="button" aria-selected="false" data-i18n="tab.settings">Settings</button>
           </div>
           <div id="mobileMoreMenu" class="mobile-more-menu" role="menu" hidden>
             <button id="mobileStateTab" class="mobile-more-item" role="menuitem" type="button" data-i18n="tab.state">Bundesland</button>
+            <button id="mobileRegionTab" class="mobile-more-item" role="menuitem" type="button" data-i18n="tab.region">Region</button>
             <button id="mobileTableTab" class="mobile-more-item" role="menuitem" type="button" data-i18n="tab.intersections">Intersections</button>
             <button id="mobileSettingsTab" class="mobile-more-item" role="menuitem" type="button" data-i18n="tab.settings">Settings</button>
           </div>
@@ -150,19 +158,15 @@
             </div>
             <div id="stateRankChart" class="state-rank-chart"></div>
           </div>
-          <div class="table-shell">
-            <table>
-              <thead>
-                <tr>
-                  <th data-i18n="table.state">Bundesland</th>
-                  <th data-i18n="table.accidents">Accidents</th>
-                  <th data-i18n="table.clusters">Clusters</th>
-                  <th data-i18n="metric.severityPercent">Severity %</th>
-                  <th data-i18n="table.topCluster">Top cluster</th>
-                </tr>
-              </thead>
-              <tbody id="stateTableBody"></tbody>
-            </table>
+        </section>
+
+        <section id="regionView" class="view">
+          <div class="state-rank-chart-panel">
+            <div class="state-rank-chart-header">
+              <h2 data-i18n="regionChart.title">Average severity by ranked intersections</h2>
+              <span data-i18n="regionChart.caption">Smoothed Top-N average per region</span>
+            </div>
+            <div id="regionRankChart" class="state-rank-chart"></div>
           </div>
         </section>
 

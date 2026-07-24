@@ -44,7 +44,7 @@ declare const __SICHERE_KNOTEN_ANALYSIS_CACHE_VERSION__: string | undefined;
 type ClusterSortKey = "state" | "location" | "accidents" | "fatal" | "serious" | "severityPercent";
 type SortDirection = "asc" | "desc";
 type SeverityFilterKey = "fatal" | "serious" | "other";
-type ViewKey = "explore" | "map" | "details" | "state" | "table" | "settings";
+type ViewKey = "explore" | "map" | "details" | "state" | "region" | "table" | "settings";
 type SelectionReason = "auto" | "program" | "user";
 type HotspotMetricPlacement = "header" | "stats";
 type AppLocale = "en" | "de";
@@ -262,14 +262,17 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "brand.description": "Explore German accident data to identify elevated-risk intersections by severity, location, and year.",
     "browse.title": "Browse by state",
     "field.state": "State",
+    "field.region": "Region",
     "field.accidentOutcome": "Accident outcome",
     "option.allStates": "All states",
+    "option.allRegions": "All regions",
     "tab.browse": "Browse",
     "tab.map": "Map",
     "tab.details": "Details",
     "tab.streetView": "Street View",
     "tab.moreViews": "More views",
     "tab.state": "State",
+    "tab.region": "Region",
     "tab.intersections": "Intersections",
     "tab.settings": "Settings",
     "stateChart.title": "Average severity by ranked intersections",
@@ -278,6 +281,10 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "stateChart.aria": "Average severity percentage among top ranked intersections by state",
     "stateChart.xAxis": "Top-N ranked intersections",
     "stateChart.yAxis": "Avg. severity %",
+    "regionChart.title": "Average severity by ranked intersections",
+    "regionChart.caption": "Smoothed Top-N average per region",
+    "regionChart.empty": "Run an analysis to show ranked intersection severity by region.",
+    "regionChart.aria": "Average severity percentage among top ranked intersections by region",
     "severity.fatal": "Fatal",
     "severity.serious": "Serious",
     "severity.light": "Light",
@@ -563,14 +570,17 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "brand.description": "Erkunde deutsche Unfalldaten, um Kreuzungen mit erhöhtem Risiko nach Schwere, Ort und Jahr zu erkennen.",
     "browse.title": "Nach Bundesland suchen",
     "field.state": "Bundesland",
+    "field.region": "Region",
     "field.accidentOutcome": "Unfallfolge",
     "option.allStates": "Alle Bundesländer",
+    "option.allRegions": "Alle Regionen",
     "tab.browse": "Suche",
     "tab.map": "Karte",
     "tab.details": "Details",
     "tab.streetView": "Street View",
     "tab.moreViews": "Weitere Ansichten",
     "tab.state": "Bundesland",
+    "tab.region": "Region",
     "tab.intersections": "Kreuzungen",
     "tab.settings": "Einstellungen",
     "stateChart.title": "Mittlerer Schweregrad nach Kreuzungsrang",
@@ -579,6 +589,10 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "stateChart.aria": "Mittlerer Schweregrad-Prozentwert unter den ranghoechsten Kreuzungen je Bundesland",
     "stateChart.xAxis": "Top-N Kreuzungen nach Rang",
     "stateChart.yAxis": "Mittl. Schweregrad %",
+    "regionChart.title": "Mittlerer Schweregrad nach Kreuzungsrang",
+    "regionChart.caption": "Geglaetteter Top-N-Mittelwert je Region",
+    "regionChart.empty": "Führe eine Analyse aus, um den Schweregrad nach Kreuzungsrang je Region zu sehen.",
+    "regionChart.aria": "Mittlerer Schweregrad-Prozentwert unter den ranghoechsten Kreuzungen je Region",
     "severity.fatal": "Tödlich",
     "severity.serious": "Schwer",
     "severity.light": "Leicht",
@@ -893,6 +907,32 @@ interface SeverityPercentSource {
   severityPercent: number;
 }
 
+interface RegionSummary extends SeverityPercentSource {
+  key: string;
+  stateCode: string;
+  stateName: string;
+  regionName: string;
+  accidentCount: number;
+  clusterCount: number;
+  fatalCount: number;
+  seriousCount: number;
+  topCluster: IntersectionCluster | null;
+  clusters: IntersectionCluster[];
+}
+
+interface RegionSummaryAccumulator extends RegionSummary {
+  weightedSeverityPercent: number;
+}
+
+interface BrowseIndex {
+  clusters: IntersectionCluster[];
+  regionSummaries: RegionSummary[];
+  regionsByState: Map<string, RegionSummary[]>;
+  topClustersByState: IntersectionCluster[];
+  browseClustersByState: Map<string, IntersectionCluster[]>;
+  browseClustersByRegion: Map<string, IntersectionCluster[]>;
+}
+
 interface SeverityRank {
   rank: number;
   percentile: number;
@@ -1002,6 +1042,7 @@ let crossingAccidentIndexCache: AccidentIndexCache | null = null;
 let accidentKeyLookupCache: AccidentKeyLookupCache | null = null;
 let accidentRecordIndexLookupCache: AccidentRecordIndexLookupCache | null = null;
 let severityRankCache: SeverityRankCache | null = null;
+let browseIndexCache: BrowseIndex | null = null;
 let postRenderCacheWriteQueue: Promise<void> = Promise.resolve();
 let isStreetViewOpen = readStoredStreetViewOpen();
 let activeView: ViewKey = "map";
@@ -1045,23 +1086,28 @@ const elements = {
   findNearbyBtn: byId<HTMLButtonElement>("findNearbyBtn"),
   nearbyList: byId<HTMLDivElement>("nearbyList"),
   browseState: byId<HTMLSelectElement>("browseState"),
+  browseRegionField: byId<HTMLLabelElement>("browseRegionField"),
+  browseRegion: byId<HTMLSelectElement>("browseRegion"),
   stateHotspotList: byId<HTMLDivElement>("stateHotspotList"),
   stateRankChart: byId<HTMLDivElement>("stateRankChart"),
-  stateTableBody: byId<HTMLTableSectionElement>("stateTableBody"),
+  regionRankChart: byId<HTMLDivElement>("regionRankChart"),
   clusterTableBody: byId<HTMLTableSectionElement>("clusterTableBody"),
   exploreTab: byId<HTMLButtonElement>("exploreTab"),
   mapTab: byId<HTMLButtonElement>("mapTab"),
   detailsTab: byId<HTMLButtonElement>("detailsTab"),
   moreTab: byId<HTMLButtonElement>("moreTab"),
   stateTab: byId<HTMLButtonElement>("stateTab"),
+  regionTab: byId<HTMLButtonElement>("regionTab"),
   tableTab: byId<HTMLButtonElement>("tableTab"),
   settingsTab: byId<HTMLButtonElement>("settingsTab"),
   mobileMoreMenu: byId<HTMLDivElement>("mobileMoreMenu"),
   mobileStateTab: byId<HTMLButtonElement>("mobileStateTab"),
+  mobileRegionTab: byId<HTMLButtonElement>("mobileRegionTab"),
   mobileTableTab: byId<HTMLButtonElement>("mobileTableTab"),
   mobileSettingsTab: byId<HTMLButtonElement>("mobileSettingsTab"),
   mapView: byId<HTMLElement>("mapView"),
   stateView: byId<HTMLElement>("stateView"),
+  regionView: byId<HTMLElement>("regionView"),
   tableView: byId<HTMLElement>("tableView"),
   settingsView: byId<HTMLElement>("settingsView"),
   showFatalPoints: byId<HTMLInputElement>("showFatalPoints"),
@@ -1150,7 +1196,7 @@ function wireEvents(): void {
   wireMapControlEvents();
   wireNavigationEvents();
   wireClusterSortEvents();
-  wireStateRankChartEvents();
+  wireRankChartEvents();
 }
 
 function wireApplicationCommands(): void {
@@ -1180,7 +1226,11 @@ function wireMapControlEvents(): void {
   elements.locateMeBtn.addEventListener("click", () => locateUser({ selectNearest: false }));
   elements.findNearbyBtn.addEventListener("click", () => locateUser({ selectNearest: true }));
   elements.streetViewToggle.addEventListener("click", toggleStreetViewPanel);
-  elements.browseState.addEventListener("change", renderExplore);
+  elements.browseState.addEventListener("change", () => {
+    updateBrowseRegionOptions();
+    renderStateHotspotList();
+  });
+  elements.browseRegion.addEventListener("change", renderStateHotspotList);
 }
 
 function wireNavigationEvents(): void {
@@ -1189,9 +1239,11 @@ function wireNavigationEvents(): void {
   elements.detailsTab.addEventListener("click", () => setView("details"));
   elements.moreTab.addEventListener("click", toggleMobileMoreMenu);
   elements.stateTab.addEventListener("click", () => setView("state"));
+  elements.regionTab.addEventListener("click", () => setView("region"));
   elements.tableTab.addEventListener("click", () => setView("table"));
   elements.settingsTab.addEventListener("click", () => setView("settings"));
   elements.mobileStateTab.addEventListener("click", () => setView("state"));
+  elements.mobileRegionTab.addEventListener("click", () => setView("region"));
   elements.mobileTableTab.addEventListener("click", () => setView("table"));
   elements.mobileSettingsTab.addEventListener("click", () => setView("settings"));
   document.addEventListener("click", closeMobileMoreMenuOnOutsideClick);
@@ -1222,107 +1274,124 @@ function wireClusterSortEvents(): void {
   }
 }
 
-function wireStateRankChartEvents(): void {
-  elements.stateRankChart.addEventListener("pointerover", handleStateRankChartPointerOver);
-  elements.stateRankChart.addEventListener("pointermove", handleStateRankChartPointerMove);
-  elements.stateRankChart.addEventListener("pointerout", handleStateRankChartPointerOut);
-  elements.stateRankChart.addEventListener("focusin", handleStateRankChartFocusIn);
-  elements.stateRankChart.addEventListener("focusout", clearStateRankChartHover);
+function wireRankChartEvents(): void {
+  [elements.stateRankChart, elements.regionRankChart].forEach((chart) => {
+    chart.addEventListener("pointerover", handleRankChartPointerOver);
+    chart.addEventListener("pointermove", handleRankChartPointerMove);
+    chart.addEventListener("pointerout", handleRankChartPointerOut);
+    chart.addEventListener("focusin", handleRankChartFocusIn);
+    chart.addEventListener("focusout", handleRankChartFocusOut);
+  });
 }
 
-function handleStateRankChartPointerOver(event: PointerEvent): void {
-  const series = stateRankChartSeriesElement(event.target);
-  if (!series) {
+function handleRankChartPointerOver(event: PointerEvent): void {
+  const chart = rankChartContainer(event.currentTarget);
+  const series = rankChartSeriesElement(event.target);
+  if (!chart || !series) {
     return;
   }
-  setStateRankChartHover(series);
-  positionStateRankChartTooltip(event);
+  setRankChartHover(chart, series);
+  positionRankChartTooltip(chart, event);
 }
 
-function handleStateRankChartPointerMove(event: PointerEvent): void {
-  if (stateRankChartSeriesElement(event.target)) {
-    positionStateRankChartTooltip(event);
+function handleRankChartPointerMove(event: PointerEvent): void {
+  const chart = rankChartContainer(event.currentTarget);
+  if (chart && rankChartSeriesElement(event.target)) {
+    positionRankChartTooltip(chart, event);
   }
 }
 
-function handleStateRankChartPointerOut(event: PointerEvent): void {
-  const series = stateRankChartSeriesElement(event.target);
-  if (!series || (event.relatedTarget instanceof Node && series.contains(event.relatedTarget))) {
+function handleRankChartPointerOut(event: PointerEvent): void {
+  const chart = rankChartContainer(event.currentTarget);
+  const series = rankChartSeriesElement(event.target);
+  if (!chart || !series || (event.relatedTarget instanceof Node && series.contains(event.relatedTarget))) {
     return;
   }
-  clearStateRankChartHover();
+  clearRankChartHover(chart);
 }
 
-function handleStateRankChartFocusIn(event: FocusEvent): void {
-  const series = stateRankChartSeriesElement(event.target);
-  if (!series) {
+function handleRankChartFocusIn(event: FocusEvent): void {
+  const chart = rankChartContainer(event.currentTarget);
+  const series = rankChartSeriesElement(event.target);
+  if (!chart || !series) {
     return;
   }
-  setStateRankChartHover(series);
-  positionStateRankChartTooltipNearElement(series);
+  setRankChartHover(chart, series);
+  positionRankChartTooltipNearElement(chart, series);
 }
 
-function stateRankChartSeriesElement(target: EventTarget | null): SVGGElement | null {
+function handleRankChartFocusOut(event: FocusEvent): void {
+  const chart = rankChartContainer(event.currentTarget);
+  if (chart) {
+    clearRankChartHover(chart);
+  }
+}
+
+function rankChartContainer(target: EventTarget | null): HTMLElement | null {
+  return target instanceof HTMLElement ? target : null;
+}
+
+function rankChartSeriesElement(target: EventTarget | null): SVGGElement | null {
   if (!(target instanceof Element)) {
     return null;
   }
-  return target.closest<SVGGElement>("[data-state-rank-series]");
+  return target.closest<SVGGElement>("[data-rank-chart-series]");
 }
 
-function setStateRankChartHover(activeSeries: SVGGElement): void {
+function setRankChartHover(chart: HTMLElement, activeSeries: SVGGElement): void {
   const svg = activeSeries.closest<SVGSVGElement>(".state-rank-chart-svg");
-  if (!svg) {
+  if (!svg || !chart.contains(svg)) {
     return;
   }
 
-  svg.querySelectorAll<SVGGElement>("[data-state-rank-series]").forEach((series) => {
+  chart.querySelectorAll<SVGGElement>("[data-rank-chart-series]").forEach((series) => {
     series.classList.toggle("active", series === activeSeries);
     series.classList.toggle("muted", series !== activeSeries);
   });
 
-  const tooltip = stateRankChartTooltip();
+  const tooltip = rankChartTooltip(chart);
   if (!tooltip) {
     return;
   }
-  tooltip.textContent = activeSeries.dataset.stateName ?? "";
+  tooltip.textContent = activeSeries.dataset.seriesName ?? "";
   tooltip.hidden = false;
 }
 
-function clearStateRankChartHover(): void {
-  elements.stateRankChart.querySelectorAll<SVGGElement>("[data-state-rank-series]").forEach((series) => {
+function clearRankChartHover(chart: HTMLElement): void {
+  chart.querySelectorAll<SVGGElement>("[data-rank-chart-series]").forEach((series) => {
     series.classList.remove("active", "muted");
   });
-  const tooltip = stateRankChartTooltip();
+  const tooltip = rankChartTooltip(chart);
   if (tooltip) {
     tooltip.hidden = true;
   }
 }
 
-function positionStateRankChartTooltip(event: PointerEvent): void {
-  const tooltip = stateRankChartTooltip();
+function positionRankChartTooltip(chart: HTMLElement, event: PointerEvent): void {
+  const tooltip = rankChartTooltip(chart);
   if (!tooltip || tooltip.hidden) {
     return;
   }
-  const bounds = elements.stateRankChart.getBoundingClientRect();
+  const bounds = chart.getBoundingClientRect();
   const x = event.clientX - bounds.left + 12;
   const y = event.clientY - bounds.top + 12;
   tooltip.style.left = `${round(x, 1)}px`;
   tooltip.style.top = `${round(y, 1)}px`;
 }
 
-function positionStateRankChartTooltipNearElement(series: SVGGElement): void {
-  const tooltip = stateRankChartTooltip();
+function positionRankChartTooltipNearElement(chart: HTMLElement, series: SVGGElement): void {
+  const tooltip = rankChartTooltip(chart);
   if (!tooltip || tooltip.hidden) {
     return;
   }
-  const chartBounds = elements.stateRankChart.getBoundingClientRect();
+  const chartBounds = chart.getBoundingClientRect();
   const seriesBounds = series.getBoundingClientRect();
   tooltip.style.left = `${round(seriesBounds.right - chartBounds.left + 10, 1)}px`;
   tooltip.style.top = `${round(seriesBounds.top - chartBounds.top, 1)}px`;
 }
 
-function stateRankChartTooltip(): HTMLElement | null {
-  return elements.stateRankChart.querySelector<HTMLElement>(".state-rank-chart-tooltip");
+function rankChartTooltip(chart: HTMLElement): HTMLElement | null {
+  return chart.querySelector<HTMLElement>(".state-rank-chart-tooltip");
 }
 
 function handleSelectionDetailsClick(event: MouseEvent): void {
@@ -1537,6 +1606,7 @@ function clearAnalysisDerivedState(): void {
   accidentKeyLookupCache = null;
   accidentRecordIndexLookupCache = null;
   severityRankCache = null;
+  browseIndexCache = null;
 }
 
 async function loadBundledData(): Promise<void> {
@@ -1867,6 +1937,7 @@ function analysisOptionsSignature(options: AnalysisOptions): Record<string, stri
 function populateFilters(): void {
   const selectedState = elements.stateFilter.value;
   const selectedBrowseState = elements.browseState.value;
+  const selectedBrowseRegion = elements.browseRegion.value;
   const previousYearInputs = Array.from(elements.yearFilter.querySelectorAll<HTMLInputElement>("input[type='checkbox']"));
   const selectedYears = new Set(previousYearInputs.filter((input) => input.checked).map((input) => Number(input.value)));
   const hadYearFilters = previousYearInputs.length > 0;
@@ -1884,6 +1955,7 @@ function populateFilters(): void {
   elements.browseState.value = [...elements.browseState.options].some((option) => option.value === selectedBrowseState)
     ? selectedBrowseState
     : "all";
+  updateBrowseRegionOptions(selectedBrowseRegion);
 
   const years = yearsForFilters();
   elements.yearFilter.innerHTML = "";
@@ -1899,6 +1971,28 @@ function populateFilters(): void {
     elements.yearFilter.append(label);
   }
   setAnalysisControlsDisabled(elements.analyzeBtn.disabled);
+}
+
+function updateBrowseRegionOptions(preferredRegion = elements.browseRegion.value): void {
+  const stateCode = elements.browseState.value;
+  const shouldShow = Boolean(result) && stateCode !== "all";
+  elements.browseRegionField.hidden = !shouldShow;
+  elements.browseRegion.disabled = !shouldShow;
+
+  if (!shouldShow) {
+    elements.browseRegion.replaceChildren(new Option(tr("option.allRegions"), "all"));
+    elements.browseRegion.value = "all";
+    return;
+  }
+
+  const regions = browseIndexForCurrentResult()?.regionsByState.get(stateCode) ?? [];
+  elements.browseRegion.replaceChildren(new Option(tr("option.allRegions"), "all"));
+  for (const region of regions) {
+    elements.browseRegion.append(new Option(region.regionName, region.key));
+  }
+  elements.browseRegion.value = [...elements.browseRegion.options].some((option) => option.value === preferredRegion)
+    ? preferredRegion
+    : "all";
 }
 
 function stateCodesForFilters(): Set<string> {
@@ -2048,28 +2142,10 @@ function geolocationErrorMessage(error: GeolocationPositionError): string {
 function renderTables(): void {
   updateClusterSortHeaders();
   renderStateRankChart();
-  elements.stateTableBody.innerHTML = "";
+  renderRegionRankChart();
   elements.clusterTableBody.innerHTML = "";
   if (!result) {
     return;
-  }
-
-  for (const summary of result.stateSummaries) {
-    const row = document.createElement("tr");
-    row.innerHTML = `
-      <td>${escapeHtml(summary.stateName)}</td>
-      <td>${formatInteger(summary.accidentCount)}</td>
-      <td>${formatInteger(summary.clusterCount)}</td>
-      <td>${formatSeverityPercent(summary)}</td>
-      <td>${summary.topCluster ? clusterLocation(summary.topCluster) : ""}</td>
-    `;
-    const topCluster = summary.topCluster;
-    if (topCluster) {
-      row.addEventListener("click", () => {
-        selectClusterOnMap(topCluster);
-      });
-    }
-    elements.stateTableBody.append(row);
   }
 
   const clusters = clustersForTable(result.clusters);
@@ -2096,38 +2172,40 @@ function renderTables(): void {
   }
 }
 
-interface StateRankChartSeries {
-  stateCode: string;
-  stateName: string;
+interface RankChartSeries {
+  id: string;
+  name: string;
   color: string;
   clusters: IntersectionCluster[];
 }
 
-interface StateRankChartPoint {
+interface RankChartPoint {
   rank: number;
   severityPercent: number;
 }
 
 function renderStateRankChart(): void {
-  if (!result || result.clusters.length === 0) {
-    elements.stateRankChart.innerHTML = `<p class="state-rank-chart-empty">${escapeHtml(tr("stateChart.empty"))}</p>`;
+  renderRankChart(elements.stateRankChart, result ? stateRankChartSeries(result.clusters) : [], "stateChart.empty", "stateChart.aria");
+}
+
+function renderRegionRankChart(): void {
+  renderRankChart(elements.regionRankChart, result ? regionRankChartSeries() : [], "regionChart.empty", "regionChart.aria");
+}
+
+function renderRankChart(container: HTMLElement, series: RankChartSeries[], emptyKey: string, ariaLabelKey: string): void {
+  if (!result || result.clusters.length === 0 || series.length === 0) {
+    container.innerHTML = `<p class="state-rank-chart-empty">${escapeHtml(tr(emptyKey))}</p>`;
     return;
   }
 
-  const allSeries = stateRankChartSeries(result.clusters);
-  if (allSeries.length === 0) {
-    elements.stateRankChart.innerHTML = `<p class="state-rank-chart-empty">${escapeHtml(tr("stateChart.empty"))}</p>`;
-    return;
-  }
-
-  elements.stateRankChart.innerHTML = `
-    ${renderStateRankChartSvg(allSeries)}
+  container.innerHTML = `
+    ${renderRankChartSvg(series, ariaLabelKey)}
     <div class="state-rank-chart-tooltip" role="tooltip" hidden></div>
-    ${renderStateRankChartLegend(allSeries)}
+    ${renderRankChartLegend(series)}
   `;
 }
 
-function stateRankChartSeries(clusters: IntersectionCluster[]): StateRankChartSeries[] {
+function stateRankChartSeries(clusters: IntersectionCluster[]): RankChartSeries[] {
   const byState = new Map<string, IntersectionCluster[]>();
   for (const cluster of clusters) {
     const stateClusters = byState.get(cluster.stateCode) ?? [];
@@ -2137,15 +2215,24 @@ function stateRankChartSeries(clusters: IntersectionCluster[]): StateRankChartSe
 
   return Array.from(byState.entries())
     .map(([stateCode, stateClusters]) => ({
-      stateCode,
-      stateName: stateClusters[0]?.stateName ?? STATE_NAMES[stateCode] ?? stateCode,
+      id: stateCode,
+      name: stateClusters[0]?.stateName ?? STATE_NAMES[stateCode] ?? stateCode,
       color: stateRankChartColor(stateCode),
-      clusters: stateClusters.sort(compareClusterCoreMetric).slice(0, STATE_RANK_CHART_MAX_RANK)
+      clusters: [...stateClusters].sort(compareClusterCoreMetric).slice(0, STATE_RANK_CHART_MAX_RANK)
     }))
-    .sort((a, b) => a.stateName.localeCompare(b.stateName, "de", { sensitivity: "base" }));
+    .sort((a, b) => a.name.localeCompare(b.name, "de", { sensitivity: "base" }));
 }
 
-function renderStateRankChartSvg(series: StateRankChartSeries[]): string {
+function regionRankChartSeries(): RankChartSeries[] {
+  return regionSummaries().map((summary, index) => ({
+    id: summary.key,
+    name: `${summary.regionName}, ${summary.stateName}`,
+    color: rankChartColor(index),
+    clusters: [...summary.clusters].sort(compareClusterCoreMetric).slice(0, STATE_RANK_CHART_MAX_RANK)
+  }));
+}
+
+function renderRankChartSvg(series: RankChartSeries[], ariaLabelKey: string): string {
   const width = 760;
   const height = 600;
   const chart = { left: 54, right: 20, top: 28, bottom: 520 };
@@ -2153,7 +2240,7 @@ function renderStateRankChartSvg(series: StateRankChartSeries[]): string {
   const chartHeight = chart.bottom - chart.top;
   const chartSeries = series.map((item) => ({
     ...item,
-    points: stateRankChartPoints(item.clusters)
+    points: rankChartPoints(item.clusters)
   }));
   const maxSeverity = Math.max(1, ...chartSeries.flatMap((item) => item.points.map((point) => point.severityPercent)));
   const yMax = niceSeverityChartMax(maxSeverity);
@@ -2196,8 +2283,8 @@ function renderStateRankChartSvg(series: StateRankChartSeries[]): string {
             <circle class="state-rank-chart-dot" cx="${round(lastPoint.x, 1)}" cy="${round(lastPoint.y, 1)}" r="3" style="--series-color: ${item.color}"></circle>
           `;
       return `
-        <g class="state-rank-chart-series" data-state-rank-series="true" data-state-name="${escapeHtml(item.stateName)}" tabindex="0" aria-label="${escapeHtml(item.stateName)}" style="--series-color: ${item.color}">
-          <title>${escapeHtml(item.stateName)}</title>
+        <g class="state-rank-chart-series" data-rank-chart-series="true" data-series-name="${escapeHtml(item.name)}" tabindex="0" aria-label="${escapeHtml(item.name)}" style="--series-color: ${item.color}">
+          <title>${escapeHtml(item.name)}</title>
           ${path ? `<path class="state-rank-chart-hit-line" d="${path}"></path><path class="state-rank-chart-line" d="${path}"></path>` : ""}
           ${dots}
         </g>
@@ -2206,7 +2293,7 @@ function renderStateRankChartSvg(series: StateRankChartSeries[]): string {
     .join("");
 
   return `
-    <svg class="state-rank-chart-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(tr("stateChart.aria"))}">
+    <svg class="state-rank-chart-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(tr(ariaLabelKey))}">
       ${xAxisTicks}
       ${yAxisTicks}
       <line class="state-rank-chart-axis" x1="${chart.left}" y1="${chart.top}" x2="${chart.left}" y2="${chart.bottom}"></line>
@@ -2218,11 +2305,11 @@ function renderStateRankChartSvg(series: StateRankChartSeries[]): string {
   `;
 }
 
-function stateRankChartPoints(clusters: IntersectionCluster[]): StateRankChartPoint[] {
+function rankChartPoints(clusters: IntersectionCluster[]): RankChartPoint[] {
   let runningSeverity = 0;
-  const sampledRanks = stateRankChartSampleRanks(clusters.length);
+  const sampledRanks = rankChartSampleRanks(clusters.length);
   const sampledRankSet = new Set(sampledRanks);
-  const points: StateRankChartPoint[] = [];
+  const points: RankChartPoint[] = [];
 
   for (let index = 0; index < clusters.length && index < STATE_RANK_CHART_MAX_RANK; index += 1) {
     const rank = index + 1;
@@ -2238,7 +2325,7 @@ function stateRankChartPoints(clusters: IntersectionCluster[]): StateRankChartPo
   return points;
 }
 
-function stateRankChartSampleRanks(clusterCount: number): number[] {
+function rankChartSampleRanks(clusterCount: number): number[] {
   const maxRank = Math.min(clusterCount, STATE_RANK_CHART_MAX_RANK);
   if (maxRank <= 0) {
     return [];
@@ -2251,13 +2338,13 @@ function stateRankChartSampleRanks(clusterCount: number): number[] {
   return ranks;
 }
 
-function renderStateRankChartLegend(series: StateRankChartSeries[]): string {
+function renderRankChartLegend(series: RankChartSeries[]): string {
   const legend = series
     .map(
       (item) => `
         <span class="state-rank-chart-legend-item">
           <span class="state-rank-chart-swatch" style="--series-color: ${item.color}"></span>
-          ${escapeHtml(item.stateName)}
+          ${escapeHtml(item.name)}
         </span>
       `
     )
@@ -2281,7 +2368,144 @@ function niceSeverityChartMax(maxSeverity: number): number {
 function stateRankChartColor(stateCode: string): string {
   const stateCodes = Object.keys(STATE_NAMES).sort();
   const index = Math.max(0, stateCodes.indexOf(stateCode));
+  return rankChartColor(index);
+}
+
+function rankChartColor(index: number): string {
   return STATE_RANK_CHART_COLORS[index % STATE_RANK_CHART_COLORS.length];
+}
+
+function regionSummaries(): RegionSummary[] {
+  return browseIndexForCurrentResult()?.regionSummaries ?? [];
+}
+
+function browseIndexForCurrentResult(): BrowseIndex | null {
+  const clusters = result?.clusters;
+  if (!clusters) {
+    return null;
+  }
+  if (browseIndexCache?.clusters === clusters) {
+    return browseIndexCache;
+  }
+  browseIndexCache = buildBrowseIndex(clusters);
+  return browseIndexCache;
+}
+
+function buildBrowseIndex(clusters: IntersectionCluster[]): BrowseIndex {
+  const byRegion = new Map<string, RegionSummaryAccumulator>();
+  const regionsByState = new Map<string, RegionSummary[]>();
+  const browseClustersByState = new Map<string, IntersectionCluster[]>();
+  const browseClustersByRegion = new Map<string, IntersectionCluster[]>();
+  const topClusterByState = new Map<string, IntersectionCluster>();
+
+  for (const cluster of clusters) {
+    const regionName = clusterRegionName(cluster);
+    const key = regionSummaryKey(cluster.stateCode, regionName);
+    const summary =
+      byRegion.get(key) ??
+      ({
+        key,
+        stateCode: cluster.stateCode,
+        stateName: cluster.stateName,
+        regionName,
+        accidentCount: 0,
+        clusterCount: 0,
+        fatalCount: 0,
+        seriousCount: 0,
+        severityPercent: 0,
+        weightedSeverityPercent: 0,
+        topCluster: null,
+        clusters: []
+      } satisfies RegionSummaryAccumulator);
+
+    summary.accidentCount += cluster.accidentCount;
+    summary.clusterCount += 1;
+    summary.fatalCount += cluster.fatalCount;
+    summary.seriousCount += cluster.seriousCount;
+    summary.weightedSeverityPercent += cluster.severityPercent * cluster.accidentCount;
+    summary.clusters.push(cluster);
+    if (!summary.topCluster || compareClusterCoreMetric(cluster, summary.topCluster) < 0) {
+      summary.topCluster = cluster;
+    }
+    byRegion.set(key, summary);
+
+    const stateTopCluster = topClusterByState.get(cluster.stateCode);
+    if (!stateTopCluster || compareClusterCoreMetric(cluster, stateTopCluster) < 0) {
+      topClusterByState.set(cluster.stateCode, cluster);
+    }
+
+    if (cluster.severityPercent >= STATE_BROWSE_MIN_SEVERITY_PERCENT) {
+      appendMapListItem(browseClustersByState, cluster.stateCode, cluster);
+      appendMapListItem(browseClustersByRegion, key, cluster);
+    }
+  }
+
+  for (const stateClusters of browseClustersByState.values()) {
+    stateClusters.sort(compareClusterCoreMetric);
+  }
+  for (const regionClusters of browseClustersByRegion.values()) {
+    regionClusters.sort(compareClusterCoreMetric);
+  }
+
+  const regionSummaries = Array.from(byRegion.values())
+    .map((summary): RegionSummary => ({
+      key: summary.key,
+      stateCode: summary.stateCode,
+      stateName: summary.stateName,
+      regionName: summary.regionName,
+      accidentCount: summary.accidentCount,
+      clusterCount: summary.clusterCount,
+      fatalCount: summary.fatalCount,
+      seriousCount: summary.seriousCount,
+      severityPercent: summary.accidentCount > 0 ? summary.weightedSeverityPercent / summary.accidentCount : 0,
+      topCluster: summary.topCluster,
+      clusters: summary.clusters.sort(compareClusterCoreMetric)
+    }))
+    .sort(compareRegionSummaries);
+
+  for (const summary of regionSummaries) {
+    appendMapListItem(regionsByState, summary.stateCode, summary);
+  }
+  for (const stateRegions of regionsByState.values()) {
+    stateRegions.sort((a, b) => a.regionName.localeCompare(b.regionName, "de", { sensitivity: "base" }));
+  }
+
+  return {
+    clusters,
+    regionSummaries,
+    regionsByState,
+    topClustersByState: Array.from(topClusterByState.values()).sort(compareClusterCoreMetric),
+    browseClustersByState,
+    browseClustersByRegion
+  };
+}
+
+function appendMapListItem<K, V>(map: Map<K, V[]>, key: K, item: V): void {
+  const items = map.get(key);
+  if (items) {
+    items.push(item);
+    return;
+  }
+  map.set(key, [item]);
+}
+
+function compareRegionSummaries(a: RegionSummary, b: RegionSummary): number {
+  return (
+    b.severityPercent - a.severityPercent ||
+    b.fatalCount - a.fatalCount ||
+    b.seriousCount - a.seriousCount ||
+    b.accidentCount - a.accidentCount ||
+    a.stateName.localeCompare(b.stateName, "de", { sensitivity: "base" }) ||
+    a.regionName.localeCompare(b.regionName, "de", { sensitivity: "base" })
+  );
+}
+
+function clusterRegionName(cluster: IntersectionCluster): string {
+  return cleanAreaNameForDisplay(cluster.administrativeRegionName ?? cluster.stateName);
+}
+
+function regionSummaryKey(stateCode: string, regionName: string): string {
+  return `${stateCode}:${normalizedAreaNameKey(regionName)}`;
 }
 
 function clustersForTable(clusters: IntersectionCluster[]): IntersectionCluster[] {
@@ -2587,6 +2811,7 @@ function clusterSortButtons(): HTMLButtonElement[] {
 }
 
 function renderExplore(): void {
+  updateBrowseRegionOptions();
   renderNearbyList();
   renderStateHotspotList();
 }
@@ -2619,13 +2844,21 @@ function renderStateHotspotList(): void {
     return;
   }
 
+  const browseIndex = browseIndexForCurrentResult();
+  if (!browseIndex) {
+    elements.stateHotspotList.append(emptyHotspotMessage(tr("status.noAnalysisMatches")));
+    return;
+  }
+
   const stateCode = elements.browseState.value;
-  const clusters =
+  const regionKey = elements.browseRegion.value;
+  const sourceClusters =
     stateCode === "all"
-      ? topClusterByState()
-      : (result?.clusters ?? [])
-          .filter((cluster) => cluster.stateCode === stateCode && cluster.severityPercent >= STATE_BROWSE_MIN_SEVERITY_PERCENT)
-          .slice(0, STATE_BROWSE_MAX_INTERSECTIONS);
+      ? browseIndex.topClustersByState
+      : regionKey === "all"
+        ? browseIndex.browseClustersByState.get(stateCode) ?? []
+        : browseIndex.browseClustersByRegion.get(regionKey) ?? [];
+  const clusters = sourceClusters.slice(0, STATE_BROWSE_MAX_INTERSECTIONS);
 
   if (clusters.length === 0) {
     elements.stateHotspotList.append(emptyHotspotMessage(tr("status.noAnalysisMatches")));
@@ -2640,12 +2873,6 @@ function renderStateHotspotList(): void {
       })
     );
   });
-}
-
-function topClusterByState(): IntersectionCluster[] {
-  return (result?.stateSummaries ?? [])
-    .flatMap((summary) => (summary.topCluster ? [summary.topCluster] : []))
-    .sort(compareClusterCoreMetric);
 }
 
 function hotspotButton(
@@ -4106,6 +4333,8 @@ function setView(view: ViewKey): void {
     { key: "details", tab: elements.detailsTab },
     { key: "state", tab: elements.stateTab },
     { key: "state", tab: elements.mobileStateTab },
+    { key: "region", tab: elements.regionTab },
+    { key: "region", tab: elements.mobileRegionTab },
     { key: "table", tab: elements.tableTab },
     { key: "table", tab: elements.mobileTableTab },
     { key: "settings", tab: elements.settingsTab },
@@ -4125,6 +4354,7 @@ function setView(view: ViewKey): void {
 
   elements.mapView.classList.toggle("active", view === "map" || view === "details");
   elements.stateView.classList.toggle("active", view === "state");
+  elements.regionView.classList.toggle("active", view === "region");
   elements.tableView.classList.toggle("active", view === "table");
   elements.settingsView.classList.toggle("active", view === "settings");
 
@@ -4144,7 +4374,7 @@ function isMobilePaneView(view: ViewKey): boolean {
 }
 
 function isSecondaryView(view: ViewKey): boolean {
-  return view === "state" || view === "table" || view === "settings";
+  return view === "state" || view === "region" || view === "table" || view === "settings";
 }
 
 function toggleMobileMoreMenu(event: MouseEvent): void {
