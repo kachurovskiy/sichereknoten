@@ -89,9 +89,14 @@ export interface IntersectionCluster {
   lat: number;
   stateCode: string;
   stateName: string;
+  administrativeRegionCode: string | null;
   administrativeRegionName: string | null;
+  administrativeRegionPopulation: number | null;
+  districtCode: string | null;
   districtName: string | null;
+  municipalityCode: string | null;
   municipalityName: string | null;
+  municipalityPopulation: number | null;
   accidentCount: number;
   fatalCount: number;
   seriousCount: number;

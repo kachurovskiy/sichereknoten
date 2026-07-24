@@ -1,4 +1,5 @@
 import { lonLatToMeterPoint } from "./geo";
+import { administrativeRegionPopulationFor, municipalityPopulationFor, statePopulationFor } from "./municipalities";
 import { accidentMatchesRoadUserFocus } from "./roadUsers";
 import {
   AccidentRecord,
@@ -38,8 +39,11 @@ interface ClusterAccumulator {
   yearSet: Set<number>;
   yearStats: Map<number, ClusterYearAccumulator>;
   stateCounts: Map<string, number>;
+  administrativeRegionCodeCounts: Map<string, number>;
   administrativeRegionCounts: Map<string, number>;
+  districtCodeCounts: Map<string, number>;
   districtCounts: Map<string, number>;
+  municipalityCodeCounts: Map<string, number>;
   municipalityCounts: Map<string, number>;
 }
 
@@ -156,8 +160,11 @@ function buildClusters(accidents: AccidentRecord[], radiusMeters: number): Clust
         yearSet: new Set(),
         yearStats: new Map(),
         stateCounts: new Map(),
+        administrativeRegionCodeCounts: new Map(),
         administrativeRegionCounts: new Map(),
+        districtCodeCounts: new Map(),
         districtCounts: new Map(),
+        municipalityCodeCounts: new Map(),
         municipalityCounts: new Map()
       };
       clusters.push(nearest);
@@ -192,17 +199,23 @@ function addAccidentToCluster(cluster: ClusterAccumulator, accident: AccidentRec
   }
   cluster.yearSet.add(accident.year);
   cluster.stateCounts.set(accident.stateCode, (cluster.stateCounts.get(accident.stateCode) ?? 0) + 1);
+  if (accident.administrativeRegionCode) {
+    incrementMapEntry(cluster.administrativeRegionCodeCounts, accident.administrativeRegionCode);
+  }
   if (accident.administrativeRegionName) {
-    cluster.administrativeRegionCounts.set(
-      accident.administrativeRegionName,
-      (cluster.administrativeRegionCounts.get(accident.administrativeRegionName) ?? 0) + 1
-    );
+    incrementMapEntry(cluster.administrativeRegionCounts, accident.administrativeRegionName);
+  }
+  if (accident.districtCode) {
+    incrementMapEntry(cluster.districtCodeCounts, accident.districtCode);
   }
   if (accident.districtName) {
-    cluster.districtCounts.set(accident.districtName, (cluster.districtCounts.get(accident.districtName) ?? 0) + 1);
+    incrementMapEntry(cluster.districtCounts, accident.districtName);
+  }
+  if (accident.municipalityCode) {
+    incrementMapEntry(cluster.municipalityCodeCounts, accident.municipalityCode);
   }
   if (accident.municipalityName) {
-    cluster.municipalityCounts.set(accident.municipalityName, (cluster.municipalityCounts.get(accident.municipalityName) ?? 0) + 1);
+    incrementMapEntry(cluster.municipalityCounts, accident.municipalityName);
   }
   addAccidentToYearStats(cluster, accident);
 
@@ -245,6 +258,10 @@ function addAccidentToYearStats(cluster: ClusterAccumulator, accident: AccidentR
   cluster.yearStats.set(accident.year, stats);
 }
 
+function incrementMapEntry(map: Map<string, number>, key: string): void {
+  map.set(key, (map.get(key) ?? 0) + 1);
+}
+
 function updateClusterBucket(
   cluster: ClusterAccumulator,
   buckets: Map<string, ClusterAccumulator[]>,
@@ -283,6 +300,9 @@ function finalizeCluster(
   severityPercentOptions: SeverityPercentOptions
 ): IntersectionCluster {
   const stateCode = topMapEntry(cluster.stateCounts) ?? "00";
+  const administrativeRegionCode = topMapEntry(cluster.administrativeRegionCodeCounts);
+  const districtCode = topMapEntry(cluster.districtCodeCounts);
+  const municipalityCode = topMapEntry(cluster.municipalityCodeCounts);
   const yearlyStats = Array.from(cluster.yearStats.values())
     .sort((a, b) => a.year - b.year)
     .map(toClusterYearStat);
@@ -294,9 +314,15 @@ function finalizeCluster(
     lat: cluster.lat,
     stateCode,
     stateName: stateNameFromCode(stateCode),
+    administrativeRegionCode,
     administrativeRegionName: topMapEntry(cluster.administrativeRegionCounts),
+    administrativeRegionPopulation:
+      administrativeRegionPopulationFor(stateCode, administrativeRegionCode) ?? (administrativeRegionCode ? null : statePopulationFor(stateCode)),
+    districtCode,
     districtName: topMapEntry(cluster.districtCounts),
+    municipalityCode,
     municipalityName: topMapEntry(cluster.municipalityCounts),
+    municipalityPopulation: municipalityPopulationFor(stateCode, administrativeRegionCode, districtCode, municipalityCode),
     accidentCount: cluster.accidentCount,
     fatalCount: cluster.fatalCount,
     seriousCount: cluster.seriousCount,

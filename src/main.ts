@@ -311,6 +311,7 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "details.adminRegion": "Administrative region",
     "details.district": "District",
     "details.municipality": "Municipality",
+    "details.population": "Population",
     "details.street": "Street",
     "details.streets": "Streets",
     "details.coordinates": "Coordinates",
@@ -322,6 +323,7 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "details.severityPercent": "Severity %",
     "metric.severityPercent": "Severity %",
     "metric.severity": "Severity",
+    "metric.population": "Population",
     "metric.severityPercentContextGermany":
       "{value} ({state}: #{stateRank}, top {statePercent}%; Germany: #{germanyRank}, top {germanyPercent}%)",
     "metric.severityPercentContextState": "{value} ({state}: #{stateRank}, top {statePercent}%)",
@@ -619,6 +621,7 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "details.adminRegion": "Regierungsbezirk",
     "details.district": "Kreis",
     "details.municipality": "Gemeinde",
+    "details.population": "Einwohner",
     "details.street": "Straße",
     "details.streets": "Straßen",
     "details.coordinates": "Koordinaten",
@@ -630,6 +633,7 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "details.severityPercent": "Schweregrad %",
     "metric.severityPercent": "Schweregrad %",
     "metric.severity": "Schweregrad",
+    "metric.population": "Einwohner",
     "metric.severityPercentContextGermany":
       "{value} ({state}: #{stateRank}, oberste {statePercent}%; Deutschland: #{germanyRank}, oberste {germanyPercent}%)",
     "metric.severityPercentContextState": "{value} ({state}: #{stateRank}, oberste {statePercent}%)",
@@ -912,6 +916,7 @@ interface RegionSummary extends SeverityPercentSource {
   stateCode: string;
   stateName: string;
   regionName: string;
+  population: number | null;
   accidentCount: number;
   clusterCount: number;
   fatalCount: number;
@@ -1353,7 +1358,7 @@ function setRankChartHover(chart: HTMLElement, activeSeries: SVGGElement): void 
   if (!tooltip) {
     return;
   }
-  tooltip.textContent = activeSeries.dataset.seriesName ?? "";
+  tooltip.textContent = activeSeries.dataset.seriesTooltip ?? activeSeries.dataset.seriesName ?? "";
   tooltip.hidden = false;
 }
 
@@ -1988,7 +1993,7 @@ function updateBrowseRegionOptions(preferredRegion = elements.browseRegion.value
   const regions = browseIndexForCurrentResult()?.regionsByState.get(stateCode) ?? [];
   elements.browseRegion.replaceChildren(new Option(tr("option.allRegions"), "all"));
   for (const region of regions) {
-    elements.browseRegion.append(new Option(region.regionName, region.key));
+    elements.browseRegion.append(new Option(regionOptionLabel(region), region.key));
   }
   elements.browseRegion.value = [...elements.browseRegion.options].some((option) => option.value === preferredRegion)
     ? preferredRegion
@@ -2174,6 +2179,7 @@ function renderTables(): void {
 interface RankChartSeries {
   id: string;
   name: string;
+  tooltip?: string;
   color: string;
   clusters: IntersectionCluster[];
 }
@@ -2226,6 +2232,7 @@ function regionRankChartSeries(): RankChartSeries[] {
   return regionSummaries().map((summary, index) => ({
     id: summary.key,
     name: `${summary.regionName}, ${summary.stateName}`,
+    tooltip: regionTooltipLabel(summary),
     color: rankChartColor(index),
     clusters: [...summary.clusters].sort(compareClusterCoreMetric).slice(0, STATE_RANK_CHART_MAX_RANK)
   }));
@@ -2281,8 +2288,9 @@ function renderRankChartSvg(series: RankChartSeries[], ariaLabelKey: string): st
             <circle class="state-rank-chart-dot" cx="${round(firstPoint.x, 1)}" cy="${round(firstPoint.y, 1)}" r="3" style="--series-color: ${item.color}"></circle>
             <circle class="state-rank-chart-dot" cx="${round(lastPoint.x, 1)}" cy="${round(lastPoint.y, 1)}" r="3" style="--series-color: ${item.color}"></circle>
           `;
+      const tooltipAttribute = item.tooltip ? ` data-series-tooltip="${escapeHtml(item.tooltip)}"` : "";
       return `
-        <g class="state-rank-chart-series" data-rank-chart-series="true" data-series-name="${escapeHtml(item.name)}" tabindex="0" aria-label="${escapeHtml(item.name)}" style="--series-color: ${item.color}">
+        <g class="state-rank-chart-series" data-rank-chart-series="true" data-series-name="${escapeHtml(item.name)}"${tooltipAttribute} tabindex="0" aria-label="${escapeHtml(item.name)}" style="--series-color: ${item.color}">
           <title>${escapeHtml(item.name)}</title>
           ${path ? `<path class="state-rank-chart-hit-line" d="${path}"></path><path class="state-rank-chart-line" d="${path}"></path>` : ""}
           ${dots}
@@ -2399,7 +2407,7 @@ function buildBrowseIndex(clusters: IntersectionCluster[]): BrowseIndex {
 
   for (const cluster of clusters) {
     const regionName = clusterRegionName(cluster);
-    const key = regionSummaryKey(cluster.stateCode, regionName);
+    const key = clusterRegionKey(cluster);
     const summary =
       byRegion.get(key) ??
       ({
@@ -2407,6 +2415,7 @@ function buildBrowseIndex(clusters: IntersectionCluster[]): BrowseIndex {
         stateCode: cluster.stateCode,
         stateName: cluster.stateName,
         regionName,
+        population: cluster.administrativeRegionPopulation,
         accidentCount: 0,
         clusterCount: 0,
         fatalCount: 0,
@@ -2422,6 +2431,7 @@ function buildBrowseIndex(clusters: IntersectionCluster[]): BrowseIndex {
     summary.fatalCount += cluster.fatalCount;
     summary.seriousCount += cluster.seriousCount;
     summary.weightedSeverityPercent += cluster.severityPercent * cluster.accidentCount;
+    summary.population ??= cluster.administrativeRegionPopulation;
     summary.clusters.push(cluster);
     if (!summary.topCluster || compareClusterCoreMetric(cluster, summary.topCluster) < 0) {
       summary.topCluster = cluster;
@@ -2452,6 +2462,7 @@ function buildBrowseIndex(clusters: IntersectionCluster[]): BrowseIndex {
       stateCode: summary.stateCode,
       stateName: summary.stateName,
       regionName: summary.regionName,
+      population: summary.population,
       accidentCount: summary.accidentCount,
       clusterCount: summary.clusterCount,
       fatalCount: summary.fatalCount,
@@ -2499,12 +2510,21 @@ function compareRegionSummaries(a: RegionSummary, b: RegionSummary): number {
   );
 }
 
+function regionOptionLabel(region: RegionSummary): string {
+  return region.population === null ? region.regionName : `${region.regionName} (${formatCompactPopulation(region.population)})`;
+}
+
+function regionTooltipLabel(region: RegionSummary): string {
+  const name = `${region.regionName}, ${region.stateName}`;
+  return region.population === null ? name : `${name} - ${tr("metric.population")}: ${formatInteger(region.population)}`;
+}
+
 function clusterRegionName(cluster: IntersectionCluster): string {
   return cleanAreaNameForDisplay(cluster.administrativeRegionName ?? cluster.stateName);
 }
 
-function regionSummaryKey(stateCode: string, regionName: string): string {
-  return `${stateCode}:${normalizedAreaNameKey(regionName)}`;
+function clusterRegionKey(cluster: IntersectionCluster): string {
+  return `${cluster.stateCode}:${cluster.administrativeRegionCode ?? "state"}`;
 }
 
 function clustersForTable(clusters: IntersectionCluster[]): IntersectionCluster[] {
@@ -3341,6 +3361,7 @@ function renderSelectedPanelHtml(viewModel: SelectedIntersectionViewModel): stri
       <dl>
         <div><dt>${escapeHtml(tr("details.region"))}</dt><dd>${escapeHtml(clusterAreaText(cluster))}</dd></div>
         ${renderClusterStreetDetailRow(streetNames)}
+        ${renderClusterPopulationDetailRow(cluster)}
         <div><dt>${escapeHtml(tr("details.coordinates"))}</dt><dd>${cluster.lat.toFixed(5)}, ${cluster.lon.toFixed(5)}</dd></div>
         <div><dt>${escapeHtml(tr("details.years"))}</dt><dd>${escapeHtml(formatYearSelection(cluster.years))}</dd></div>
         <div><dt>${escapeHtml(tr("details.accidents"))}</dt><dd>${escapeHtml(selectedAccidentCountText(cluster))}</dd></div>
@@ -3352,6 +3373,28 @@ function renderSelectedPanelHtml(viewModel: SelectedIntersectionViewModel): stri
       ${roadUserPanel}
       ${recordPanel}
     `;
+}
+
+function renderClusterPopulationDetailRow(cluster: IntersectionCluster): string {
+  const rows: string[] = [];
+  if (cluster.municipalityPopulation !== null && cluster.municipalityName) {
+    rows.push(`${tr("details.municipality")}: ${formatInteger(cluster.municipalityPopulation)}`);
+  }
+
+  const regionName = cluster.administrativeRegionName ?? cluster.stateName;
+  if (
+    cluster.administrativeRegionPopulation !== null &&
+    (!cluster.municipalityName ||
+      cluster.municipalityPopulation !== cluster.administrativeRegionPopulation ||
+      normalizedAreaNameKey(cluster.municipalityName) !== normalizedAreaNameKey(regionName))
+  ) {
+    rows.push(`${tr("details.region")}: ${formatInteger(cluster.administrativeRegionPopulation)}`);
+  }
+
+  if (rows.length === 0) {
+    return "";
+  }
+  return `<div><dt>${escapeHtml(tr("details.population"))}</dt><dd>${rows.map(escapeHtml).join("<br>")}</dd></div>`;
 }
 
 function selectedAccidentCountText(cluster: IntersectionCluster): string {
@@ -4418,8 +4461,10 @@ function exportClusters(): void {
   const header = [
     "state",
     "administrative_region",
+    "administrative_region_population",
     "district",
     "municipality",
+    "municipality_population",
     "lat",
     "lon",
     "accidents",
@@ -4431,8 +4476,10 @@ function exportClusters(): void {
     [
       cluster.stateName,
       cluster.administrativeRegionName ?? "",
+      cluster.administrativeRegionPopulation ?? "",
       cluster.districtName ?? "",
       cluster.municipalityName ?? "",
+      cluster.municipalityPopulation ?? "",
       cluster.lat,
       cluster.lon,
       cluster.accidentCount,
@@ -5647,6 +5694,10 @@ async function loadAccidentsForState(stateCode: string, telemetry: Initializatio
 
 function formatInteger(value: number): string {
   return new Intl.NumberFormat(NUMBER_LOCALE, { maximumFractionDigits: 0 }).format(value);
+}
+
+function formatCompactPopulation(value: number): string {
+  return new Intl.NumberFormat(NUMBER_LOCALE, { maximumFractionDigits: 1, notation: "compact" }).format(value);
 }
 
 function formatNumber(value: number): string {
