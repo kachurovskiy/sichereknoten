@@ -8,7 +8,7 @@
     <meta http-equiv="Expires" content="0" />
     <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
     <title>Safe Intersections</title>
-    <link rel="stylesheet" href="./assets/app.css?v=c5c022f0de71bfce" />
+    <link rel="stylesheet" href="./assets/app.css?v=ddb4d88d8cc03cbe" />
   </head>
   <body>
     <div id="appSplash" class="splash-screen" role="status" aria-live="polite" aria-busy="true">
@@ -135,6 +135,9 @@
           <aside id="selectedAside" class="detail-panel selected-aside" aria-label="Selected intersection details" data-i18n-aria-label="aria.selectedDetails" hidden>
             <div class="selected-aside-header">
               <h2 data-i18n="details.title">Selected intersection</h2>
+            </div>
+            <div id="selectedPreviewMap" class="selected-preview-map" aria-hidden="true" hidden>
+              <canvas id="selectedPreviewCanvas" class="selected-preview-canvas" width="640" height="360"></canvas>
             </div>
             <div id="selectionDetails" class="details" data-i18n="details.none">No intersection selected.</div>
           </aside>
@@ -325,7 +328,7 @@
 
       </main>
     </div>
-    <script src="./assets/data-manifest.js?v=c5c022f0de71bfce"></script>
-    <script src="./assets/app.js?v=c5c022f0de71bfce"></script>
+    <script src="./assets/data-manifest.js?v=ddb4d88d8cc03cbe"></script>
+    <script src="./assets/app.js?v=ddb4d88d8cc03cbe"></script>
   </body>
 </html>
