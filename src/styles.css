@@ -2004,11 +2004,23 @@ button.map-service-link {
 }
 
 .population-scatter-chart h3 {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  align-items: baseline;
+  justify-content: space-between;
   margin: 0;
   color: #172126;
   font-size: 0.88rem;
   font-weight: 600;
   line-height: 1.25;
+}
+
+.population-scatter-correlation {
+  color: #53636d;
+  font-size: 0.78rem;
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 .population-scatter-svg {
@@ -2028,6 +2040,14 @@ button.map-service-link {
 
 .population-scatter-axis {
   stroke: #8fa09a;
+}
+
+.population-scatter-trend {
+  stroke: #172126;
+  stroke-dasharray: 6 5;
+  stroke-linecap: round;
+  stroke-width: 2;
+  opacity: 0.68;
 }
 
 .population-scatter-tick,
@@ -2062,6 +2082,10 @@ button.map-service-link {
 
 .population-scatter-point-serious {
   fill: #bf8f2f;
+}
+
+.population-scatter-point-severe {
+  fill: #166b6d;
 }
 
 .population-scatter-point-comparison {

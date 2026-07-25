@@ -326,6 +326,19 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "populationScatter.fatalYAxis": "Fatal / 100k",
     "populationScatter.seriousYAxis": "Serious / 100k",
     "populationScatter.sizeLegend": "Bubble size: population",
+    "stateSeverityCorrelation.title": "Severity correlation",
+    "stateSeverityCorrelation.caption": "Severity % compared with severe crash rates per 100,000 residents by state",
+    "regionSeverityCorrelation.title": "Severity correlation",
+    "regionSeverityCorrelation.caption": "Severity % compared with severe crash rates per 100,000 residents by region",
+    "severityCorrelation.empty": "Run an analysis to compare Severity with population-scaled severe outcomes.",
+    "severityCorrelation.fatalTitle": "Fatal crashes by Severity",
+    "severityCorrelation.severeTitle": "Fatal + serious crashes by Severity",
+    "severityCorrelation.xAxis": "Severity %",
+    "severityCorrelation.fatalYAxis": "Fatal / 100k",
+    "severityCorrelation.severeYAxis": "Fatal + serious / 100k",
+    "severityCorrelation.sizeLegend": "Bubble size: population",
+    "severityCorrelation.trend": "Trend line",
+    "severityCorrelation.correlation": "Correlation r = {value}",
     "severity.fatal": "Fatal",
     "severity.serious": "Serious",
     "severity.light": "Light",
@@ -673,6 +686,19 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "populationScatter.fatalYAxis": "Toedlich / 100k",
     "populationScatter.seriousYAxis": "Schwer / 100k",
     "populationScatter.sizeLegend": "Punktgroesse: Einwohner",
+    "stateSeverityCorrelation.title": "Schweregrad-Korrelation",
+    "stateSeverityCorrelation.caption": "Schweregrad % im Vergleich zu schweren Unfallraten je 100.000 Einwohner nach Bundesland",
+    "regionSeverityCorrelation.title": "Schweregrad-Korrelation",
+    "regionSeverityCorrelation.caption": "Schweregrad % im Vergleich zu schweren Unfallraten je 100.000 Einwohner nach Region",
+    "severityCorrelation.empty": "Fuehre eine Analyse aus, um Schweregrad und einwohnergewichtete schwere Folgen zu vergleichen.",
+    "severityCorrelation.fatalTitle": "Toedliche Unfaelle nach Schweregrad",
+    "severityCorrelation.severeTitle": "Toedliche + schwere Unfaelle nach Schweregrad",
+    "severityCorrelation.xAxis": "Schweregrad %",
+    "severityCorrelation.fatalYAxis": "Toedlich / 100k",
+    "severityCorrelation.severeYAxis": "Toedlich + schwer / 100k",
+    "severityCorrelation.sizeLegend": "Punktgroesse: Einwohner",
+    "severityCorrelation.trend": "Trendlinie",
+    "severityCorrelation.correlation": "Korrelation r = {value}",
     "severity.fatal": "Tödlich",
     "severity.serious": "Schwer",
     "severity.light": "Leicht",
@@ -1039,6 +1065,32 @@ interface PopulationScatterChartConfig {
   pointClass: string;
 }
 
+interface SeverityCorrelationRow extends SeverityPercentSource {
+  name: string;
+  secondaryLabel: string | null;
+  population: number;
+  fatalRate: number;
+  severeRate: number;
+}
+
+type SeverityCorrelationMetric = "fatal" | "severe";
+
+interface SeverityCorrelationChartConfig {
+  titleKey: string;
+  yMetric: SeverityCorrelationMetric;
+  xMax: number;
+  yMax: number;
+  pointClass: string;
+}
+
+interface ScatterRegression {
+  slope: number;
+  intercept: number;
+  correlation: number | null;
+  minX: number;
+  maxX: number;
+}
+
 interface BrowseIndex {
   clusters: IntersectionCluster[];
   regionSummaries: RegionSummary[];
@@ -1219,9 +1271,11 @@ const elements = {
   stateRankChart: byId<HTMLDivElement>("stateRankChart"),
   statePopulationRates: byId<HTMLDivElement>("statePopulationRates"),
   statePopulationScatter: byId<HTMLDivElement>("statePopulationScatter"),
+  stateSeverityCorrelationScatter: byId<HTMLDivElement>("stateSeverityCorrelationScatter"),
   regionRankChart: byId<HTMLDivElement>("regionRankChart"),
   regionPopulationRates: byId<HTMLDivElement>("regionPopulationRates"),
   regionPopulationScatter: byId<HTMLDivElement>("regionPopulationScatter"),
+  regionSeverityCorrelationScatter: byId<HTMLDivElement>("regionSeverityCorrelationScatter"),
   clusterTableBody: byId<HTMLTableSectionElement>("clusterTableBody"),
   exploreTab: byId<HTMLButtonElement>("exploreTab"),
   mapTab: byId<HTMLButtonElement>("mapTab"),
@@ -2526,6 +2580,8 @@ function renderTables(): void {
   renderRegionPopulationRates();
   renderStatePopulationScatter();
   renderRegionPopulationScatter();
+  renderStateSeverityCorrelationScatter();
+  renderRegionSeverityCorrelationScatter();
   elements.clusterTableBody.innerHTML = "";
   if (!result) {
     return;
@@ -2592,6 +2648,26 @@ function renderRegionPopulationScatter(): void {
   renderPopulationScatterComparison(elements.regionPopulationScatter, result?.regionAccidentSummaries ?? [], true);
 }
 
+function renderStateSeverityCorrelationScatter(): void {
+  const severityByState = new Map((result?.stateSummaries ?? []).map((summary) => [summary.stateCode, summary.severityPercent]));
+  const rows = severityCorrelationRows(
+    result?.stateAccidentSummaries ?? [],
+    false,
+    (summary) => severityByState.get(summary.stateCode) ?? null
+  );
+  renderSeverityCorrelationComparison(elements.stateSeverityCorrelationScatter, rows);
+}
+
+function renderRegionSeverityCorrelationScatter(): void {
+  const severityByRegion = new Map(regionSummaries().map((summary) => [summary.key, summary.severityPercent]));
+  const rows = severityCorrelationRows(
+    result?.regionAccidentSummaries ?? [],
+    true,
+    (summary) => severityByRegion.get(summary.key) ?? null
+  );
+  renderSeverityCorrelationComparison(elements.regionSeverityCorrelationScatter, rows);
+}
+
 function renderPopulationScatterComparison(container: HTMLElement, summaries: PopulationAccidentSummary[], showStateLabel: boolean): void {
   const rows = populationRateRows(summaries, showStateLabel);
   if (!result || rows.length === 0) {
@@ -2637,15 +2713,21 @@ function renderPopulationScatterComparison(container: HTMLElement, summaries: Po
 }
 
 function renderPopulationScatterChart(rows: PopulationRateRow[], config: PopulationScatterChartConfig): string {
+  const regression = populationScatterRegression(rows, config);
+  const correlationLabel = scatterCorrelationLabel(regression?.correlation);
   return `
     <section class="population-scatter-chart">
-      <h3>${escapeHtml(tr(config.titleKey))}</h3>
-      ${renderPopulationScatterSvg(rows, config)}
+      <h3><span>${escapeHtml(tr(config.titleKey))}</span>${correlationLabel}</h3>
+      ${renderPopulationScatterSvg(rows, config, regression)}
     </section>
   `;
 }
 
-function renderPopulationScatterSvg(rows: PopulationRateRow[], config: PopulationScatterChartConfig): string {
+function renderPopulationScatterSvg(
+  rows: PopulationRateRow[],
+  config: PopulationScatterChartConfig,
+  regression: ScatterRegression | null
+): string {
   const width = 760;
   const height = 420;
   const chart = { left: 62, right: 22, top: 20, bottom: 350 };
@@ -2676,6 +2758,7 @@ function renderPopulationScatterSvg(rows: PopulationRateRow[], config: Populatio
       `;
     })
     .join("");
+  const trend = renderScatterTrend(regression, config, xForRate, yForRate);
   const points = [...rows]
     .sort((a, b) => b.population - a.population)
     .map((row) => {
@@ -2697,11 +2780,148 @@ function renderPopulationScatterSvg(rows: PopulationRateRow[], config: Populatio
       ${yAxisTicks}
       <line class="population-scatter-axis" x1="${chart.left}" y1="${chart.top}" x2="${chart.left}" y2="${chart.bottom}"></line>
       <line class="population-scatter-axis" x1="${chart.left}" y1="${chart.bottom}" x2="${width - chart.right}" y2="${chart.bottom}"></line>
+      ${trend}
       ${points}
       <text class="population-scatter-axis-label" x="${chart.left + chartWidth / 2}" y="${height - 10}" text-anchor="middle">${escapeHtml(populationScatterAxisLabel(config.xMetric))}</text>
       <text class="population-scatter-axis-label" x="16" y="${chart.top + chartHeight / 2}" text-anchor="middle" transform="rotate(-90 16 ${chart.top + chartHeight / 2})">${escapeHtml(populationScatterAxisLabel(config.yMetric))}</text>
     </svg>
   `;
+}
+
+function renderSeverityCorrelationComparison(container: HTMLElement, rows: SeverityCorrelationRow[]): void {
+  if (!result || rows.length === 0) {
+    container.innerHTML = `<p class="population-rate-empty">${escapeHtml(tr("severityCorrelation.empty"))}</p>`;
+    return;
+  }
+
+  const severityMax = niceSeverityPercentChartMax(Math.max(...rows.map((row) => row.severityPercent * 100)));
+  const fatalMax = niceRateChartMax(Math.max(...rows.map((row) => row.fatalRate)));
+  const severeMax = niceRateChartMax(Math.max(...rows.map((row) => row.severeRate)));
+  const charts: SeverityCorrelationChartConfig[] = [
+    {
+      titleKey: "severityCorrelation.fatalTitle",
+      yMetric: "fatal",
+      xMax: severityMax,
+      yMax: fatalMax,
+      pointClass: "fatal"
+    },
+    {
+      titleKey: "severityCorrelation.severeTitle",
+      yMetric: "severe",
+      xMax: severityMax,
+      yMax: severeMax,
+      pointClass: "severe"
+    }
+  ];
+  container.innerHTML = `
+    <div class="population-scatter-size-legend">${escapeHtml(tr("severityCorrelation.sizeLegend"))}</div>
+    <div class="population-scatter-plots">
+      ${charts.map((chart) => renderSeverityCorrelationChart(rows, chart)).join("")}
+    </div>
+  `;
+}
+
+function renderSeverityCorrelationChart(rows: SeverityCorrelationRow[], config: SeverityCorrelationChartConfig): string {
+  const regression = severityCorrelationRegression(rows, config.yMetric);
+  const correlationLabel = scatterCorrelationLabel(regression?.correlation);
+  return `
+    <section class="population-scatter-chart">
+      <h3><span>${escapeHtml(tr(config.titleKey))}</span>${correlationLabel}</h3>
+      ${renderSeverityCorrelationSvg(rows, config, regression)}
+    </section>
+  `;
+}
+
+function renderSeverityCorrelationSvg(
+  rows: SeverityCorrelationRow[],
+  config: SeverityCorrelationChartConfig,
+  regression: ScatterRegression | null
+): string {
+  const width = 760;
+  const height = 420;
+  const chart = { left: 62, right: 22, top: 20, bottom: 350 };
+  const chartWidth = width - chart.left - chart.right;
+  const chartHeight = chart.bottom - chart.top;
+  const xTicks = uniqueNumbers([0, config.xMax / 2, config.xMax]).sort((a, b) => a - b);
+  const yTicks = uniqueNumbers([0, config.yMax / 2, config.yMax]).sort((a, b) => a - b);
+  const populations = rows.map((row) => row.population);
+  const minPopulation = Math.min(...populations);
+  const maxPopulation = Math.max(...populations);
+  const xForPercent = (percent: number) => chart.left + (percent / config.xMax) * chartWidth;
+  const yForRate = (rate: number) => chart.bottom - (rate / config.yMax) * chartHeight;
+  const xAxisTicks = xTicks
+    .map((percent) => {
+      const x = xForPercent(percent);
+      return `
+        <line class="population-scatter-grid-line" x1="${round(x, 1)}" y1="${chart.top}" x2="${round(x, 1)}" y2="${chart.bottom}"></line>
+        <text class="population-scatter-tick" x="${round(x, 1)}" y="${chart.bottom + 19}" text-anchor="middle">${formatSeverityAxisPercent(percent)}</text>
+      `;
+    })
+    .join("");
+  const yAxisTicks = yTicks
+    .map((rate) => {
+      const y = yForRate(rate);
+      return `
+        <line class="population-scatter-grid-line" x1="${chart.left}" y1="${round(y, 1)}" x2="${width - chart.right}" y2="${round(y, 1)}"></line>
+        <text class="population-scatter-tick" x="${chart.left - 10}" y="${round(y + 4, 1)}" text-anchor="end">${formatRate(rate)}</text>
+      `;
+    })
+    .join("");
+  const trend = renderScatterTrend(regression, config, xForPercent, yForRate);
+  const points = [...rows]
+    .sort((a, b) => b.population - a.population)
+    .map((row) => {
+      const xPercent = row.severityPercent * 100;
+      const yRate = severityCorrelationMetricValue(row, config.yMetric);
+      const label = severityCorrelationPointLabel(row, config);
+      return `
+        <circle class="population-scatter-point population-scatter-point-${config.pointClass}" cx="${round(xForPercent(xPercent), 1)}" cy="${round(yForRate(yRate), 1)}" r="${round(populationScatterRadius(row.population, minPopulation, maxPopulation), 1)}" tabindex="0" aria-label="${escapeHtml(label)}">
+          <title>${escapeHtml(label)}</title>
+        </circle>
+      `;
+    })
+    .join("");
+  const ariaLabel = `${tr(config.titleKey)}: ${tr("severityCorrelation.sizeLegend")}`;
+
+  return `
+    <svg class="population-scatter-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(ariaLabel)}">
+      ${xAxisTicks}
+      ${yAxisTicks}
+      <line class="population-scatter-axis" x1="${chart.left}" y1="${chart.top}" x2="${chart.left}" y2="${chart.bottom}"></line>
+      <line class="population-scatter-axis" x1="${chart.left}" y1="${chart.bottom}" x2="${width - chart.right}" y2="${chart.bottom}"></line>
+      ${trend}
+      ${points}
+      <text class="population-scatter-axis-label" x="${chart.left + chartWidth / 2}" y="${height - 10}" text-anchor="middle">${escapeHtml(tr("severityCorrelation.xAxis"))}</text>
+      <text class="population-scatter-axis-label" x="16" y="${chart.top + chartHeight / 2}" text-anchor="middle" transform="rotate(-90 16 ${chart.top + chartHeight / 2})">${escapeHtml(severityCorrelationYAxisLabel(config.yMetric))}</text>
+    </svg>
+  `;
+}
+
+function renderScatterTrend(
+  regression: ScatterRegression | null,
+  config: { xMax: number; yMax: number },
+  xForValue: (value: number) => number,
+  yForRate: (rate: number) => number
+): string {
+  if (!regression) {
+    return "";
+  }
+  const x1Value = clampNumber(regression.minX, 0, config.xMax);
+  const x2Value = clampNumber(regression.maxX, 0, config.xMax);
+  const y1Rate = clampNumber(regression.intercept + regression.slope * x1Value, 0, config.yMax);
+  const y2Rate = clampNumber(regression.intercept + regression.slope * x2Value, 0, config.yMax);
+  return `
+    <line class="population-scatter-trend" x1="${round(xForValue(x1Value), 1)}" y1="${round(yForRate(y1Rate), 1)}" x2="${round(xForValue(x2Value), 1)}" y2="${round(yForRate(y2Rate), 1)}">
+      <title>${escapeHtml(tr("severityCorrelation.trend"))}</title>
+    </line>
+  `;
+}
+
+function scatterCorrelationLabel(correlation: number | null | undefined): string {
+  if (correlation === null || correlation === undefined) {
+    return "";
+  }
+  return `<span class="population-scatter-correlation">${escapeHtml(trf("severityCorrelation.correlation", { value: formatCorrelation(correlation) }))}</span>`;
 }
 
 function populationScatterMetricValue(row: PopulationRateRow, metric: PopulationScatterMetric): number {
@@ -2731,6 +2951,18 @@ function populationScatterPointLabel(row: PopulationRateRow, config: PopulationS
   return `${areaLabel}: ${formatRate(xRate)} ${populationScatterAxisLabel(config.xMetric)}, ${formatRate(yRate)} ${populationScatterAxisLabel(config.yMetric)}, ${tr("populationRate.population")}: ${formatInteger(row.population)}`;
 }
 
+function populationScatterRegression(rows: PopulationRateRow[], config: PopulationScatterChartConfig): ScatterRegression | null {
+  if (rows.length < 2) {
+    return null;
+  }
+
+  const points = rows.map((row) => ({
+    x: populationScatterMetricValue(row, config.xMetric),
+    y: populationScatterMetricValue(row, config.yMetric)
+  }));
+  return scatterRegression(points);
+}
+
 function populationScatterRadius(population: number, minPopulation: number, maxPopulation: number): number {
   if (maxPopulation <= minPopulation) {
     return 9;
@@ -2739,6 +2971,110 @@ function populationScatterRadius(population: number, minPopulation: number, maxP
   const maxSqrt = Math.sqrt(maxPopulation);
   const normalized = (Math.sqrt(population) - minSqrt) / (maxSqrt - minSqrt);
   return 5 + normalized * 12;
+}
+
+function severityCorrelationRows(
+  summaries: PopulationAccidentSummary[],
+  showStateLabel: boolean,
+  severityForSummary: (summary: PopulationAccidentSummary) => number | null
+): SeverityCorrelationRow[] {
+  return summaries
+    .map((summary): SeverityCorrelationRow | null => {
+      const severityPercent = severityForSummary(summary);
+      if (
+        typeof summary.population !== "number" ||
+        summary.population <= 0 ||
+        summary.accidentCount <= 0 ||
+        typeof severityPercent !== "number" ||
+        !Number.isFinite(severityPercent)
+      ) {
+        return null;
+      }
+      const population = summary.population;
+      const name = cleanAreaNameForDisplay(summary.name);
+      const secondaryLabel = showStateLabel && name !== summary.stateName ? summary.stateName : null;
+      return {
+        name,
+        secondaryLabel,
+        population,
+        severityPercent,
+        fatalRate: accidentRate(summary.fatalCount, population),
+        severeRate: accidentRate(summary.fatalCount + summary.seriousCount, population)
+      };
+    })
+    .filter((row): row is SeverityCorrelationRow => row !== null)
+    .sort(compareSeverityCorrelationRows);
+}
+
+function compareSeverityCorrelationRows(a: SeverityCorrelationRow, b: SeverityCorrelationRow): number {
+  return (
+    b.severityPercent - a.severityPercent ||
+    b.severeRate - a.severeRate ||
+    b.fatalRate - a.fatalRate ||
+    a.name.localeCompare(b.name, "de", { sensitivity: "base" })
+  );
+}
+
+function severityCorrelationMetricValue(row: SeverityCorrelationRow, metric: SeverityCorrelationMetric): number {
+  return metric === "fatal" ? row.fatalRate : row.severeRate;
+}
+
+function severityCorrelationYAxisLabel(metric: SeverityCorrelationMetric): string {
+  return metric === "fatal" ? tr("severityCorrelation.fatalYAxis") : tr("severityCorrelation.severeYAxis");
+}
+
+function severityCorrelationPointLabel(row: SeverityCorrelationRow, config: SeverityCorrelationChartConfig): string {
+  const areaLabel = row.secondaryLabel ? `${row.name}, ${row.secondaryLabel}` : row.name;
+  return `${areaLabel}: ${tr("metric.severityPercent")}: ${formatSeverityPercent(row)}, ${severityCorrelationYAxisLabel(config.yMetric)}: ${formatRate(severityCorrelationMetricValue(row, config.yMetric))}, ${tr("populationRate.population")}: ${formatInteger(row.population)}`;
+}
+
+function severityCorrelationRegression(rows: SeverityCorrelationRow[], metric: SeverityCorrelationMetric): ScatterRegression | null {
+  if (rows.length < 2) {
+    return null;
+  }
+
+  const points = rows.map((row) => ({
+    x: row.severityPercent * 100,
+    y: severityCorrelationMetricValue(row, metric)
+  }));
+  return scatterRegression(points);
+}
+
+function scatterRegression(points: Array<{ x: number; y: number }>): ScatterRegression | null {
+  if (points.length < 2) {
+    return null;
+  }
+  const meanX = points.reduce((sum, point) => sum + point.x, 0) / points.length;
+  const meanY = points.reduce((sum, point) => sum + point.y, 0) / points.length;
+  let sumXX = 0;
+  let sumXY = 0;
+  let sumYY = 0;
+  for (const point of points) {
+    const dx = point.x - meanX;
+    const dy = point.y - meanY;
+    sumXX += dx * dx;
+    sumXY += dx * dy;
+    sumYY += dy * dy;
+  }
+  if (sumXX <= 0) {
+    return null;
+  }
+
+  return {
+    slope: sumXY / sumXX,
+    intercept: meanY - (sumXY / sumXX) * meanX,
+    correlation: sumYY > 0 ? sumXY / Math.sqrt(sumXX * sumYY) : null,
+    minX: Math.min(...points.map((point) => point.x)),
+    maxX: Math.max(...points.map((point) => point.x))
+  };
+}
+
+function niceSeverityPercentChartMax(maxPercent: number): number {
+  return Math.min(100, Math.max(10, niceRateChartMax(maxPercent)));
+}
+
+function formatSeverityAxisPercent(value: number): string {
+  return `${formatRate(value)}%`;
 }
 
 function renderPopulationRateComparison(container: HTMLElement, summaries: PopulationAccidentSummary[], showStateLabel: boolean): void {
@@ -6463,6 +6799,10 @@ function formatRate(value: number): string {
 
 function formatNumber(value: number): string {
   return new Intl.NumberFormat(NUMBER_LOCALE, { maximumFractionDigits: 2 }).format(value);
+}
+
+function formatCorrelation(value: number): string {
+  return new Intl.NumberFormat(NUMBER_LOCALE, { maximumFractionDigits: 2, minimumFractionDigits: 2 }).format(value);
 }
 
 function formatDate(value: Date): string {
