@@ -1,4 +1,4 @@
-import { IntersectionCluster } from "./types";
+import { type AccidentRecord, IntersectionCluster } from "./types";
 
 interface ProjectedPoint {
   x: number;
@@ -38,6 +38,15 @@ type ClusterSeverity = keyof SeverityFilters;
 
 type SelectionReason = "auto" | "program" | "user";
 type SelectionCallback = (cluster: IntersectionCluster | null, reason: SelectionReason) => void;
+type IncidentSelectionCallback = (accident: AccidentRecord) => void;
+type IncidentViewportCallback = (request: MapIncidentViewportRequest) => void;
+type IncidentDisplayCallback = (visible: boolean) => void;
+type ZoomCallback = (zoomLevel: number) => void;
+
+export interface MapIncidentViewportRequest {
+  tileZoom: number;
+  stateCodes: string[];
+}
 
 const MIN_SCALE = 250;
 const MAX_SCALE = 80_000_000;
@@ -48,6 +57,9 @@ const OSM_MAX_ZOOM = 19;
 const OSM_MAX_CACHED_TILES = 512;
 const OSM_TILE_FILTER = "grayscale(1) saturate(0) contrast(0.62) brightness(1.18)";
 const OSM_TILE_ALPHA = 0.58;
+const UNCLUSTERED_INCIDENT_MIN_TILE_ZOOM = 14;
+const UNCLUSTERED_INCIDENT_GRID_WORLD_SIZE = 1 / 65_536;
+const UNCLUSTERED_INCIDENT_HIT_RADIUS_PX = 10;
 
 interface VisualScale {
   metricScale: number;
@@ -65,12 +77,20 @@ interface ProjectedIncidentPoint {
   label: string;
 }
 
+interface ProjectedUnclusteredIncidentPoint {
+  accident: AccidentRecord;
+  projected: ProjectedPoint;
+  severity: ClusterSeverity;
+}
+
 export class MapCanvas {
   private readonly context: CanvasRenderingContext2D;
   private clusters: IntersectionCluster[] = [];
   private projectedClusters: ProjectedCluster[] = [];
   private selected: IntersectionCluster | null = null;
   private selectedIncidentPoints: ProjectedIncidentPoint[] = [];
+  private unclusteredIncidentPoints: ProjectedUnclusteredIncidentPoint[] = [];
+  private unclusteredIncidentBuckets = new Map<string, ProjectedUnclusteredIncidentPoint[]>();
   private userLocation: UserLocation | null = null;
   private maxSeverityPercent = 0.01;
   private severityFilters: SeverityFilters = { fatal: true, serious: true, other: false };
@@ -88,9 +108,19 @@ export class MapCanvas {
   private pinchDistance: number | null = null;
   private pinchCenter: ProjectedPoint | null = null;
   private clickCycle: { x: number; y: number; index: number; candidates: IntersectionCluster[] } | null = null;
+  private incidentViewportRequestKey: string | null = null;
+  private unclusteredIncidentDisplayVisible = false;
+  private reportedTileZoom: number | null = null;
   private drawFrame: number | null = null;
 
-  constructor(private readonly canvas: HTMLCanvasElement, private readonly onSelect: SelectionCallback) {
+  constructor(
+    private readonly canvas: HTMLCanvasElement,
+    private readonly onSelect: SelectionCallback,
+    private readonly onIncidentSelect: IncidentSelectionCallback | null = null,
+    private readonly onIncidentViewportRequest: IncidentViewportCallback | null = null,
+    private readonly onIncidentDisplayChange: IncidentDisplayCallback | null = null,
+    private readonly onZoomChange: ZoomCallback | null = null
+  ) {
     const context = canvas.getContext("2d");
     if (!context) {
       throw new Error("Canvas rendering is not available.");
@@ -112,6 +142,9 @@ export class MapCanvas {
       .sort((a, b) => drawPriority(a.cluster) - drawPriority(b.cluster));
     this.selected = null;
     this.selectedIncidentPoints = [];
+    this.setUnclusteredIncidentPoints([]);
+    this.incidentViewportRequestKey = null;
+    this.setUnclusteredIncidentDisplayVisible(false);
     this.fit();
     this.draw();
     this.onSelect(null, "auto");
@@ -127,22 +160,26 @@ export class MapCanvas {
     this.draw();
   }
 
-  select(cluster: IntersectionCluster | null, focus = false, reason: SelectionReason = "program"): void {
+  select(cluster: IntersectionCluster | null, focus = false, reason: SelectionReason = "program", zoomLevel: number | null = null): void {
     const selectedChanged = this.selected?.id !== cluster?.id;
     this.selected = cluster;
     if (!cluster || selectedChanged) {
       this.selectedIncidentPoints = [];
     }
     if (cluster && focus) {
-      this.centerOn(cluster);
+      this.centerOn(cluster, zoomLevel);
     }
     this.draw();
     this.onSelect(cluster, reason);
   }
 
-  focus(point: { lon: number; lat: number }): void {
-    this.centerOn(point);
+  focus(point: { lon: number; lat: number }, zoomLevel: number | null = null): void {
+    this.centerOn(point, zoomLevel);
     this.draw();
+  }
+
+  zoomLevel(): number {
+    return this.tileZoom();
   }
 
   setUserLocation(location: UserLocation, focus = true): void {
@@ -159,6 +196,19 @@ export class MapCanvas {
       label: point.label
     }));
     this.draw();
+  }
+
+  setUnclusteredIncidentPoints(accidents: AccidentRecord[]): void {
+    this.unclusteredIncidentPoints = accidents.map((accident) => ({
+      accident,
+      projected: project(accident.lon, accident.lat),
+      severity: accidentSeverity(accident)
+    }));
+    this.unclusteredIncidentBuckets = buildIncidentBuckets(this.unclusteredIncidentPoints);
+    if (this.unclusteredIncidentPoints.length === 0) {
+      this.setUnclusteredIncidentDisplayVisible(false);
+    }
+    this.requestDraw();
   }
 
   zoom(factor: number): void {
@@ -253,9 +303,15 @@ export class MapCanvas {
 
     if (selectOnTap && wasSinglePointer && !pointerMoved) {
       const canvasPoint = this.canvasPointFromClient(pointer);
-      const cluster = this.findClusterAt(canvasPoint.x, canvasPoint.y);
-      if (cluster) {
-        this.select(cluster, false, "user");
+      const incident = this.findUnclusteredIncidentAt(canvasPoint.x, canvasPoint.y);
+      if (incident && this.onIncidentSelect) {
+        this.clickCycle = null;
+        this.onIncidentSelect(incident.accident);
+      } else {
+        const cluster = this.findClusterAt(canvasPoint.x, canvasPoint.y);
+        if (cluster) {
+          this.select(cluster, false, "user");
+        }
       }
     }
 
@@ -381,9 +437,12 @@ export class MapCanvas {
 
     if (this.bounds && this.clusters.length > 0) {
       this.drawClusters();
+    } else {
+      this.setUnclusteredIncidentDisplayVisible(false);
     }
 
     this.drawUserLocation();
+    this.requestUnclusteredIncidentViewport();
   }
 
   private drawBasemap(): void {
@@ -468,6 +527,7 @@ export class MapCanvas {
     const visualScale = this.visualScale(visibleClusters, zoomLevel);
 
     this.drawClusterPoints(visibleClusters, visualScale);
+    this.drawUnclusteredIncidentPoints(zoomLevel);
     this.drawSelectedCluster(zoomLevel);
     this.drawSelectedIncidentPoints(zoomLevel);
   }
@@ -478,12 +538,42 @@ export class MapCanvas {
     for (const cluster of visibleClusters) {
       const metricIntensity = Math.min(1, cluster.cluster.severityPercent / visualScale.metricScale);
       const radius = this.markerRadius(cluster.cluster, metricIntensity, visualScale.zoomLevel);
-      const alpha = this.markerAlpha(cluster.cluster, metricIntensity, visualScale.zoomLevel);
-      ctx.fillStyle = colorForIntensity(metricIntensity, alpha);
+      ctx.fillStyle = colorForClusterIntensity(metricIntensity);
       ctx.beginPath();
       ctx.arc(cluster.point.x, cluster.point.y, radius, 0, Math.PI * 2);
       ctx.fill();
     }
+  }
+
+  private drawUnclusteredIncidentPoints(zoomLevel: number): void {
+    if (!this.shouldShowUnclusteredIncidentPoints()) {
+      this.setUnclusteredIncidentDisplayVisible(false);
+      return;
+    }
+
+    const incidents = this.visibleUnclusteredIncidentPoints();
+    if (incidents.length === 0) {
+      this.setUnclusteredIncidentDisplayVisible(false);
+      return;
+    }
+    this.setUnclusteredIncidentDisplayVisible(true);
+
+    const ctx = this.context;
+    const dpr = window.devicePixelRatio;
+    const fontSize = lerp(10, 12, zoomLevel) * dpr;
+    ctx.save();
+    ctx.font = `800 ${fontSize}px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI Symbol", sans-serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+
+    for (const incident of incidents) {
+      const point = this.screenFromProjected(incident.projected);
+      const symbol = symbolForIncidentSeverity(incident.severity);
+      ctx.fillStyle = colorForIncidentSeverity(incident.severity);
+      ctx.fillText(symbol, point.x, point.y + 0.3 * dpr);
+    }
+
+    ctx.restore();
   }
 
   private drawSelectedCluster(zoomLevel: number): void {
@@ -610,15 +700,17 @@ export class MapCanvas {
     const actual = this.scale / previousScale;
     this.offsetX = screenX - (screenX - this.offsetX) * actual;
     this.offsetY = screenY - (screenY - this.offsetY) * actual;
+    this.notifyZoomChanged();
     this.requestDraw();
   }
 
-  private centerOn(point: { lon: number; lat: number }): void {
+  private centerOn(point: { lon: number; lat: number }, zoomLevel: number | null = null): void {
     this.resizeToDisplaySize();
     const projected = project(point.lon, point.lat);
-    this.scale = Math.max(this.scale, 4_000_000);
+    this.scale = zoomLevel === null ? Math.max(this.scale, 4_000_000) : scaleForTileZoom(zoomLevel);
     this.offsetX = this.canvas.width / 2 - projected.x * this.scale;
     this.offsetY = this.canvas.height / 2 - projected.y * this.scale;
+    this.notifyZoomChanged();
   }
 
   private accuracyRadiusPx(location: UserLocation): number {
@@ -646,14 +738,6 @@ export class MapCanvas {
     return Math.min(14, radiusCss) * window.devicePixelRatio;
   }
 
-  private markerAlpha(cluster: IntersectionCluster, metricIntensity: number, zoomLevel: number): number {
-    const confidence = 1 - Math.exp(-cluster.accidentCount / 6);
-    const baseAlpha = lerp(0.14, 0.24, zoomLevel);
-    const metricAlpha = Math.sqrt(metricIntensity) * lerp(0.24, 0.42, zoomLevel);
-    const fatalAlpha = cluster.fatalCount > 0 ? 0.08 : 0;
-    return clamp(baseAlpha + confidence * metricAlpha + fatalAlpha, 0.14, 0.86);
-  }
-
   private visibleClusterPoints(): VisibleClusterPoint[] {
     const visible: VisibleClusterPoint[] = [];
 
@@ -670,8 +754,45 @@ export class MapCanvas {
     return visible;
   }
 
+  private visibleUnclusteredIncidentPoints(): ProjectedUnclusteredIncidentPoint[] {
+    if (this.unclusteredIncidentBuckets.size === 0) {
+      return [];
+    }
+
+    const bounds = this.visibleProjectedViewportBounds(24 * window.devicePixelRatio);
+    const minBucketX = Math.floor(bounds.minX / UNCLUSTERED_INCIDENT_GRID_WORLD_SIZE);
+    const maxBucketX = Math.floor(bounds.maxX / UNCLUSTERED_INCIDENT_GRID_WORLD_SIZE);
+    const minBucketY = Math.floor(bounds.minY / UNCLUSTERED_INCIDENT_GRID_WORLD_SIZE);
+    const maxBucketY = Math.floor(bounds.maxY / UNCLUSTERED_INCIDENT_GRID_WORLD_SIZE);
+    const visible: ProjectedUnclusteredIncidentPoint[] = [];
+
+    for (let bucketY = minBucketY; bucketY <= maxBucketY; bucketY += 1) {
+      for (let bucketX = minBucketX; bucketX <= maxBucketX; bucketX += 1) {
+        const bucket = this.unclusteredIncidentBuckets.get(incidentBucketKey(bucketX, bucketY));
+        if (!bucket) {
+          continue;
+        }
+        for (const incident of bucket) {
+          if (!this.severityFilters[incident.severity]) {
+            continue;
+          }
+          const point = this.screenFromProjected(incident.projected);
+          if (this.isVisible(point)) {
+            visible.push(incident);
+          }
+        }
+      }
+    }
+
+    return visible;
+  }
+
   private shouldShowCluster(cluster: IntersectionCluster): boolean {
     return this.severityFilters[clusterSeverity(cluster)];
+  }
+
+  private shouldShowUnclusteredIncidentPoints(): boolean {
+    return this.tileZoom() >= UNCLUSTERED_INCIDENT_MIN_TILE_ZOOM;
   }
 
   private visualScale(visibleClusters: VisibleClusterPoint[], zoomLevel: number): VisualScale {
@@ -719,6 +840,81 @@ export class MapCanvas {
   private isVisible(point: ProjectedPoint): boolean {
     const margin = 32 * window.devicePixelRatio;
     return point.x >= -margin && point.x <= this.canvas.width + margin && point.y >= -margin && point.y <= this.canvas.height + margin;
+  }
+
+  private visibleProjectedViewportBounds(marginPx: number): { minX: number; maxX: number; minY: number; maxY: number } {
+    const minX = (-this.offsetX - marginPx) / this.scale;
+    const maxX = (this.canvas.width - this.offsetX + marginPx) / this.scale;
+    const minY = (-this.offsetY - marginPx) / this.scale;
+    const maxY = (this.canvas.height - this.offsetY + marginPx) / this.scale;
+    return { minX, maxX, minY, maxY };
+  }
+
+  private findUnclusteredIncidentAt(screenX: number, screenY: number): ProjectedUnclusteredIncidentPoint | null {
+    if (!this.shouldShowUnclusteredIncidentPoints()) {
+      return null;
+    }
+
+    const hitRadius = UNCLUSTERED_INCIDENT_HIT_RADIUS_PX * window.devicePixelRatio;
+    const candidates: Array<{ incident: ProjectedUnclusteredIncidentPoint; distance: number }> = [];
+    for (const incident of this.visibleUnclusteredIncidentPoints()) {
+      const point = this.screenFromProjected(incident.projected);
+      const distance = Math.hypot(point.x - screenX, point.y - screenY);
+      if (distance <= hitRadius) {
+        candidates.push({ incident, distance });
+      }
+    }
+
+    if (candidates.length === 0) {
+      return null;
+    }
+
+    candidates.sort((a, b) => a.distance - b.distance || compareIncidentSeverity(a.incident.accident, b.incident.accident));
+    return candidates[0].incident;
+  }
+
+  private requestUnclusteredIncidentViewport(): void {
+    if (!this.onIncidentViewportRequest || this.tileZoom() < UNCLUSTERED_INCIDENT_MIN_TILE_ZOOM) {
+      this.incidentViewportRequestKey = null;
+      return;
+    }
+
+    const stateCodes = this.visibleStateCodes();
+    const key = `${this.tileZoom()}|${stateCodes.join(",")}`;
+    if (key === this.incidentViewportRequestKey) {
+      return;
+    }
+
+    this.incidentViewportRequestKey = key;
+    this.onIncidentViewportRequest({ tileZoom: this.tileZoom(), stateCodes });
+  }
+
+  private setUnclusteredIncidentDisplayVisible(isVisible: boolean): void {
+    if (this.unclusteredIncidentDisplayVisible === isVisible) {
+      return;
+    }
+    this.unclusteredIncidentDisplayVisible = isVisible;
+    this.onIncidentDisplayChange?.(isVisible);
+  }
+
+  private notifyZoomChanged(): void {
+    const zoom = this.tileZoom();
+    if (this.reportedTileZoom === zoom) {
+      return;
+    }
+    this.reportedTileZoom = zoom;
+    this.onZoomChange?.(zoom);
+  }
+
+  private visibleStateCodes(): string[] {
+    const stateCodes = new Set<string>();
+    for (const cluster of this.projectedClusters) {
+      const point = this.screenFromProjected(cluster.projected);
+      if (this.isVisible(point)) {
+        stateCodes.add(cluster.cluster.stateCode);
+      }
+    }
+    return Array.from(stateCodes).sort();
   }
 
   private resizeToDisplaySize(): void {
@@ -793,6 +989,16 @@ function compareSeverityMetric(a: IntersectionCluster, b: IntersectionCluster): 
   );
 }
 
+function compareIncidentSeverity(a: AccidentRecord, b: AccidentRecord): number {
+  return (
+    incidentSeverityOrder(a) - incidentSeverityOrder(b) ||
+    b.year - a.year ||
+    (b.month ?? 0) - (a.month ?? 0) ||
+    (b.day ?? 0) - (a.day ?? 0) ||
+    (b.hour ?? -1) - (a.hour ?? -1)
+  );
+}
+
 function clusterSeverity(cluster: IntersectionCluster): ClusterSeverity {
   if (cluster.fatalCount > 0) {
     return "fatal";
@@ -803,14 +1009,82 @@ function clusterSeverity(cluster: IntersectionCluster): ClusterSeverity {
   return "other";
 }
 
-function colorForIntensity(intensity: number, alpha: number): string {
+function accidentSeverity(accident: AccidentRecord): ClusterSeverity {
+  if (accident.category === 1) {
+    return "fatal";
+  }
+  if (accident.category === 2) {
+    return "serious";
+  }
+  return "other";
+}
+
+function incidentSeverityOrder(accident: AccidentRecord): number {
+  switch (accidentSeverity(accident)) {
+    case "fatal":
+      return 0;
+    case "serious":
+      return 1;
+    case "other":
+      return 2;
+  }
+}
+
+function colorForClusterIntensity(intensity: number): string {
   if (intensity > 0.66) {
-    return `rgba(185, 57, 43, ${alpha})`;
+    return "#b9392b";
   }
   if (intensity > 0.32) {
-    return `rgba(210, 133, 40, ${alpha})`;
+    return "#d28528";
   }
-  return `rgba(34, 134, 141, ${alpha})`;
+  return "#22868d";
+}
+
+function colorForIncidentSeverity(severity: ClusterSeverity): string {
+  switch (severity) {
+    case "fatal":
+      return "#b9392b";
+    case "serious":
+      return "#c1842f";
+    case "other":
+      return "#166b6d";
+  }
+}
+
+function symbolForIncidentSeverity(severity: ClusterSeverity): string {
+  switch (severity) {
+    case "fatal":
+      return "◆";
+    case "serious":
+      return "▲";
+    case "other":
+      return "●";
+  }
+}
+
+function buildIncidentBuckets(points: ProjectedUnclusteredIncidentPoint[]): Map<string, ProjectedUnclusteredIncidentPoint[]> {
+  const buckets = new Map<string, ProjectedUnclusteredIncidentPoint[]>();
+  for (const point of points) {
+    const bucketX = Math.floor(point.projected.x / UNCLUSTERED_INCIDENT_GRID_WORLD_SIZE);
+    const bucketY = Math.floor(point.projected.y / UNCLUSTERED_INCIDENT_GRID_WORLD_SIZE);
+    const key = incidentBucketKey(bucketX, bucketY);
+    const bucket = buckets.get(key);
+    if (bucket) {
+      bucket.push(point);
+    } else {
+      buckets.set(key, [point]);
+    }
+  }
+  return buckets;
+}
+
+function incidentBucketKey(bucketX: number, bucketY: number): string {
+  return `${bucketX}:${bucketY}`;
+}
+
+function scaleForTileZoom(zoomLevel: number): number {
+  const clampedZoom = clamp(Math.round(zoomLevel), OSM_MIN_ZOOM, OSM_MAX_ZOOM);
+  return clamp(OSM_TILE_SIZE * 2 ** clampedZoom, MIN_SCALE, MAX_SCALE);
 }
 
 function wrapTileX(x: number, tileCount: number): number {

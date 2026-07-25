@@ -2,7 +2,7 @@ import "./styles.css";
 import { analyzeDangerousIntersectionsInBackground, type AnalysisExecutionPlan } from "./analysisRunner";
 import { DataRepository, type AnalysisCacheContext, type DataRepositoryTelemetry } from "./dataRepository";
 import { GeoGridIndex } from "./geo";
-import { MapCanvas } from "./mapCanvas";
+import { MapCanvas, type MapIncidentViewportRequest } from "./mapCanvas";
 import { RequestGate, type RequestToken } from "./requestGate";
 import { accidentMatchesRoadUserFocus, ROAD_USER_DEFINITIONS, RoadUserDefinition, roadUserFocusKey } from "./roadUsers";
 import { STATE_NAMES } from "./states";
@@ -41,6 +41,8 @@ const STATE_BROWSE_MAX_INTERSECTIONS = 100;
 const POPULATION_RATE_DENOMINATOR = 100_000;
 const INTERSECTION_URL_COORDINATE_DECIMALS = 5;
 const INTERSECTION_URL_MATCH_MAX_DISTANCE_METERS = 75;
+const INTERSECTION_URL_ZOOM_MIN = 0;
+const INTERSECTION_URL_ZOOM_MAX = 19;
 
 declare const __SICHERE_KNOTEN_APP_VERSION__: string | undefined;
 declare const __SICHERE_KNOTEN_ANALYSIS_CACHE_VERSION__: string | undefined;
@@ -57,6 +59,10 @@ type LoadingStatusKind = "normal" | "problem" | "idle";
 interface LatLon {
   lat: number;
   lon: number;
+}
+
+interface IntersectionUrlSelection extends LatLon {
+  zoomLevel: number | null;
 }
 
 interface SiteVersionManifest {
@@ -264,6 +270,8 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "aria.views": "Views",
     "aria.mapControls": "Map display controls",
     "aria.map": "High-severity intersections map",
+    "aria.individualCrashes": "Individual crash symbols",
+    "aria.intersectionLegend": "Intersection point legend",
     "aria.selectedDetails": "Selected intersection details",
     "aria.openMapServices": "Open selected intersection in map services",
     "aria.loadingFact": "Road safety fact",
@@ -333,6 +341,8 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "action.labelFactsheet": "PDF",
     "action.analyze": "Analyze",
     "action.analyzeChanges": "Analyze changes",
+    "action.close": "Close",
+    "action.copyPermalink": "Copy permalink",
     "streetView.title": "Google Street View",
     "streetView.empty": "Select an intersection to show Street View.",
     "streetView.near": "Google Street View near {lat}, {lon}",
@@ -439,6 +449,8 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "status.factsheetCreating": "Preparing factsheet PDF.",
     "status.factsheetDownloaded": "Factsheet downloaded.",
     "status.factsheetFailed": "Could not create factsheet: {error}",
+    "status.permalinkCopied": "Permalink copied.",
+    "status.permalinkCopyFailed": "Could not copy permalink: {error}",
     "label.away": "{distance} away",
     "noun.accident.one": "accident",
     "noun.accident.other": "accidents",
@@ -450,10 +462,16 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "map.labelGoogleMaps": "Google Maps",
     "map.labelStreetView": "Street View",
     "map.labelResponsibleAuthority": "Authority",
+    "mapLegend.severity": "Severity",
+    "mapLegend.lowerSeverity": "Lower",
+    "mapLegend.mediumSeverity": "Medium",
+    "mapLegend.highSeverity": "High",
+    "mapLegend.sizeAccidents": "Larger = more accidents",
     "press.label": "Press",
     "press.searchIntersection": "Search press coverage",
     "press.searchIncident": "Search press coverage for this incident",
     "records.title": "Known accident records",
+    "records.modalTitle": "Accident record",
     "records.countOf": "{shown} of {total}",
     "records.loading": "Accident record details are still loading.",
     "records.empty": "No matching source accident records were found near this intersection.",
@@ -475,6 +493,7 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "records.dayNotProvided": "day not provided",
     "records.unknownCode": "Unknown code",
     "records.noRoadUserFields": "No road-user fields",
+    "records.noRoadUsersInvolved": "None recorded",
     "records.yes": "yes",
     "records.no": "no",
     "records.adminRegion": "administrative region {code}",
@@ -598,6 +617,8 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "aria.views": "Ansichten",
     "aria.mapControls": "Kartendarstellung",
     "aria.map": "Karte der Kreuzungen mit hohem Schweregrad",
+    "aria.individualCrashes": "Symbole einzelner Unfälle",
+    "aria.intersectionLegend": "Legende der Kreuzungspunkte",
     "aria.selectedDetails": "Details zur ausgewählten Kreuzung",
     "aria.openMapServices": "Ausgewählte Kreuzung in Kartendiensten öffnen",
     "aria.loadingFact": "Fakt zur Verkehrssicherheit",
@@ -667,6 +688,8 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "action.labelFactsheet": "PDF",
     "action.analyze": "Analysieren",
     "action.analyzeChanges": "Änderungen analysieren",
+    "action.close": "Schliessen",
+    "action.copyPermalink": "Permalink kopieren",
     "streetView.title": "Google Street View",
     "streetView.empty": "Wähle eine Kreuzung aus, um Street View anzuzeigen.",
     "streetView.near": "Google Street View nahe {lat}, {lon}",
@@ -772,6 +795,8 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "status.factsheetCreating": "Faktenblatt-PDF wird vorbereitet.",
     "status.factsheetDownloaded": "Faktenblatt heruntergeladen.",
     "status.factsheetFailed": "Faktenblatt konnte nicht erstellt werden: {error}",
+    "status.permalinkCopied": "Permalink kopiert.",
+    "status.permalinkCopyFailed": "Permalink konnte nicht kopiert werden: {error}",
     "label.away": "{distance} entfernt",
     "noun.accident.one": "Unfall",
     "noun.accident.other": "Unfälle",
@@ -783,10 +808,16 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "map.labelGoogleMaps": "Google Maps",
     "map.labelStreetView": "Street View",
     "map.labelResponsibleAuthority": "Behörde",
+    "mapLegend.severity": "Schweregrad",
+    "mapLegend.lowerSeverity": "Niedrig",
+    "mapLegend.mediumSeverity": "Mittel",
+    "mapLegend.highSeverity": "Hoch",
+    "mapLegend.sizeAccidents": "Größer = mehr Unfälle",
     "press.label": "Presse",
     "press.searchIntersection": "Presseberichte suchen",
     "press.searchIncident": "Presseberichte zu diesem Unfall suchen",
     "records.title": "Bekannte Unfalldatensätze",
+    "records.modalTitle": "Unfalldatensatz",
     "records.countOf": "{shown} von {total}",
     "records.loading": "Details zu den Unfalldatensätzen werden noch geladen.",
     "records.empty": "In der Nähe dieser Kreuzung wurden keine passenden Quelldatensätze gefunden.",
@@ -808,6 +839,7 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "records.dayNotProvided": "Tag nicht enthalten",
     "records.unknownCode": "Unbekannter Code",
     "records.noRoadUserFields": "Keine Verkehrsteilnehmerfelder",
+    "records.noRoadUsersInvolved": "Keine erfasst",
     "records.yes": "ja",
     "records.no": "nein",
     "records.adminRegion": "Regierungsbezirk {code}",
@@ -1065,6 +1097,15 @@ interface AccidentRecordIndexLookupCache {
   map: Map<number, AccidentRecord>;
 }
 
+interface UnclusteredIncidentMapCache {
+  key: string;
+  loadedStateCodes: Set<string>;
+  loadingStateCodes: Set<string>;
+  records: AccidentRecord[];
+  clusteredAccidentKeys: Set<string>;
+  clusteredAccidentIndexes: Set<number>;
+}
+
 interface CrossingAccident {
   accident: AccidentRecord;
   distanceMeters: number;
@@ -1126,6 +1167,7 @@ let accidentKeyLookupCache: AccidentKeyLookupCache | null = null;
 let accidentRecordIndexLookupCache: AccidentRecordIndexLookupCache | null = null;
 let severityRankCache: SeverityRankCache | null = null;
 let browseIndexCache: BrowseIndex | null = null;
+let unclusteredIncidentMapCache: UnclusteredIncidentMapCache | null = null;
 let postRenderCacheWriteQueue: Promise<void> = Promise.resolve();
 let isStreetViewOpen = readStoredStreetViewOpen();
 let activeView: ViewKey = "map";
@@ -1134,7 +1176,7 @@ let activeInteractionTelemetry: InteractionTelemetry | null = null;
 let isSplashDisplayed = false;
 let loadingFactFallbackIndex = 0;
 let selectedPreviewMapRenderId = 0;
-let pendingUrlIntersectionSelection: LatLon | null = readIntersectionSelectionFromUrl();
+let pendingUrlIntersectionSelection: IntersectionUrlSelection | null = readIntersectionSelectionFromUrl();
 
 const elements = {
   app: byId<HTMLDivElement>("app"),
@@ -1164,6 +1206,7 @@ const elements = {
   mapLoadingStatus: byId<HTMLParagraphElement>("mapLoadingStatus"),
   mapLoadingBar: byId<HTMLDivElement>("mapLoadingBar"),
   selectedAside: byId<HTMLElement>("selectedAside"),
+  selectedPermalinkBtn: byId<HTMLButtonElement>("selectedPermalinkBtn"),
   selectedPreviewMap: byId<HTMLDivElement>("selectedPreviewMap"),
   selectedPreviewCanvas: byId<HTMLCanvasElement>("selectedPreviewCanvas"),
   selectionDetails: byId<HTMLDivElement>("selectionDetails"),
@@ -1202,6 +1245,10 @@ const elements = {
   showSeriousPoints: byId<HTMLInputElement>("showSeriousPoints"),
   showOtherPoints: byId<HTMLInputElement>("showOtherPoints"),
   locateMeBtn: byId<HTMLButtonElement>("locateMeBtn"),
+  mapIncidentLegend: byId<HTMLDivElement>("mapIncidentLegend"),
+  mapIntersectionLegend: byId<HTMLDivElement>("mapIntersectionLegend"),
+  incidentDialog: byId<HTMLDialogElement>("incidentDialog"),
+  incidentDialogBody: byId<HTMLDivElement>("incidentDialogBody"),
   streetViewPanel: byId<HTMLElement>("streetViewPanel"),
   streetViewToggle: byId<HTMLButtonElement>("streetViewToggle"),
   streetViewToggleText: byId<HTMLSpanElement>("streetViewToggleText"),
@@ -1213,7 +1260,14 @@ const elements = {
 
 const dataRepository = new DataRepository();
 const requestGate = new RequestGate();
-const map = new MapCanvas(elements.mapCanvas, handleClusterSelection);
+const map = new MapCanvas(
+  elements.mapCanvas,
+  handleClusterSelection,
+  openUnclusteredIncidentDialog,
+  handleMapIncidentViewportRequest,
+  setMapIncidentLegendVisible,
+  handleMapZoomChange
+);
 const mobileLayout = window.matchMedia(MOBILE_LAYOUT_QUERY);
 
 startApp();
@@ -1291,7 +1345,9 @@ function wireApplicationCommands(): void {
   elements.resetAppBtn.addEventListener("click", () => void resetApp());
   elements.analyzeBtn.addEventListener("click", () => runAnalysis());
   elements.exportBtn.addEventListener("click", exportClusters);
+  elements.selectedPermalinkBtn.addEventListener("click", () => void copySelectedIntersectionPermalink());
   elements.selectionDetails.addEventListener("click", handleSelectionDetailsClick);
+  elements.incidentDialog.addEventListener("click", handleIncidentDialogClick);
 }
 
 function wireAnalysisControlEvents(): void {
@@ -1695,6 +1751,8 @@ function clearAnalysisDerivedState(): void {
   accidentRecordIndexLookupCache = null;
   severityRankCache = null;
   browseIndexCache = null;
+  unclusteredIncidentMapCache = null;
+  map.setUnclusteredIncidentPoints([]);
 }
 
 async function loadBundledData(): Promise<void> {
@@ -2113,9 +2171,12 @@ function renderAll(): void {
   if (result) {
     map.setData(result.clusters);
     elements.mapEmpty.hidden = result.clusters.length > 0;
+    updateMapLegendVisibility();
     applyPendingUrlIntersectionSelection();
   } else {
     elements.mapEmpty.hidden = false;
+    elements.mapIncidentLegend.hidden = true;
+    updateMapLegendVisibility();
     renderSelection(null);
   }
 }
@@ -2173,7 +2234,7 @@ function applyPendingUrlIntersectionSelection(): void {
     return;
   }
 
-  selectClusterOnMap(nearest.cluster, "intersection URL");
+  selectClusterOnMap(nearest.cluster, "intersection URL", selection.zoomLevel);
 }
 
 function nearestClusterTo(point: LatLon): { cluster: IntersectionCluster; distanceMeters: number } | null {
@@ -2191,14 +2252,15 @@ function nearestClusterTo(point: LatLon): { cluster: IntersectionCluster; distan
   return nearest;
 }
 
-function readIntersectionSelectionFromUrl(): LatLon | null {
+function readIntersectionSelectionFromUrl(): IntersectionUrlSelection | null {
   const params = new URLSearchParams(window.location.search);
   const lat = parseUrlCoordinate(params.get("lat"));
   const lon = parseUrlCoordinate(params.get("lon"));
+  const zoomLevel = parseUrlZoom(params.get("z"));
   if (lat === null || lon === null || Math.abs(lat) > 90 || Math.abs(lon) > 180) {
     return null;
   }
-  return { lat, lon };
+  return { lat, lon, zoomLevel };
 }
 
 function parseUrlCoordinate(value: string | null): number | null {
@@ -2210,16 +2272,31 @@ function parseUrlCoordinate(value: string | null): number | null {
   return Number.isFinite(coordinate) ? coordinate : null;
 }
 
+function parseUrlZoom(value: string | null): number | null {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const zoom = Math.round(Number(trimmed));
+  if (!Number.isFinite(zoom) || zoom < INTERSECTION_URL_ZOOM_MIN || zoom > INTERSECTION_URL_ZOOM_MAX) {
+    return null;
+  }
+  return zoom;
+}
+
 function updateIntersectionSelectionUrl(cluster: IntersectionCluster): void {
   const url = new URL(window.location.href);
   const lat = cluster.lat.toFixed(INTERSECTION_URL_COORDINATE_DECIMALS);
   const lon = cluster.lon.toFixed(INTERSECTION_URL_COORDINATE_DECIMALS);
-  if (url.searchParams.get("lat") === lat && url.searchParams.get("lon") === lon) {
+  const zoom = String(map.zoomLevel());
+  if (url.searchParams.get("lat") === lat && url.searchParams.get("lon") === lon && url.searchParams.get("z") === zoom) {
     return;
   }
 
   url.searchParams.set("lat", lat);
   url.searchParams.set("lon", lon);
+  url.searchParams.set("z", zoom);
   window.history.replaceState(window.history.state, "", url.toString());
 }
 
@@ -2229,6 +2306,155 @@ function applySeverityFilter(): void {
     serious: elements.showSeriousPoints.checked,
     other: elements.showOtherPoints.checked
   });
+}
+
+function setMapIncidentLegendVisible(isVisible: boolean): void {
+  elements.mapIncidentLegend.hidden = !isVisible;
+  updateMapLegendVisibility();
+}
+
+function updateMapLegendVisibility(): void {
+  const hasIntersections = Boolean(result && result.clusters.length > 0);
+  const hasIncidentLegend = !elements.mapIncidentLegend.hidden;
+  elements.mapIntersectionLegend.hidden = hasIncidentLegend || !hasIntersections;
+}
+
+function handleMapZoomChange(): void {
+  if (selectedCluster) {
+    updateIntersectionSelectionUrl(selectedCluster);
+  }
+}
+
+function handleMapIncidentViewportRequest(request: MapIncidentViewportRequest): void {
+  const stateCodes = stateCodesForIncidentMapRequest(request);
+  if (stateCodes.length === 0) {
+    return;
+  }
+  ensureUnclusteredIncidentStatesLoaded(stateCodes);
+}
+
+function stateCodesForIncidentMapRequest(request: MapIncidentViewportRequest): string[] {
+  const options = committedAnalysis?.options;
+  if (!options) {
+    return [];
+  }
+  if (options.stateCode !== "all") {
+    return [options.stateCode];
+  }
+  const seen = new Set<string>();
+  const stateCodes: string[] = [];
+  for (const stateCode of request.stateCodes) {
+    if (!STATE_NAMES[stateCode] || seen.has(stateCode)) {
+      continue;
+    }
+    seen.add(stateCode);
+    stateCodes.push(stateCode);
+  }
+  return stateCodes;
+}
+
+function ensureUnclusteredIncidentStatesLoaded(stateCodes: string[]): void {
+  const cache = unclusteredIncidentMapCacheForCurrentResult();
+  if (!cache) {
+    return;
+  }
+
+  for (const stateCode of stateCodes) {
+    if (cache.loadedStateCodes.has(stateCode) || cache.loadingStateCodes.has(stateCode) || !hasAccidentStateShard(stateCode)) {
+      continue;
+    }
+    cache.loadingStateCodes.add(stateCode);
+    void loadUnclusteredIncidentState(stateCode, cache.key);
+  }
+}
+
+function unclusteredIncidentMapCacheForCurrentResult(): UnclusteredIncidentMapCache | null {
+  const key = unclusteredIncidentMapCacheKey();
+  if (!key || !result) {
+    return null;
+  }
+  if (unclusteredIncidentMapCache?.key === key) {
+    return unclusteredIncidentMapCache;
+  }
+
+  const membership = clusteredAccidentMembership(result.clusters);
+  unclusteredIncidentMapCache = {
+    key,
+    loadedStateCodes: new Set(),
+    loadingStateCodes: new Set(),
+    records: [],
+    clusteredAccidentKeys: membership.keys,
+    clusteredAccidentIndexes: membership.indexes
+  };
+  map.setUnclusteredIncidentPoints([]);
+  return unclusteredIncidentMapCache;
+}
+
+function unclusteredIncidentMapCacheKey(): string | null {
+  if (!committedAnalysis || !result) {
+    return null;
+  }
+  return [
+    committedAnalysis.dataVersion ?? "unknown-data",
+    analysisOptionsIndexKey(committedAnalysis.options, 0),
+    result.filteredAccidentCount,
+    result.clusters.length
+  ].join("|");
+}
+
+function clusteredAccidentMembership(clusters: IntersectionCluster[]): { keys: Set<string>; indexes: Set<number> } {
+  const keys = new Set<string>();
+  const indexes = new Set<number>();
+  for (const cluster of clusters) {
+    for (const key of cluster.accidentKeys ?? []) {
+      keys.add(key);
+    }
+    for (const index of cluster.accidentIndexes ?? []) {
+      indexes.add(index);
+    }
+  }
+  return { keys, indexes };
+}
+
+async function loadUnclusteredIncidentState(stateCode: string, cacheKey: string): Promise<void> {
+  try {
+    const stateRecords = await loadAccidentsForState(stateCode);
+    const cache = unclusteredIncidentMapCache;
+    if (!cache || cache.key !== cacheKey || !committedAnalysis) {
+      return;
+    }
+
+    const records = unclusteredIncidentRecordsForMap(stateRecords, committedAnalysis.options, cache);
+    for (const record of records) {
+      cache.records.push(record);
+    }
+    cache.loadedStateCodes.add(stateCode);
+    map.setUnclusteredIncidentPoints(cache.records);
+  } catch (error) {
+    console.warn("[Safe Intersections] Could not load unclustered map incidents.", { stateCode, error });
+  } finally {
+    const cache = unclusteredIncidentMapCache;
+    if (cache?.key === cacheKey) {
+      cache.loadingStateCodes.delete(stateCode);
+    }
+  }
+}
+
+function unclusteredIncidentRecordsForMap(
+  sourceRecords: AccidentRecord[],
+  options: AnalysisOptions,
+  cache: UnclusteredIncidentMapCache
+): AccidentRecord[] {
+  return sourceRecords.filter(
+    (accident) => accidentMatchesAnalysisOptions(accident, options) && !isClusteredAccidentInCurrentResult(accident, cache)
+  );
+}
+
+function isClusteredAccidentInCurrentResult(accident: AccidentRecord, cache: UnclusteredIncidentMapCache): boolean {
+  if (typeof accident.recordIndex === "number" && cache.clusteredAccidentIndexes.has(accident.recordIndex)) {
+    return true;
+  }
+  return cache.clusteredAccidentKeys.has(accidentKey(accident));
 }
 
 function locateUser(options: { selectNearest: boolean }): void {
@@ -3390,7 +3616,7 @@ function selectNearestCluster(): { cluster: IntersectionCluster; distanceMeters:
   return nearest;
 }
 
-function selectClusterOnMap(cluster: IntersectionCluster, telemetrySource = "cluster selection"): void {
+function selectClusterOnMap(cluster: IntersectionCluster, telemetrySource = "cluster selection", zoomLevel: number | null = null): void {
   const telemetry = createInteractionTelemetry("select cluster from list", telemetrySource, cluster.id, clusterLocationText(cluster));
   activeInteractionTelemetry = telemetry;
   const openDetailsOnMobile = mobileLayout.matches;
@@ -3407,7 +3633,7 @@ function selectClusterOnMap(cluster: IntersectionCluster, telemetrySource = "clu
     finishInteractionStep(frameStep, {});
     try {
       withInteractionTelemetry(telemetry, () => {
-        measureInteractionStep(telemetry, "map select, focus, draw, callback", cluster.id, () => map.select(cluster, true), () => ({
+        measureInteractionStep(telemetry, "map select, focus, draw, callback", cluster.id, () => map.select(cluster, true, "program", zoomLevel), () => ({
           clusterId: cluster.id,
           accidentCount: cluster.accidentCount
         }));
@@ -4094,6 +4320,41 @@ function renderAccidentActionLinks(accident: AccidentRecord): string {
   `;
 }
 
+function openUnclusteredIncidentDialog(accident: AccidentRecord): void {
+  elements.incidentDialogBody.innerHTML = renderUnclusteredIncidentDialogHtml(accident);
+  if (typeof elements.incidentDialog.showModal === "function") {
+    elements.incidentDialog.showModal();
+  } else {
+    elements.incidentDialog.setAttribute("open", "");
+  }
+}
+
+function closeUnclusteredIncidentDialog(): void {
+  if (elements.incidentDialog.open) {
+    elements.incidentDialog.close();
+  }
+}
+
+function handleIncidentDialogClick(event: MouseEvent): void {
+  if (event.target === elements.incidentDialog) {
+    closeUnclusteredIncidentDialog();
+    return;
+  }
+
+  const target = event.target;
+  if (target instanceof Element && target.closest("[data-incident-dialog-close]")) {
+    closeUnclusteredIncidentDialog();
+  }
+}
+
+function renderUnclusteredIncidentDialogHtml(accident: AccidentRecord): string {
+  return renderAccidentRecordItem(accident, "1", null, [], {
+    className: "incident-dialog-card",
+    closeButton: true,
+    tagName: "article"
+  });
+}
+
 function renderSidebarAccidentRecords(records: CrossingAccident[], totalCount: number, streetOrder: string[] = [], isLoading = false): string {
   const countText = trf("records.countOf", { shown: formatInteger(records.length), total: formatInteger(totalCount) });
   if (records.length === 0) {
@@ -4110,25 +4371,7 @@ function renderSidebarAccidentRecords(records: CrossingAccident[], totalCount: n
   }
 
   const items = records
-    .map(({ accident, distanceMeters }, index) => {
-      const severity = accidentSeverity(accident);
-      const recordNumber = String(index + 1);
-      const actionLinks = renderAccidentActionLinks(accident);
-      const rows = accidentRecordRows(accident, distanceMeters, streetOrder)
-        .map((row) => `<div><dt>${escapeHtml(row.label)}</dt><dd>${escapeHtml(row.value)}</dd></div>`)
-        .join("");
-      return `
-        <li class="accident-record-item">
-          <div class="accident-record-topline">
-            <span class="accident-record-number" aria-label="${escapeHtml(trf("records.incidentNumber", { number: recordNumber }))}">${recordNumber}</span>
-            <span class="severity-pill severity-${severity}">${accidentSeverityLabel(accident)}</span>
-            <strong>${escapeHtml(accidentTimeLabel(accident))}</strong>
-            ${actionLinks}
-          </div>
-          <dl class="accident-record-fields">${rows}</dl>
-        </li>
-      `;
-    })
+    .map(({ accident, distanceMeters }, index) => renderAccidentRecordItem(accident, String(index + 1), distanceMeters, streetOrder))
     .join("");
 
   return `
@@ -4142,9 +4385,49 @@ function renderSidebarAccidentRecords(records: CrossingAccident[], totalCount: n
   `;
 }
 
+function renderAccidentRecordItem(
+  accident: AccidentRecord,
+  recordNumber: string,
+  distanceMeters: number | null,
+  streetOrder: string[] = [],
+  options: { className?: string; closeButton?: boolean; tagName?: "article" | "li" } = {}
+): string {
+  const tagName = options.tagName ?? "li";
+  const severity = accidentSeverity(accident);
+  const actionLinks = renderAccidentActionLinks(accident);
+  const closeButton = options.closeButton ? renderIncidentDialogCloseButton() : "";
+  const className = ["accident-record-item", options.className].filter(Boolean).join(" ");
+  const rows = accidentRecordRows(accident, distanceMeters, streetOrder)
+    .map((row) => `<div><dt>${escapeHtml(row.label)}</dt><dd>${escapeHtml(row.value)}</dd></div>`)
+    .join("");
+  return `
+    <${tagName} class="${className}">
+      <div class="accident-record-topline">
+        <span class="accident-record-number" aria-label="${escapeHtml(trf("records.incidentNumber", { number: recordNumber }))}">${recordNumber}</span>
+        <span class="severity-pill severity-${severity}">${accidentSeverityLabel(accident)}</span>
+        <strong>${escapeHtml(accidentTimeLabel(accident))}</strong>
+        ${actionLinks}
+        ${closeButton}
+      </div>
+      <dl class="accident-record-fields">${rows}</dl>
+    </${tagName}>
+  `;
+}
+
+function renderIncidentDialogCloseButton(): string {
+  const label = escapeHtml(tr("action.close"));
+  return `
+    <button class="incident-dialog-card-close" type="button" data-incident-dialog-close aria-label="${label}" title="${label}">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M6 6l12 12M18 6L6 18"></path>
+      </svg>
+    </button>
+  `;
+}
+
 function accidentRecordRows(
   accident: AccidentRecord,
-  distanceMeters: number,
+  distanceMeters: number | null,
   streetOrder: string[] = []
 ): Array<{ label: string; value: string }> {
   const rows: Array<{ label: string; value: string }> = [];
@@ -4159,7 +4442,7 @@ function accidentRecordRows(
   addRecordRow(rows, tr("records.coordinates"), `${accident.lat.toFixed(6)}, ${accident.lon.toFixed(6)}`);
   addRecordRow(rows, "LINREF", linRefLabel(accident));
   addRecordRow(rows, tr("records.locationCheck"), codeLabel(accident.plausibilityLevel, PLAUSIBILITY_LEVEL_LABELS));
-  addRecordRow(rows, tr("records.distance"), `${formatInteger(Math.round(distanceMeters))} m`);
+  addRecordRow(rows, tr("records.distance"), distanceMeters === null ? null : `${formatInteger(Math.round(distanceMeters))} m`);
   addRecordRow(rows, tr("records.recordId"), recordIdLabel(accident));
   addRecordRow(rows, tr("records.source"), accident.source);
   return rows;
@@ -4478,7 +4761,8 @@ function roadUsersLabel(accident: AccidentRecord): string {
   if (knownFlags.length === 0) {
     return tr("records.noRoadUserFields");
   }
-  return knownFlags.map(([label, value]) => `${label}: ${value ? tr("records.yes") : tr("records.no")}`).join("; ");
+  const involved = knownFlags.filter(([, value]) => value).map(([label]) => label);
+  return involved.length > 0 ? involved.join(", ") : tr("records.noRoadUsersInvolved");
 }
 
 function administrativeAreaLabel(accident: AccidentRecord): string {
@@ -4968,6 +5252,49 @@ async function downloadSelectedFactsheet(): Promise<void> {
         button.disabled = false;
       });
     }
+  }
+}
+
+async function copySelectedIntersectionPermalink(): Promise<void> {
+  const cluster = selectedCluster;
+  if (!cluster) {
+    setStatus(tr("details.selectFirst"), 100, "idle");
+    return;
+  }
+
+  updateIntersectionSelectionUrl(cluster);
+  const permalink = window.location.href;
+  elements.selectedPermalinkBtn.disabled = true;
+  try {
+    await writeClipboardText(permalink);
+    setStatus(tr("status.permalinkCopied"), 100, "idle");
+  } catch (error) {
+    setStatus(trf("status.permalinkCopyFailed", { error: errorMessage(error) }), 100, "problem");
+  } finally {
+    elements.selectedPermalinkBtn.disabled = false;
+  }
+}
+
+async function writeClipboardText(value: string): Promise<void> {
+  if (navigator.clipboard?.writeText && window.isSecureContext) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+
+  const textArea = document.createElement("textarea");
+  textArea.value = value;
+  textArea.readOnly = true;
+  textArea.style.position = "fixed";
+  textArea.style.left = "-9999px";
+  textArea.style.top = "0";
+  document.body.append(textArea);
+  textArea.select();
+  try {
+    if (!document.execCommand("copy")) {
+      throw new Error("copy command failed");
+    }
+  } finally {
+    textArea.remove();
   }
 }
 

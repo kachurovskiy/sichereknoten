@@ -107,6 +107,18 @@
                   </div>
                 </div>
               </div>
+              <div id="mapIncidentLegend" class="map-incident-legend" aria-label="Individual crash symbols" data-i18n-aria-label="aria.individualCrashes" hidden>
+                <span><span class="map-incident-symbol symbol-fatal" aria-hidden="true">◆</span><span data-i18n="severity.fatal">Fatal</span></span>
+                <span><span class="map-incident-symbol symbol-serious" aria-hidden="true">▲</span><span data-i18n="severity.serious">Serious</span></span>
+                <span><span class="map-incident-symbol symbol-other" aria-hidden="true">●</span><span data-i18n="severity.other">Other</span></span>
+              </div>
+              <div id="mapIntersectionLegend" class="map-intersection-legend" aria-label="Intersection point legend" data-i18n-aria-label="aria.intersectionLegend" hidden>
+                <span class="map-legend-title" data-i18n="mapLegend.severity">Severity</span>
+                <span><span class="map-cluster-swatch cluster-low" aria-hidden="true"></span><span data-i18n="mapLegend.lowerSeverity">Lower</span></span>
+                <span><span class="map-cluster-swatch cluster-medium" aria-hidden="true"></span><span data-i18n="mapLegend.mediumSeverity">Medium</span></span>
+                <span><span class="map-cluster-swatch cluster-high" aria-hidden="true"></span><span data-i18n="mapLegend.highSeverity">High</span></span>
+                <span class="map-legend-note" data-i18n="mapLegend.sizeAccidents">Larger = more accidents</span>
+              </div>
               <div id="mapEmpty" class="empty-state">
                 <div class="loading-panel" aria-live="polite">
                   <p class="loading-eyebrow" data-i18n="loading.bundle">Automatic offline bundle</p>
@@ -141,12 +153,23 @@
           <aside id="selectedAside" class="detail-panel selected-aside" aria-label="Selected intersection details" data-i18n-aria-label="aria.selectedDetails" hidden>
             <div class="selected-aside-header">
               <h2 data-i18n="details.title">Selected intersection</h2>
+              <button id="selectedPermalinkBtn" class="selected-permalink-button" type="button" aria-label="Copy permalink" title="Copy permalink" data-i18n-aria-label="action.copyPermalink" data-i18n-title="action.copyPermalink">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M10 13a5 5 0 0 0 7.1 0l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1"></path>
+                  <path d="M14 11a5 5 0 0 0-7.1 0l-2 2a5 5 0 0 0 7.1 7.1l1.1-1.1"></path>
+                </svg>
+              </button>
             </div>
             <div id="selectedPreviewMap" class="selected-preview-map" aria-hidden="true" hidden>
               <canvas id="selectedPreviewCanvas" class="selected-preview-canvas" width="640" height="360"></canvas>
             </div>
             <div id="selectionDetails" class="details" data-i18n="details.none">No intersection selected.</div>
           </aside>
+          <dialog id="incidentDialog" class="incident-dialog" aria-label="Accident record" data-i18n-aria-label="records.modalTitle">
+            <div class="incident-dialog-shell">
+              <div id="incidentDialogBody" class="incident-dialog-body"></div>
+            </div>
+          </dialog>
         </section>
 
         <section id="stateView" class="view">

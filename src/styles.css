@@ -693,6 +693,88 @@ select {
   box-shadow: 0 10px 24px rgba(23, 33, 38, 0.16);
 }
 
+.map-incident-legend,
+.map-intersection-legend {
+  position: absolute;
+  left: 50%;
+  bottom: 12px;
+  z-index: 3;
+  display: inline-flex;
+  flex-wrap: nowrap;
+  gap: 7px 12px;
+  align-items: center;
+  justify-content: center;
+  max-width: min(420px, calc(100% - 168px));
+  padding: 6px 9px;
+  transform: translateX(-50%);
+  border: 1px solid #cbd4ce;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.94);
+  color: #38454b;
+  box-shadow: 0 10px 24px rgba(23, 33, 38, 0.16);
+  font-size: 0.78rem;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.map-incident-legend[hidden],
+.map-intersection-legend[hidden] {
+  display: none;
+}
+
+.map-incident-legend span,
+.map-intersection-legend span {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.map-legend-title {
+  color: #172126;
+  font-weight: 700;
+}
+
+.map-legend-note {
+  color: #53636d;
+}
+
+.map-incident-symbol {
+  font-size: 0.74rem;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.map-cluster-swatch {
+  display: inline-block;
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 999px;
+}
+
+.cluster-low {
+  background: #22868d;
+}
+
+.cluster-medium {
+  background: #d28528;
+}
+
+.cluster-high {
+  background: #b9392b;
+}
+
+.symbol-fatal {
+  color: #b9392b;
+}
+
+.symbol-serious {
+  color: #c1842f;
+}
+
+.symbol-other {
+  color: #166b6d;
+}
+
 .street-view-panel {
   display: grid;
   min-width: 0;
@@ -947,6 +1029,42 @@ select {
   font-size: 1rem;
 }
 
+.selected-permalink-button {
+  display: inline-grid;
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid #cbd4ce;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #1d2d34;
+  cursor: pointer;
+}
+
+.selected-permalink-button svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.selected-permalink-button:hover,
+.selected-permalink-button:focus-visible {
+  border-color: #166b6d;
+  color: #166b6d;
+  outline: none;
+}
+
+.selected-permalink-button:disabled {
+  cursor: wait;
+  opacity: 0.72;
+}
+
 .selected-preview-map {
   width: 100%;
   aspect-ratio: 16 / 9;
@@ -1183,6 +1301,69 @@ button.map-service-link {
 
 .accident-record-actions a:hover,
 .accident-record-actions a:focus {
+  border-color: #166b6d;
+  color: #166b6d;
+  outline: none;
+}
+
+.incident-dialog {
+  width: min(720px, calc(100vw - 24px));
+  max-height: min(82dvh, 760px);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #172126;
+}
+
+.incident-dialog::backdrop {
+  background: rgba(23, 33, 38, 0.38);
+}
+
+.incident-dialog-shell {
+  position: relative;
+  display: grid;
+  gap: 12px;
+  padding: 0;
+}
+
+.incident-dialog-body {
+  display: grid;
+}
+
+.incident-dialog-card {
+  max-height: min(82dvh, 760px);
+  overflow-y: auto;
+  border-color: #d7ddd7;
+  background: #ffffff;
+  box-shadow: 0 24px 70px rgba(23, 33, 38, 0.24);
+}
+
+.incident-dialog-card-close {
+  display: inline-grid;
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  margin-left: 0;
+  padding: 0;
+  place-items: center;
+  border: 1px solid #cbd4ce;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #1d2d34;
+  cursor: pointer;
+}
+
+.incident-dialog-card-close svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.incident-dialog-card-close:hover,
+.incident-dialog-card-close:focus-visible {
   border-color: #166b6d;
   color: #166b6d;
   outline: none;
@@ -2257,6 +2438,16 @@ tbody tr:focus {
     max-width: calc(100% - 86px);
     overflow-x: auto;
     padding-bottom: 2px;
+  }
+
+  .map-incident-legend,
+  .map-intersection-legend {
+    right: 10px;
+    bottom: 64px;
+    left: 10px;
+    max-width: none;
+    transform: none;
+    overflow-x: auto;
   }
 
   .detail-panel {
