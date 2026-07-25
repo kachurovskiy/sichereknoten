@@ -39,6 +39,8 @@ const TABLE_ROWS_PER_STATE = 10;
 const STATE_BROWSE_MIN_SEVERITY_PERCENT = 0.1;
 const STATE_BROWSE_MAX_INTERSECTIONS = 100;
 const POPULATION_RATE_DENOMINATOR = 100_000;
+const INTERSECTION_URL_COORDINATE_DECIMALS = 5;
+const INTERSECTION_URL_MATCH_MAX_DISTANCE_METERS = 75;
 
 declare const __SICHERE_KNOTEN_APP_VERSION__: string | undefined;
 declare const __SICHERE_KNOTEN_ANALYSIS_CACHE_VERSION__: string | undefined;
@@ -51,6 +53,11 @@ type SelectionReason = "auto" | "program" | "user";
 type HotspotMetricPlacement = "header" | "stats";
 type AppLocale = "en" | "de";
 type LoadingStatusKind = "normal" | "problem" | "idle";
+
+interface LatLon {
+  lat: number;
+  lon: number;
+}
 
 interface SiteVersionManifest {
   appVersion?: string;
@@ -1127,6 +1134,7 @@ let activeInteractionTelemetry: InteractionTelemetry | null = null;
 let isSplashDisplayed = false;
 let loadingFactFallbackIndex = 0;
 let selectedPreviewMapRenderId = 0;
+let pendingUrlIntersectionSelection: LatLon | null = readIntersectionSelectionFromUrl();
 
 const elements = {
   app: byId<HTMLDivElement>("app"),
@@ -2105,6 +2113,7 @@ function renderAll(): void {
   if (result) {
     map.setData(result.clusters);
     elements.mapEmpty.hidden = result.clusters.length > 0;
+    applyPendingUrlIntersectionSelection();
   } else {
     elements.mapEmpty.hidden = false;
     renderSelection(null);
@@ -2116,6 +2125,9 @@ function handleClusterSelection(cluster: IntersectionCluster | null, reason: Sel
   measureActiveInteractionStep("store selected cluster", cluster?.id ?? null, () => {
     selectedCluster = cluster;
   });
+  if (cluster) {
+    updateIntersectionSelectionUrl(cluster);
+  }
   if (previousClusterId !== (cluster?.id ?? null)) {
     requestGate.cancel("selectedAccidentRecords");
     requestGate.cancel("factsheet");
@@ -2147,6 +2159,68 @@ function handleClusterSelection(cluster: IntersectionCluster | null, reason: Sel
     measureActiveInteractionStep("mobile map focus", cluster.id, () => map.focus(cluster));
     measureActiveInteractionStep("mobile set view details", cluster.id, () => setView("details"), () => ({ activeView }));
   }
+}
+
+function applyPendingUrlIntersectionSelection(): void {
+  if (!pendingUrlIntersectionSelection || !result) {
+    return;
+  }
+
+  const selection = pendingUrlIntersectionSelection;
+  pendingUrlIntersectionSelection = null;
+  const nearest = nearestClusterTo(selection);
+  if (!nearest || nearest.distanceMeters > INTERSECTION_URL_MATCH_MAX_DISTANCE_METERS) {
+    return;
+  }
+
+  selectClusterOnMap(nearest.cluster, "intersection URL");
+}
+
+function nearestClusterTo(point: LatLon): { cluster: IntersectionCluster; distanceMeters: number } | null {
+  let nearest: { cluster: IntersectionCluster; distanceMeters: number } | null = null;
+  for (const cluster of result?.clusters ?? []) {
+    const clusterDistance = distanceMeters(point, cluster);
+    if (
+      !nearest ||
+      clusterDistance < nearest.distanceMeters ||
+      (clusterDistance === nearest.distanceMeters && compareClusterCoreMetric(cluster, nearest.cluster) < 0)
+    ) {
+      nearest = { cluster, distanceMeters: clusterDistance };
+    }
+  }
+  return nearest;
+}
+
+function readIntersectionSelectionFromUrl(): LatLon | null {
+  const params = new URLSearchParams(window.location.search);
+  const lat = parseUrlCoordinate(params.get("lat"));
+  const lon = parseUrlCoordinate(params.get("lon"));
+  if (lat === null || lon === null || Math.abs(lat) > 90 || Math.abs(lon) > 180) {
+    return null;
+  }
+  return { lat, lon };
+}
+
+function parseUrlCoordinate(value: string | null): number | null {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const coordinate = Number(trimmed);
+  return Number.isFinite(coordinate) ? coordinate : null;
+}
+
+function updateIntersectionSelectionUrl(cluster: IntersectionCluster): void {
+  const url = new URL(window.location.href);
+  const lat = cluster.lat.toFixed(INTERSECTION_URL_COORDINATE_DECIMALS);
+  const lon = cluster.lon.toFixed(INTERSECTION_URL_COORDINATE_DECIMALS);
+  if (url.searchParams.get("lat") === lat && url.searchParams.get("lon") === lon) {
+    return;
+  }
+
+  url.searchParams.set("lat", lat);
+  url.searchParams.set("lon", lon);
+  window.history.replaceState(window.history.state, "", url.toString());
 }
 
 function applySeverityFilter(): void {
