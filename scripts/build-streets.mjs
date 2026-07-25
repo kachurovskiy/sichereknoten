@@ -3,9 +3,9 @@ import { mkdir, open, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { inflateSync } from "node:zlib";
 
-const STREET_LOOKUP_SCHEMA_VERSION = 4;
+const STREET_LOOKUP_SCHEMA_VERSION = 5;
 const NODE_CAPTURE_RADIUS_METERS = 55;
-const STREET_MATCH_RADIUS_METERS = 55;
+const STREET_MATCH_RADIUS_METERS = 30;
 const MAX_STREET_NAMES_PER_ACCIDENT = 4;
 const NODE_COORD_SHARD_COUNT = 256;
 const GRID_CELL_METERS = 60;
