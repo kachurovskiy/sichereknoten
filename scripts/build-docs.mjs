@@ -11,53 +11,55 @@ const docsDir = path.join(root, "docs");
 const assetsDir = path.join(docsDir, "assets");
 const sourceDataDir = path.join(root, "data");
 
-await mkdir(assetsDir, { recursive: true });
-await cleanGeneratedAssets();
-const csvFileList = await csvFiles();
-const normalizedDataCsvFileList = chronologicalCsvFiles(csvFileList);
-const streetLookupBundle = await buildStreetLookupBundle({ root, sourceDataDir, csvFiles: csvFileList });
-const appVersion = await hashAppSources();
-const analysisCacheVersion = await hashAnalysisSources();
-const dataScriptTags = await writeDataBundle(normalizedDataCsvFileList, streetLookupBundle, analysisCacheVersion);
+async function buildDocs() {
+  await mkdir(assetsDir, { recursive: true });
+  await cleanGeneratedAssets();
+  const csvFileList = await csvFiles();
+  const normalizedDataCsvFileList = chronologicalCsvFiles(csvFileList);
+  const streetLookupBundle = await buildStreetLookupBundle({ root, sourceDataDir, csvFiles: csvFileList });
+  const appVersion = await hashAppSources();
+  const analysisCacheVersion = await hashAnalysisSources();
+  const dataScriptTags = await writeDataBundle(normalizedDataCsvFileList, streetLookupBundle, analysisCacheVersion);
 
-await build({
-  entryPoints: [path.join(root, "src/main.ts")],
-  bundle: true,
-  outfile: path.join(assetsDir, "app.js"),
-  format: "iife",
-  target: "es2022",
-  minify: true,
-  sourcemap: false,
-  legalComments: "none",
-  define: {
-    __SICHERE_KNOTEN_APP_VERSION__: JSON.stringify(appVersion),
-    __SICHERE_KNOTEN_ANALYSIS_CACHE_VERSION__: JSON.stringify(analysisCacheVersion),
-    __SICHERE_KNOTEN_ANALYSIS_WORKER_URL__: JSON.stringify(`./assets/analysis-worker.js?v=${appVersion}`)
-  }
-});
+  await build({
+    entryPoints: [path.join(root, "src/main.ts")],
+    bundle: true,
+    outfile: path.join(assetsDir, "app.js"),
+    format: "iife",
+    target: "es2022",
+    minify: true,
+    sourcemap: false,
+    legalComments: "none",
+    define: {
+      __SICHERE_KNOTEN_APP_VERSION__: JSON.stringify(appVersion),
+      __SICHERE_KNOTEN_ANALYSIS_CACHE_VERSION__: JSON.stringify(analysisCacheVersion),
+      __SICHERE_KNOTEN_ANALYSIS_WORKER_URL__: JSON.stringify(`./assets/analysis-worker.js?v=${appVersion}`)
+    }
+  });
 
-await build({
-  entryPoints: [path.join(root, "src/analysisWorker.ts")],
-  bundle: true,
-  outfile: path.join(assetsDir, "analysis-worker.js"),
-  format: "iife",
-  target: "es2022",
-  minify: true,
-  sourcemap: false,
-  legalComments: "none"
-});
+  await build({
+    entryPoints: [path.join(root, "src/analysisWorker.ts")],
+    bundle: true,
+    outfile: path.join(assetsDir, "analysis-worker.js"),
+    format: "iife",
+    target: "es2022",
+    minify: true,
+    sourcemap: false,
+    legalComments: "none"
+  });
 
-const sourceHtml = await readFile(path.join(root, "index.html"), "utf8");
-const docsHtml = sourceHtml
-  .replace("  </head>", `    <link rel="stylesheet" href="./assets/app.css?v=${appVersion}" />\n  </head>`)
-  .replace(
-    '    <script type="module" src="/src/main.ts"></script>',
-    `${dataScriptTags.map((fileName) => `    <script src="./assets/${fileName}?v=${appVersion}"></script>`).join("\n")}\n    <script src="./assets/app.js?v=${appVersion}"></script>`
-  );
+  const sourceHtml = await readFile(path.join(root, "index.html"), "utf8");
+  const docsHtml = sourceHtml
+    .replace("  </head>", `    <link rel="stylesheet" href="./assets/app.css?v=${appVersion}" />\n  </head>`)
+    .replace(
+      '    <script type="module" src="/src/main.ts"></script>',
+      `${dataScriptTags.map((fileName) => `    <script src="./assets/${fileName}?v=${appVersion}"></script>`).join("\n")}\n    <script src="./assets/app.js?v=${appVersion}"></script>`
+    );
 
-await writeFile(path.join(docsDir, "index.html"), docsHtml);
-await writeSiteVersionManifest(appVersion, analysisCacheVersion);
-await copyFile(path.join(root, "favicon.svg"), path.join(docsDir, "favicon.svg"));
+  await writeFile(path.join(docsDir, "index.html"), docsHtml);
+  await writeSiteVersionManifest(appVersion, analysisCacheVersion);
+  await copyFile(path.join(root, "favicon.svg"), path.join(docsDir, "favicon.svg"));
+}
 
 async function writeDataBundle(files, streetLookup, analysisCacheVersion) {
   const dataVersion = await hashFiles(files, streetLookup);
@@ -75,7 +77,7 @@ async function writeDataBundle(files, streetLookup, analysisCacheVersion) {
       `Reused ${reusableAccidentShardFiles.length.toLocaleString("en-US")} normalized accident state shard scripts for data version ${dataVersion}.`
     );
   }
-  await removeGeneratedDefaultAnalysisFiles(new Set([defaultAnalysis.fileName, defaultAnalysis.scriptFileName]));
+  await removeGeneratedDefaultAnalysisFiles(new Set([defaultAnalysis.fileName]));
 
   await writeDataManifest(dataVersion, fileMetadata, accidentShardFiles, defaultAnalysis);
   return ["data-manifest.js"];
@@ -113,9 +115,7 @@ async function writeDataManifest(dataVersion, fileMetadata, accidentShardFiles, 
       fileMetadata
     )},accidentShardFiles:${JSON.stringify(accidentShardFiles)},accidentShards:[],defaultAnalysisFile:${JSON.stringify(
       defaultAnalysis.fileName
-    )},defaultAnalysisScriptFile:${JSON.stringify(defaultAnalysis.scriptFileName)},defaultAnalysisMetadata:${JSON.stringify(
-      defaultAnalysis.metadata
-    )},defaultAnalysis:null};\n`
+    )},defaultAnalysisMetadata:${JSON.stringify(defaultAnalysis.metadata)}};\n`
   );
 }
 
@@ -209,15 +209,12 @@ async function reusableAccidentShards(dataVersion) {
 async function reusableDefaultAnalysis(dataVersion, analysisCacheVersion, options) {
   const manifest = await readExistingDataManifest();
   const fileName = manifest?.defaultAnalysisFile;
-  const scriptFileName = manifest?.defaultAnalysisScriptFile ?? defaultAnalysisScriptFileName(dataVersion, analysisCacheVersion);
   const metadata = manifest?.defaultAnalysisMetadata;
   if (
     !manifest ||
     manifest.version !== dataVersion ||
     typeof fileName !== "string" ||
-    !/^analysis-default-[\w-]+\.json\.gz$/.test(fileName) ||
-    typeof scriptFileName !== "string" ||
-    !/^analysis-default-[\w-]+\.js$/.test(scriptFileName) ||
+    !/^analysis-default-[\w-]+\.bin\.gz$/.test(fileName) ||
     !defaultAnalysisMetadataMatches(metadata, dataVersion, analysisCacheVersion, options)
   ) {
     return null;
@@ -225,16 +222,14 @@ async function reusableDefaultAnalysis(dataVersion, analysisCacheVersion, option
   if (!(await fileExists(path.join(assetsDir, fileName)))) {
     return null;
   }
-  if (!(await fileExists(path.join(assetsDir, scriptFileName)))) {
-    return null;
-  }
 
   console.log(`Reused bundled default analysis for data version ${dataVersion}.`);
-  return { fileName, scriptFileName, metadata };
+  return { fileName, metadata };
 }
 
 async function writeDefaultAnalysis(dataVersion, analysisCacheVersion, accidentShardFiles, options) {
   const analyzeDangerousIntersections = await loadAnalysisModule();
+  const { encodeDefaultAnalysisBinary } = await loadDefaultAnalysisBinaryModule();
   const accidents = await loadNormalizedAccidentsFromShards(accidentShardFiles);
   const result = compactAnalysisResult(analyzeDangerousIntersections(accidents, options));
   const metadata = {
@@ -242,35 +237,16 @@ async function writeDefaultAnalysis(dataVersion, analysisCacheVersion, accidentS
     analysisCacheVersion,
     options: serializeAnalysisOptionsForBundle(options)
   };
-  const bytes = Buffer.from(JSON.stringify(result));
+  const bytes = encodeDefaultAnalysisBinary(result);
   const compressed = gzipSync(bytes, { level: 9 });
   const fileName = defaultAnalysisFileName(dataVersion, analysisCacheVersion);
-  const scriptFileName = defaultAnalysisScriptFileName(dataVersion, analysisCacheVersion);
-  const bundle = {
-    id: "analysis-default",
-    encoding: "gzip-base64-json-v1",
-    metadata,
-    clusterCount: result.clusters.length,
-    filteredAccidentCount: result.filteredAccidentCount,
-    size: bytes.byteLength,
-    compressedSize: compressed.byteLength,
-    chunks: chunkString(compressed.toString("base64"), 256 * 1024)
-  };
   await writeFile(path.join(assetsDir, fileName), compressed);
-  const script = `globalThis.__SICHERE_KNOTEN_DATA__=globalThis.__SICHERE_KNOTEN_DATA__||{version:${JSON.stringify(
-    dataVersion
-  )},files:[],accidentShards:[]};globalThis.__SICHERE_KNOTEN_DATA__.defaultAnalysis=${JSON.stringify(bundle)};\n`;
-  await writeFile(path.join(assetsDir, scriptFileName), script);
   console.log(`Wrote ${fileName} with ${result.clusters.length.toLocaleString("en-US")} default intersection clusters.`);
-  return { fileName, scriptFileName, metadata };
+  return { fileName, metadata };
 }
 
 function defaultAnalysisFileName(dataVersion, analysisCacheVersion) {
-  return `analysis-default-${dataVersion}-${analysisCacheVersion}.json.gz`;
-}
-
-function defaultAnalysisScriptFileName(dataVersion, analysisCacheVersion) {
-  return `analysis-default-${dataVersion}-${analysisCacheVersion}.js`;
+  return `analysis-default-${dataVersion}-${analysisCacheVersion}.bin.gz`;
 }
 
 function defaultAnalysisMetadataMatches(metadata, dataVersion, analysisCacheVersion, options) {
@@ -373,7 +349,10 @@ async function removeGeneratedDefaultAnalysisFiles(keep = new Set()) {
     entries
       .filter(
         (entry) =>
-          (entry === "analysis-default.js" || /^analysis-default-[\w-]+\.js$/.test(entry) || /^analysis-default-[\w-]+\.json\.gz$/.test(entry)) &&
+          (entry === "analysis-default.js" ||
+            /^analysis-default-[\w-]+\.js$/.test(entry) ||
+            /^analysis-default-[\w-]+\.json\.gz$/.test(entry) ||
+            /^analysis-default-[\w-]+\.bin\.gz$/.test(entry)) &&
           !keep.has(entry)
       )
       .map((entry) => rm(path.join(assetsDir, entry), { force: true }))
@@ -435,6 +414,22 @@ async function loadAnalysisModule() {
   const moduleUrl = `data:text/javascript;base64,${Buffer.from(code).toString("base64")}`;
   const module = await import(moduleUrl);
   return module.analyzeDangerousIntersections;
+}
+
+async function loadDefaultAnalysisBinaryModule() {
+  const result = await build({
+    entryPoints: [path.join(root, "src/defaultAnalysisBinary.ts")],
+    bundle: true,
+    write: false,
+    format: "esm",
+    platform: "node",
+    target: "node22",
+    sourcemap: false,
+    legalComments: "none"
+  });
+  const code = result.outputFiles[0].text;
+  const moduleUrl = `data:text/javascript;base64,${Buffer.from(code).toString("base64")}`;
+  return import(moduleUrl);
 }
 
 async function parseCsvFile(file, parseAccidentCsvFiles) {
@@ -704,8 +699,10 @@ async function hashAnalysisSources() {
     path.join(root, "src/analysisWorker.ts"),
     path.join(root, "src/analysisWorkerProtocol.ts"),
     path.join(root, "src/cache.ts"),
+    path.join(root, "src/defaultAnalysisBinary.ts"),
     path.join(root, "src/geo.ts"),
     path.join(root, "src/roadUsers.ts"),
+    path.join(root, "src/states.ts"),
     path.join(root, "src/types.ts")
   ].sort();
   const hash = createHash("sha256");
@@ -780,3 +777,5 @@ function chunkString(value, size) {
   }
   return chunks;
 }
+
+await buildDocs();

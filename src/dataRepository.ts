@@ -1,8 +1,15 @@
 import { gunzipSync } from "fflate";
 import { readAnalysisCache, resetAppStorage, writeAnalysisCache } from "./cache";
+import { decodeDefaultAnalysisBinary } from "./defaultAnalysisBinary";
 import { roadUserFocusKey } from "./roadUsers";
-import { STATE_NAMES } from "./states";
-import { AccidentRecord, AnalysisOptions, AnalysisResult, RoadUserKey, SeverityPercentOptions } from "./types";
+import { stateNameFor } from "./states";
+import {
+  AccidentRecord,
+  AnalysisOptions,
+  AnalysisResult,
+  RoadUserKey,
+  SeverityPercentOptions
+} from "./types";
 
 export type DataRepositoryTelemetryMetadata = Record<string, string | number | boolean | null>;
 
@@ -64,19 +71,12 @@ interface EmbeddedDefaultAnalysisMetadata {
   options: SerializedAnalysisOptions;
 }
 
-interface EmbeddedDefaultAnalysis {
+interface LoadedDefaultAnalysis {
   id: string;
-  encoding: "gzip-base64-json-v1";
   metadata: EmbeddedDefaultAnalysisMetadata;
-  clusterCount: number;
-  filteredAccidentCount: number;
   size: number;
   compressedSize: number;
-  chunks: string[];
-}
-
-interface LoadedDefaultAnalysis extends EmbeddedDefaultAnalysis {
-  compressedBytes?: Uint8Array;
+  compressedBytes: Uint8Array;
 }
 
 interface EmbeddedDataBundle {
@@ -87,9 +87,7 @@ interface EmbeddedDataBundle {
   accidentChunkFiles?: string[];
   accidentChunks?: EmbeddedAccidentChunk[];
   defaultAnalysisFile?: string;
-  defaultAnalysisScriptFile?: string;
   defaultAnalysisMetadata?: EmbeddedDefaultAnalysisMetadata;
-  defaultAnalysis?: EmbeddedDefaultAnalysis | null;
 }
 
 type CompactAccidentRecord = [
@@ -273,11 +271,9 @@ export class DataRepository {
         "read bundled default analysis",
         bundledAnalysis.id,
         async () => {
-          const compressed = bundledAnalysis.compressedBytes ?? this.decodeBase64Chunks(bundledAnalysis.chunks);
-          const bytes = gunzipIfNeeded(compressed);
+          const bytes = gunzipSync(bundledAnalysis.compressedBytes);
           bundledAnalysis.size = bytes.byteLength;
-          const text = new TextDecoder().decode(bytes);
-          const parsed = JSON.parse(text) as AnalysisResult;
+          const parsed = decodeDefaultAnalysisBinary(bytes);
           await yieldToBrowser();
           return parsed;
         },
@@ -460,63 +456,17 @@ export class DataRepository {
     fileName: string,
     telemetry: DataRepositoryTelemetry | null
   ): Promise<LoadedDefaultAnalysis> {
-    const existingAnalysis = globalThis.__SICHERE_KNOTEN_DATA__?.defaultAnalysis;
-    if (existingAnalysis) {
-      return existingAnalysis;
+    if (!fileName.toLowerCase().endsWith(".bin.gz")) {
+      throw new Error(`Bundled default analysis ${fileName} uses an unsupported file format.`);
     }
-    if (fileName.toLowerCase().endsWith(".json.gz")) {
-      try {
-        const compressedBytes = await this.loadBundledDefaultAnalysisBytes(fileName, telemetry);
-        return {
-          id: "analysis-default",
-          encoding: "gzip-base64-json-v1",
-          metadata: globalThis.__SICHERE_KNOTEN_DATA__!.defaultAnalysisMetadata!,
-          clusterCount: 0,
-          filteredAccidentCount: 0,
-          size: 0,
-          compressedSize: compressedBytes.byteLength,
-          chunks: [],
-          compressedBytes
-        };
-      } catch (error) {
-        const fallbackFileName = globalThis.__SICHERE_KNOTEN_DATA__?.defaultAnalysisScriptFile;
-        if (!fallbackFileName) {
-          throw error;
-        }
-        telemetry?.record("fallback default analysis script", fileName, {
-          reason: errorMessage(error),
-          fallbackFileName
-        });
-        return this.ensureBundledDefaultAnalysisScript(fallbackFileName, telemetry);
-      }
-    }
-
-    return this.ensureBundledDefaultAnalysisScript(fileName, telemetry);
-  }
-
-  private async ensureBundledDefaultAnalysisScript(
-    fileName: string,
-    telemetry: DataRepositoryTelemetry | null
-  ): Promise<EmbeddedDefaultAnalysis> {
-    await this.measure(
-      telemetry,
-      "load default analysis script",
-      fileName,
-      () => this.loadOfflineBundleScript(fileName),
-      (url) => ({
-        url,
-        automatic: true
-      })
-    );
-
-    const loadedAnalysis = globalThis.__SICHERE_KNOTEN_DATA__?.defaultAnalysis;
-    if (!loadedAnalysis) {
-      throw new Error(`Bundled default analysis ${fileName} did not register itself.`);
-    }
-    if (loadedAnalysis.encoding !== "gzip-base64-json-v1") {
-      throw new Error(`Bundled default analysis ${fileName} uses unsupported encoding ${loadedAnalysis.encoding}.`);
-    }
-    return loadedAnalysis;
+    const compressedBytes = await this.loadBundledDefaultAnalysisBytes(fileName, telemetry);
+    return {
+      id: "analysis-default",
+      metadata: globalThis.__SICHERE_KNOTEN_DATA__!.defaultAnalysisMetadata!,
+      size: 0,
+      compressedSize: compressedBytes.byteLength,
+      compressedBytes
+    };
   }
 
   private async loadBundledDefaultAnalysisBytes(fileName: string, telemetry: DataRepositoryTelemetry | null): Promise<Uint8Array> {
@@ -738,7 +688,7 @@ function accidentFromCompactRecord(record: CompactAccidentRecord): AccidentRecor
     osmRoundabout: record[33] ?? null,
     osmTrafficSignal: record[34] ?? null,
     stateCode,
-    stateName: STATE_NAMES[stateCode] ?? `Bundesland ${stateCode || "unknown"}`,
+    stateName: stateNameFor(stateCode),
     administrativeRegionCode,
     administrativeRegionName: record[8],
     districtCode,
@@ -782,10 +732,6 @@ function serializeAnalysisOptionsForBundle(options: AnalysisOptions): Serialized
 
 function uniqueStrings(values: string[]): string[] {
   return Array.from(new Set(values));
-}
-
-function gunzipIfNeeded(bytes: Uint8Array): Uint8Array {
-  return bytes[0] === 0x1f && bytes[1] === 0x8b ? gunzipSync(bytes) : bytes;
 }
 
 function appendItems<T>(target: T[], items: T[]): void {
