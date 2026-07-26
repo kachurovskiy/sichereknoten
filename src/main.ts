@@ -7,9 +7,7 @@ import {
   cleanAreaNameForDisplay,
   clusterLocationText,
   clusterStreetNamesForDisplay,
-  compareClusterCoreMetric,
-  displayStreetNames,
-  isCityTitleSuffix
+  compareClusterCoreMetric
 } from "./clusterDisplay";
 import { accidentKey, accidentRecordRows, accidentSeverityLabel, accidentTimeLabel } from "./accidentRecordDisplay";
 import {
@@ -65,6 +63,13 @@ import {
   RoadUserKey
 } from "./types";
 import { TRANSLATIONS } from "./translations";
+import {
+  googleStreetViewEmbedUrl,
+  mapUrlsForCluster,
+  pressSearchUrlForAccident,
+  pressSearchUrlForCluster,
+  responsibleAuthoritySearchUrlForCluster
+} from "./urlBuilders";
 import { ExploreView } from "./views/exploreView";
 import {
   roadUserSummaryItems,
@@ -287,8 +292,7 @@ const requestGate = new RequestGate();
 const clusterAccidentRecordMatcher = new ClusterAccidentRecordMatcher(measureActiveInteractionStep);
 const selectedIntersectionPanelView = new SelectedIntersectionPanelView({
   container: elements.selectionDetails,
-  formatSeverityPercentWithContext,
-  pressSearchUrlForAccident
+  formatSeverityPercentWithContext
 });
 const selectedPreviewMapView = new SelectedPreviewMapView({
   container: elements.selectedPreviewMap,
@@ -2020,9 +2024,7 @@ function buildSelectedIntersectionViewModel(cluster: IntersectionCluster): Selec
     "build selected external URLs",
     cluster.id,
     () => ({
-      openStreetMapUrl: openStreetMapUrlForCluster(cluster),
-      googleMapsUrl: googleMapsUrlForCluster(cluster),
-      streetViewUrl: googleStreetViewUrl(cluster),
+      ...mapUrlsForCluster(cluster),
       authoritySearchUrl: responsibleAuthoritySearchUrlForCluster(cluster)
     }),
     () => ({ urlCount: 4 })
@@ -2150,111 +2152,6 @@ function clearStreetViewFrame(): void {
   elements.streetViewFrame.hidden = true;
   elements.streetViewFrame.removeAttribute("src");
   delete elements.streetViewFrame.dataset.src;
-}
-
-function openStreetMapUrlForCluster(cluster: IntersectionCluster): string {
-  const lat = cluster.lat.toFixed(6);
-  const lon = cluster.lon.toFixed(6);
-  return `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lon}#map=18/${lat}/${lon}`;
-}
-
-function googleMapsUrlForCluster(cluster: IntersectionCluster): string {
-  const lat = cluster.lat.toFixed(6);
-  const lon = cluster.lon.toFixed(6);
-  return `https://www.google.com/maps/search/?api=1&query=${lat},${lon}`;
-}
-
-function googleStreetViewEmbedUrl(cluster: IntersectionCluster): string {
-  const lat = cluster.lat.toFixed(6);
-  const lon = cluster.lon.toFixed(6);
-  return `https://www.google.com/maps?layer=c&cbll=${lat},${lon}&cbp=11,0,0,0,0&output=svembed`;
-}
-
-function googleStreetViewUrl(cluster: IntersectionCluster): string {
-  const lat = cluster.lat.toFixed(6);
-  const lon = cluster.lon.toFixed(6);
-  return `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${lat},${lon}`;
-}
-
-function responsibleAuthoritySearchUrlForCluster(cluster: IntersectionCluster): string {
-  const queryParts = [
-    "zuständige Straßenverkehrsbehörde",
-    "Unfallkommission",
-    "Verkehrssicherheit",
-    "Unfallhäufungsstelle",
-    "Kreuzung",
-    cluster.municipalityName,
-    cluster.districtName,
-    cluster.administrativeRegionName,
-    cluster.stateName,
-    `${cluster.lat.toFixed(5)}, ${cluster.lon.toFixed(5)}`
-  ].filter((part): part is string => Boolean(part));
-  return `https://www.google.com/search?q=${encodeURIComponent(queryParts.join(" "))}`;
-}
-
-function pressSearchUrlForCluster(cluster: IntersectionCluster, streetNames: string[]): string {
-  const queryParts = ["Unfall", ...displayStreetNames(streetNames), pressSearchPlaceName(cluster)].filter((part): part is string =>
-    Boolean(part)
-  );
-  return googleSearchUrl(queryParts);
-}
-
-function pressSearchUrlForAccident(accident: AccidentRecord): string {
-  const queryParts = [
-    "Unfall",
-    pressSeveritySearchTerm(accident),
-    accidentSearchDateLabel(accident),
-    pressSearchPlaceName(accident)
-  ].filter((part): part is string => Boolean(part));
-  return googleSearchUrl(queryParts);
-}
-
-function googleSearchUrl(queryParts: string[]): string {
-  return `https://www.google.com/search?q=${encodeURIComponent(queryParts.join(" "))}`;
-}
-
-function pressSearchPlaceName(location: {
-  municipalityName: string | null;
-  districtName: string | null;
-  administrativeRegionName: string | null;
-  stateName: string;
-}): string {
-  const placeName = location.municipalityName ?? location.districtName ?? location.administrativeRegionName ?? location.stateName;
-  return cleanPressSearchPlaceName(placeName);
-}
-
-function cleanPressSearchPlaceName(placeName: string): string {
-  const parts = placeName
-    .split(",")
-    .map((part) => part.trim())
-    .filter(Boolean);
-  while (parts.length > 1 && isCityTitleSuffix(parts[parts.length - 1])) {
-    parts.pop();
-  }
-  return parts.join(", ") || placeName;
-}
-
-function accidentSearchDateLabel(accident: AccidentRecord): string {
-  if (accident.year && accident.month && accident.day) {
-    return `${String(accident.day).padStart(2, "0")}.${String(accident.month).padStart(2, "0")}.${accident.year}`;
-  }
-  if (accident.year && accident.month) {
-    return `${String(accident.month).padStart(2, "0")}.${accident.year}`;
-  }
-  return accident.year ? String(accident.year) : "";
-}
-
-function pressSeveritySearchTerm(accident: AccidentRecord): string {
-  switch (accident.category) {
-    case 1:
-      return "toedlicher Unfall";
-    case 2:
-      return "schwer verletzt";
-    case 3:
-      return "leicht verletzt";
-    default:
-      return "Verkehrsunfall";
-  }
 }
 
 function scheduleMapRefresh(): void {
@@ -2637,11 +2534,7 @@ function createSelectedFactsheetOptions(cluster: IntersectionCluster, records: C
     clusterRadiusMeters: committedAnalysis?.options.clusterRadiusMeters ?? Number(elements.clusterRadiusOut.value),
     latestBundledFileDate: dataRepository.latestBundledFileDate(),
     severityPercentText: formatSeverityPercentWithContext(cluster),
-    mapUrls: {
-      openStreetMapUrl: openStreetMapUrlForCluster(cluster),
-      googleMapsUrl: googleMapsUrlForCluster(cluster),
-      streetViewUrl: googleStreetViewUrl(cluster)
-    },
+    mapUrls: mapUrlsForCluster(cluster),
     roadUserItems: roadUserSummaryItems(records).map((item) => ({
       key: item.definition.key,
       label: item.label,

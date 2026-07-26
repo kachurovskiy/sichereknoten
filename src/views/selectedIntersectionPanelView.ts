@@ -17,6 +17,7 @@ import { tr, trf } from "../i18n";
 import { linePath, round, uniqueNumbers } from "../math";
 import { ROAD_USER_DEFINITIONS, type RoadUserDefinition } from "../roadUsers";
 import type { AccidentRecord, AccidentTrendDirection, ClusterYearStat, IntersectionCluster, RoadUserKey } from "../types";
+import { pressSearchUrlForAccident } from "../urlBuilders";
 
 export interface SelectedIntersectionPanelUrls {
   openStreetMapUrl: string;
@@ -51,7 +52,6 @@ export interface RoadUserSummaryItem {
 export interface SelectedIntersectionPanelViewDependencies {
   container: HTMLElement;
   formatSeverityPercentWithContext: (cluster: IntersectionCluster) => string;
-  pressSearchUrlForAccident: (accident: AccidentRecord) => string;
 }
 
 interface TrendSeriesPoint extends ClusterYearStat {
@@ -244,7 +244,7 @@ export class SelectedIntersectionPanelView {
   private renderAccidentActionLinks(accident: AccidentRecord): string {
     return `
     <div class="accident-record-actions">
-      <a href="${escapeHtml(this.deps.pressSearchUrlForAccident(accident))}" target="_blank" rel="noopener noreferrer" aria-label="${escapeHtml(tr("press.searchIncident"))}" title="${escapeHtml(tr("press.searchIncident"))}">
+      <a href="${escapeHtml(pressSearchUrlForAccident(accident))}" target="_blank" rel="noopener noreferrer" aria-label="${escapeHtml(tr("press.searchIncident"))}" title="${escapeHtml(tr("press.searchIncident"))}">
         ${escapeHtml(tr("press.label"))}
       </a>
     </div>
