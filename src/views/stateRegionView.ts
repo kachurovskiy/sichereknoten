@@ -52,43 +52,68 @@ interface StateRegionViewDependencies extends StateRegionViewElements {
   getRegionSummaries: () => RegionSummary[];
 }
 
-let deps: StateRegionViewDependencies;
-let elements: StateRegionViewElements;
-let result: AnalysisResult | null = null;
-let renderedStateResult: AnalysisResult | null | undefined;
-let renderedRegionResult: AnalysisResult | null | undefined;
-let getRegionSummaries: () => RegionSummary[] = () => [];
+interface StateRegionViewRenderContext {
+  elements: StateRegionViewElements;
+  result: AnalysisResult | null;
+  getRegionSummaries: () => RegionSummary[];
+}
 
 export class StateRegionView {
-  constructor(dependencies: StateRegionViewDependencies) {
-    deps = dependencies;
-    elements = dependencies;
-    getRegionSummaries = dependencies.getRegionSummaries;
-  }
+  private result: AnalysisResult | null = null;
+  private renderedStateResult: AnalysisResult | null | undefined;
+  private renderedRegionResult: AnalysisResult | null | undefined;
+
+  constructor(private readonly deps: StateRegionViewDependencies) {}
 
   renderAll(): void {
     this.syncResult();
-    renderStateAnalysisView();
-    renderRegionAnalysisView();
+    this.renderStateAnalysisView();
+    this.renderRegionAnalysisView();
   }
 
   renderState(): void {
     this.syncResult();
-    renderStateAnalysisView();
+    this.renderStateAnalysisView();
   }
 
   renderRegion(): void {
     this.syncResult();
-    renderRegionAnalysisView();
+    this.renderRegionAnalysisView();
   }
 
   invalidate(): void {
-    renderedStateResult = undefined;
-    renderedRegionResult = undefined;
+    this.renderedStateResult = undefined;
+    this.renderedRegionResult = undefined;
   }
 
   private syncResult(): void {
-    result = deps.getResult();
+    this.result = this.deps.getResult();
+  }
+
+  private renderStateAnalysisView(): void {
+    const context = this.renderContext();
+    if (this.renderedStateResult === context.result) {
+      return;
+    }
+    this.renderedStateResult = context.result;
+    renderStateAnalysisView(context);
+  }
+
+  private renderRegionAnalysisView(): void {
+    const context = this.renderContext();
+    if (this.renderedRegionResult === context.result) {
+      return;
+    }
+    this.renderedRegionResult = context.result;
+    renderRegionAnalysisView(context);
+  }
+
+  private renderContext(): StateRegionViewRenderContext {
+    return {
+      elements: this.deps,
+      result: this.result,
+      getRegionSummaries: this.deps.getRegionSummaries
+    };
   }
 }
 
@@ -139,26 +164,18 @@ interface ScatterRegression {
   maxX: number;
 }
 
-function renderStateAnalysisView(): void {
-  if (renderedStateResult === result) {
-    return;
-  }
-  renderedStateResult = result;
-  renderStateRankChart();
-  renderStatePopulationRates();
-  renderStatePopulationScatter();
-  renderStateSeverityCorrelationScatter();
+function renderStateAnalysisView(context: StateRegionViewRenderContext): void {
+  renderStateRankChart(context);
+  renderStatePopulationRates(context);
+  renderStatePopulationScatter(context);
+  renderStateSeverityCorrelationScatter(context);
 }
 
-function renderRegionAnalysisView(): void {
-  if (renderedRegionResult === result) {
-    return;
-  }
-  renderedRegionResult = result;
-  renderRegionRankChart();
-  renderRegionPopulationRates();
-  renderRegionPopulationScatter();
-  renderRegionSeverityCorrelationScatter();
+function renderRegionAnalysisView(context: StateRegionViewRenderContext): void {
+  renderRegionRankChart(context);
+  renderRegionPopulationRates(context);
+  renderRegionPopulationScatter(context);
+  renderRegionSeverityCorrelationScatter(context);
 }
 
 interface RankChartSeries {
@@ -174,53 +191,60 @@ interface RankChartPoint {
   severityPercent: number;
 }
 
-function renderStateRankChart(): void {
-  renderRankChart(elements.stateRankChart, result ? stateRankChartSeries(result.clusters) : [], "stateChart.empty", "stateChart.aria");
+function renderStateRankChart({ elements, result }: StateRegionViewRenderContext): void {
+  renderRankChart(elements.stateRankChart, result, result ? stateRankChartSeries(result.clusters) : [], "stateChart.empty", "stateChart.aria");
 }
 
-function renderRegionRankChart(): void {
-  renderRankChart(elements.regionRankChart, result ? regionRankChartSeries() : [], "regionChart.empty", "regionChart.aria");
+function renderRegionRankChart(context: StateRegionViewRenderContext): void {
+  const { elements, result } = context;
+  renderRankChart(elements.regionRankChart, result, result ? regionRankChartSeries(regionSummaries(context)) : [], "regionChart.empty", "regionChart.aria");
 }
 
-function renderStatePopulationRates(): void {
-  renderPopulationRateComparison(elements.statePopulationRates, result?.stateAccidentSummaries ?? [], false);
+function renderStatePopulationRates({ elements, result }: StateRegionViewRenderContext): void {
+  renderPopulationRateComparison(elements.statePopulationRates, result?.stateAccidentSummaries ?? [], false, result !== null);
 }
 
-function renderRegionPopulationRates(): void {
-  renderPopulationRateComparison(elements.regionPopulationRates, result?.regionAccidentSummaries ?? [], true);
+function renderRegionPopulationRates({ elements, result }: StateRegionViewRenderContext): void {
+  renderPopulationRateComparison(elements.regionPopulationRates, result?.regionAccidentSummaries ?? [], true, result !== null);
 }
 
-function renderStatePopulationScatter(): void {
-  renderPopulationScatterComparison(elements.statePopulationScatter, result?.stateAccidentSummaries ?? [], false);
+function renderStatePopulationScatter({ elements, result }: StateRegionViewRenderContext): void {
+  renderPopulationScatterComparison(elements.statePopulationScatter, result?.stateAccidentSummaries ?? [], false, result !== null);
 }
 
-function renderRegionPopulationScatter(): void {
-  renderPopulationScatterComparison(elements.regionPopulationScatter, result?.regionAccidentSummaries ?? [], true);
+function renderRegionPopulationScatter({ elements, result }: StateRegionViewRenderContext): void {
+  renderPopulationScatterComparison(elements.regionPopulationScatter, result?.regionAccidentSummaries ?? [], true, result !== null);
 }
 
-function renderStateSeverityCorrelationScatter(): void {
+function renderStateSeverityCorrelationScatter({ elements, result }: StateRegionViewRenderContext): void {
   const severityByState = new Map((result?.stateSummaries ?? []).map((summary) => [summary.stateCode, summary.severityPercent]));
   const rows = severityCorrelationRows(
     result?.stateAccidentSummaries ?? [],
     false,
     (summary) => severityByState.get(summary.stateCode) ?? null
   );
-  renderSeverityCorrelationComparison(elements.stateSeverityCorrelationScatter, rows);
+  renderSeverityCorrelationComparison(elements.stateSeverityCorrelationScatter, rows, result !== null);
 }
 
-function renderRegionSeverityCorrelationScatter(): void {
-  const severityByRegion = new Map(regionSummaries().map((summary) => [summary.key, summary.severityPercent]));
+function renderRegionSeverityCorrelationScatter(context: StateRegionViewRenderContext): void {
+  const { elements, result } = context;
+  const severityByRegion = new Map(regionSummaries(context).map((summary) => [summary.key, summary.severityPercent]));
   const rows = severityCorrelationRows(
     result?.regionAccidentSummaries ?? [],
     true,
     (summary) => severityByRegion.get(summary.key) ?? null
   );
-  renderSeverityCorrelationComparison(elements.regionSeverityCorrelationScatter, rows);
+  renderSeverityCorrelationComparison(elements.regionSeverityCorrelationScatter, rows, result !== null);
 }
 
-function renderPopulationScatterComparison(container: HTMLElement, summaries: PopulationAccidentSummary[], showStateLabel: boolean): void {
+function renderPopulationScatterComparison(
+  container: HTMLElement,
+  summaries: PopulationAccidentSummary[],
+  showStateLabel: boolean,
+  hasResult: boolean
+): void {
   const rows = populationRateRows(summaries, showStateLabel);
-  if (!result || rows.length === 0) {
+  if (!hasResult || rows.length === 0) {
     container.innerHTML = `<p class="population-rate-empty">${escapeHtml(tr("populationScatter.empty"))}</p>`;
     return;
   }
@@ -338,8 +362,8 @@ function renderPopulationScatterSvg(
   `;
 }
 
-function renderSeverityCorrelationComparison(container: HTMLElement, rows: SeverityCorrelationRow[]): void {
-  if (!result || rows.length === 0) {
+function renderSeverityCorrelationComparison(container: HTMLElement, rows: SeverityCorrelationRow[], hasResult: boolean): void {
+  if (!hasResult || rows.length === 0) {
     container.innerHTML = `<p class="population-rate-empty">${escapeHtml(tr("severityCorrelation.empty"))}</p>`;
     return;
   }
@@ -627,9 +651,14 @@ function formatSeverityAxisPercent(value: number): string {
   return `${formatRate(value)}%`;
 }
 
-function renderPopulationRateComparison(container: HTMLElement, summaries: PopulationAccidentSummary[], showStateLabel: boolean): void {
+function renderPopulationRateComparison(
+  container: HTMLElement,
+  summaries: PopulationAccidentSummary[],
+  showStateLabel: boolean,
+  hasResult: boolean
+): void {
   const rows = populationRateRows(summaries, showStateLabel);
-  if (!result || rows.length === 0) {
+  if (!hasResult || rows.length === 0) {
     container.innerHTML = `<p class="population-rate-empty">${escapeHtml(tr("populationRate.empty"))}</p>`;
     return;
   }
@@ -738,7 +767,13 @@ function niceRateChartMax(maxRate: number): number {
   return niceScaled * magnitude;
 }
 
-function renderRankChart(container: HTMLElement, series: RankChartSeries[], emptyKey: string, ariaLabelKey: string): void {
+function renderRankChart(
+  container: HTMLElement,
+  result: AnalysisResult | null,
+  series: RankChartSeries[],
+  emptyKey: string,
+  ariaLabelKey: string
+): void {
   if (!result || result.clusters.length === 0 || series.length === 0) {
     container.innerHTML = `<p class="state-rank-chart-empty">${escapeHtml(tr(emptyKey))}</p>`;
     return;
@@ -771,8 +806,8 @@ function stateRankChartSeries(clusters: IntersectionCluster[]): RankChartSeries[
   return Array.from(byState.values()).sort((a, b) => a.name.localeCompare(b.name, "de", { sensitivity: "base" }));
 }
 
-function regionRankChartSeries(): RankChartSeries[] {
-  return regionSummaries().map((summary, index) => ({
+function regionRankChartSeries(regionSummaries: RegionSummary[]): RankChartSeries[] {
+  return regionSummaries.map((summary, index) => ({
     id: summary.key,
     name: `${summary.regionName}, ${summary.stateName}`,
     tooltip: regionTooltipLabel(summary),
@@ -925,8 +960,8 @@ function rankChartColor(index: number): string {
   return STATE_RANK_CHART_COLORS[index % STATE_RANK_CHART_COLORS.length];
 }
 
-function regionSummaries(): RegionSummary[] {
-  return getRegionSummaries();
+function regionSummaries(context: StateRegionViewRenderContext): RegionSummary[] {
+  return context.getRegionSummaries();
 }
 
 function regionTooltipLabel(region: RegionSummary): string {
