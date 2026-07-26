@@ -44,6 +44,12 @@ const INTERSECTION_FEATURE_POPULATION_BUCKETS = [
   { id: "100k500k", maxExclusive: 500_000, labelKey: "intersectionFeature.population100k500k" },
   { id: "500kPlus", maxExclusive: Number.POSITIVE_INFINITY, labelKey: "intersectionFeature.population500kPlus" }
 ] as const;
+const SIMILAR_INTERSECTION_PREVIEW_LIMIT = 8;
+const SIMILAR_INTERSECTION_FEATURE_GROUPS = [
+  { id: "plain", labelKey: "similar.group.plain", sortOrder: 0 },
+  { id: "roundabout", labelKey: "similar.group.roundabout", sortOrder: 1 },
+  { id: "trafficSignal", labelKey: "similar.group.trafficSignal", sortOrder: 2 }
+] as const;
 const STATE_BROWSE_MIN_SEVERITY_PERCENT = 0.1;
 const STATE_BROWSE_MAX_INTERSECTIONS = 100;
 const POPULATION_RATE_DENOMINATOR = 100_000;
@@ -67,7 +73,8 @@ type ClusterSortKey =
   | "severityPercent";
 type SortDirection = "asc" | "desc";
 type SeverityFilterKey = "fatal" | "serious" | "other";
-type ViewKey = "explore" | "map" | "details" | "state" | "region" | "table" | "settings";
+type ViewKey = "explore" | "map" | "details" | "state" | "region" | "similar" | "table" | "settings";
+type SimilarIntersectionFeatureGroupKey = (typeof SIMILAR_INTERSECTION_FEATURE_GROUPS)[number]["id"];
 type SelectionReason = "auto" | "program" | "user";
 type HotspotMetricPlacement = "header" | "stats";
 type AppLocale = "en" | "de";
@@ -291,6 +298,7 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "aria.intersectionLegend": "Intersection point legend",
     "aria.selectedDetails": "Selected intersection details",
     "aria.openMapServices": "Open selected intersection in map services",
+    "aria.similarView": "Similar intersection comparison",
     "aria.loadingFact": "Road safety fact",
     "brand.name": "Safe Intersections",
     "brand.description": "Explore German accident data to identify elevated-risk intersections by severity, location, and year.",
@@ -305,6 +313,7 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "tab.details": "Details",
     "tab.streetView": "Street View",
     "tab.moreViews": "More views",
+    "tab.comparison": "Comparison",
     "tab.state": "State",
     "tab.region": "Region",
     "tab.intersections": "Intersections",
@@ -372,6 +381,26 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "intersectionFeature.population50k100k": "50k-100k",
     "intersectionFeature.population100k500k": "100k-500k",
     "intersectionFeature.population500kPlus": "500k+",
+    "similar.title": "Similar intersections",
+    "similar.caption": "Same road-class mix, grouped by roundabout and traffic light",
+    "similar.empty": "Select an intersection to compare similar intersections.",
+    "similar.noClass": "No known road class could be inferred from this intersection's streets.",
+    "similar.selectComparable": "Select an intersection with at least one known road class first.",
+    "similar.noMatches": "No other intersections with road class {class} in the current filters.",
+    "similar.class": "Road class",
+    "similar.selectedFeatures": "Selected features",
+    "similar.otherMatches": "{count} other intersections in the current filters",
+    "similar.omitted": "{count} intersections with unknown OSM features or both features are omitted from the three groups.",
+    "similar.group.plain": "No roundabout, no traffic light",
+    "similar.group.roundabout": "Roundabout only",
+    "similar.group.trafficSignal": "Traffic light only",
+    "similar.group.excluded": "Not in comparison groups",
+    "similar.classOther": "Other",
+    "similar.topIntersections": "Top intersections",
+    "similar.noGroupMatches": "No matching intersections in this group.",
+    "similar.listLimit": "Showing highest-severity {shown} of {total}.",
+    "similar.intersection": "Intersection",
+    "similar.area": "Area",
     "severity.fatal": "Fatal",
     "severity.serious": "Serious",
     "severity.light": "Light",
@@ -385,6 +414,7 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "action.exportCsv": "Export CSV",
     "action.downloadFactsheet": "Download factsheet",
     "action.labelFactsheet": "PDF",
+    "action.findSimilar": "Find similar",
     "action.analyze": "Analyze",
     "action.analyzeChanges": "Analyze changes",
     "action.close": "Close",
@@ -674,6 +704,7 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "aria.intersectionLegend": "Legende der Kreuzungspunkte",
     "aria.selectedDetails": "Details zur ausgewählten Kreuzung",
     "aria.openMapServices": "Ausgewählte Kreuzung in Kartendiensten öffnen",
+    "aria.similarView": "Vergleich aehnlicher Kreuzungen",
     "aria.loadingFact": "Fakt zur Verkehrssicherheit",
     "brand.name": "Sichere Knoten",
     "brand.description": "Erkunde deutsche Unfalldaten, um Kreuzungen mit erhöhtem Risiko nach Schwere, Ort und Jahr zu erkennen.",
@@ -688,6 +719,7 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "tab.details": "Details",
     "tab.streetView": "Street View",
     "tab.moreViews": "Weitere Ansichten",
+    "tab.comparison": "Vergleich",
     "tab.state": "Bundesland",
     "tab.region": "Region",
     "tab.intersections": "Kreuzungen",
@@ -755,6 +787,26 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "intersectionFeature.population50k100k": "50k-100k",
     "intersectionFeature.population100k500k": "100k-500k",
     "intersectionFeature.population500kPlus": "500k+",
+    "similar.title": "Aehnliche Kreuzungen",
+    "similar.caption": "Gleiche Strassenklasse, gruppiert nach Kreisverkehr und Ampel",
+    "similar.empty": "Waehle eine Kreuzung aus, um aehnliche Kreuzungen zu vergleichen.",
+    "similar.noClass": "Aus den Strassennamen dieser Kreuzung konnte keine bekannte Strassenklasse abgeleitet werden.",
+    "similar.selectComparable": "Waehle zuerst eine Kreuzung mit mindestens einer bekannten Strassenklasse.",
+    "similar.noMatches": "Keine weiteren Kreuzungen mit Strassenklasse {class} in den aktuellen Filtern.",
+    "similar.class": "Strassenklasse",
+    "similar.selectedFeatures": "Ausgewaehlte Merkmale",
+    "similar.otherMatches": "{count} weitere Kreuzungen in den aktuellen Filtern",
+    "similar.omitted": "{count} Kreuzungen mit unbekannten OSM-Merkmalen oder beiden Merkmalen werden aus den drei Gruppen ausgelassen.",
+    "similar.group.plain": "Ohne Kreisverkehr, ohne Ampel",
+    "similar.group.roundabout": "Nur Kreisverkehr",
+    "similar.group.trafficSignal": "Nur Ampel",
+    "similar.group.excluded": "Nicht in den Vergleichsgruppen",
+    "similar.classOther": "Andere",
+    "similar.topIntersections": "Top-Kreuzungen",
+    "similar.noGroupMatches": "Keine passenden Kreuzungen in dieser Gruppe.",
+    "similar.listLimit": "Zeige die {shown} mit hoechstem Schweregrad von {total}.",
+    "similar.intersection": "Kreuzung",
+    "similar.area": "Gebiet",
     "severity.fatal": "Tödlich",
     "severity.serious": "Schwer",
     "severity.light": "Leicht",
@@ -768,6 +820,7 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "action.exportCsv": "CSV exportieren",
     "action.downloadFactsheet": "Faktenblatt herunterladen",
     "action.labelFactsheet": "PDF",
+    "action.findSimilar": "Aehnliche finden",
     "action.analyze": "Analysieren",
     "action.analyzeChanges": "Änderungen analysieren",
     "action.close": "Schliessen",
@@ -1168,6 +1221,41 @@ interface IntersectionFeatureAccumulator {
   sortOrder: number;
 }
 
+interface RoadClassToken {
+  key: string;
+  label: string;
+}
+
+interface RoadClassSignature {
+  key: string;
+  label: string;
+}
+
+interface SimilarIntersectionGroupRow extends SeverityPercentSource {
+  id: SimilarIntersectionFeatureGroupKey;
+  label: string;
+  clusterCount: number;
+  accidentCount: number;
+  fatalCount: number;
+  seriousCount: number;
+  weightedSeverityPercent: number;
+  sortOrder: number;
+  clusters: IntersectionCluster[];
+}
+
+interface SimilarIntersectionGroupAccumulator extends SimilarIntersectionGroupRow {
+  weightedSeverityPercent: number;
+}
+
+interface SimilarIntersectionComparison {
+  selected: IntersectionCluster;
+  signature: RoadClassSignature;
+  selectedFeatureGroup: SimilarIntersectionFeatureGroupKey | null;
+  groups: SimilarIntersectionGroupRow[];
+  matchedClusterCount: number;
+  omittedCount: number;
+}
+
 interface ScatterRegression {
   slope: number;
   intercept: number;
@@ -1273,6 +1361,7 @@ interface SelectedIntersectionViewModel {
   accidentRecords: CrossingAccident[];
   pressSearchUrl: string;
   streetNames: string[];
+  roadClassSignature: RoadClassSignature | null;
   trendPanel: string;
   roadUserPanel: string;
   recordPanel: string;
@@ -1295,6 +1384,7 @@ let accidents: AccidentRecord[] = [];
 let result: AnalysisResult | null = null;
 let committedAnalysis: CommittedAnalysisState | null = null;
 let selectedCluster: IntersectionCluster | null = null;
+let selectedRoadClassSignature: RoadClassSignature | null = null;
 let clusterTableSort: ClusterTableSort = { key: "severityPercent", direction: "desc" };
 let analysisSettingsDirty = false;
 let activeDataVersion: string | null = null;
@@ -1361,6 +1451,7 @@ const elements = {
   regionPopulationRates: byId<HTMLDivElement>("regionPopulationRates"),
   regionPopulationScatter: byId<HTMLDivElement>("regionPopulationScatter"),
   regionSeverityCorrelationScatter: byId<HTMLDivElement>("regionSeverityCorrelationScatter"),
+  similarIntersections: byId<HTMLDivElement>("similarIntersections"),
   intersectionFeatureSummary: byId<HTMLDivElement>("intersectionFeatureSummary"),
   clusterTableBody: byId<HTMLTableSectionElement>("clusterTableBody"),
   exploreTab: byId<HTMLButtonElement>("exploreTab"),
@@ -1369,6 +1460,7 @@ const elements = {
   moreTab: byId<HTMLButtonElement>("moreTab"),
   stateTab: byId<HTMLButtonElement>("stateTab"),
   regionTab: byId<HTMLButtonElement>("regionTab"),
+  similarTab: byId<HTMLButtonElement>("similarTab"),
   tableTab: byId<HTMLButtonElement>("tableTab"),
   settingsTab: byId<HTMLButtonElement>("settingsTab"),
   mobileMoreMenu: byId<HTMLDivElement>("mobileMoreMenu"),
@@ -1379,6 +1471,7 @@ const elements = {
   mapView: byId<HTMLElement>("mapView"),
   stateView: byId<HTMLElement>("stateView"),
   regionView: byId<HTMLElement>("regionView"),
+  similarView: byId<HTMLElement>("similarView"),
   tableView: byId<HTMLElement>("tableView"),
   settingsView: byId<HTMLElement>("settingsView"),
   showFatalPoints: byId<HTMLInputElement>("showFatalPoints"),
@@ -1487,6 +1580,7 @@ function wireApplicationCommands(): void {
   elements.exportBtn.addEventListener("click", exportClusters);
   elements.selectedPermalinkBtn.addEventListener("click", () => void copySelectedIntersectionPermalink());
   elements.selectionDetails.addEventListener("click", handleSelectionDetailsClick);
+  elements.similarIntersections.addEventListener("click", handleSimilarIntersectionsClick);
   elements.incidentDialog.addEventListener("click", handleIncidentDialogClick);
 }
 
@@ -1524,6 +1618,7 @@ function wireNavigationEvents(): void {
   elements.moreTab.addEventListener("click", toggleMobileMoreMenu);
   elements.stateTab.addEventListener("click", () => setView("state"));
   elements.regionTab.addEventListener("click", () => setView("region"));
+  elements.similarTab.addEventListener("click", () => setView("similar"));
   elements.tableTab.addEventListener("click", () => setView("table"));
   elements.settingsTab.addEventListener("click", () => setView("settings"));
   elements.mobileStateTab.addEventListener("click", () => setView("state"));
@@ -1686,7 +1781,32 @@ function handleSelectionDetailsClick(event: MouseEvent): void {
   const factsheetButton = event.target.closest<HTMLButtonElement>("[data-selected-action='factsheet']");
   if (factsheetButton) {
     void downloadSelectedFactsheet();
+    return;
   }
+
+  const similarButton = event.target.closest<HTMLButtonElement>("[data-selected-action='similar']");
+  if (similarButton) {
+    setView("similar");
+  }
+}
+
+function handleSimilarIntersectionsClick(event: MouseEvent): void {
+  if (!(event.target instanceof Element)) {
+    return;
+  }
+
+  const button = event.target.closest<HTMLButtonElement>("[data-similar-cluster-id]");
+  const clusterId = button?.dataset.similarClusterId;
+  if (!clusterId) {
+    return;
+  }
+
+  const cluster = result?.clusters.find((candidate) => candidate.id === clusterId) ?? null;
+  if (!cluster) {
+    return;
+  }
+
+  selectClusterOnMap(cluster);
 }
 
 function wireLinkedNumberRange(range: HTMLInputElement, numberInput: HTMLInputElement, onDraftChange: () => void): void {
@@ -1867,6 +1987,7 @@ function clearCommittedAnalysisState(): void {
   result = null;
   committedAnalysis = null;
   selectedCluster = null;
+  selectedRoadClassSignature = null;
   clearAnalysisDerivedState();
   analysisSettingsDirty = false;
   updateAnalyzeButton();
@@ -1880,6 +2001,7 @@ function commitAnalysisState(options: AnalysisOptions, analysisResult: AnalysisR
     dataVersion: activeDataVersion
   };
   selectedCluster = null;
+  selectedRoadClassSignature = null;
   clearAnalysisDerivedState();
   analysisSettingsDirty = false;
   updateAnalyzeButton();
@@ -2325,6 +2447,7 @@ function handleClusterSelection(cluster: IntersectionCluster | null, reason: Sel
   const previousClusterId = selectedCluster?.id ?? null;
   measureActiveInteractionStep("store selected cluster", cluster?.id ?? null, () => {
     selectedCluster = cluster;
+    selectedRoadClassSignature = null;
   });
   if (cluster) {
     updateIntersectionSelectionUrl(cluster);
@@ -2421,6 +2544,8 @@ function parseUrlView(value: string | null): ViewKey | null {
       return "state";
     case "region":
       return "region";
+    case "similar":
+      return "similar";
     case "intersections":
     case "table":
       return "table";
@@ -2720,6 +2845,7 @@ function renderTables(): void {
   renderStateSeverityCorrelationScatter();
   renderRegionSeverityCorrelationScatter();
   renderIntersectionFeatureSummary();
+  renderSimilarIntersectionsIfVisible();
   elements.clusterTableBody.innerHTML = "";
   if (!result) {
     return;
@@ -2972,6 +3098,276 @@ function intersectionFeatureSeriousPer100(row: IntersectionFeatureRow): number {
 
 function intersectionFeatureTotalPerIntersection(row: IntersectionFeatureRow): number {
   return row.clusterCount > 0 ? row.accidentCount / row.clusterCount : 0;
+}
+
+function renderSimilarIntersections(): void {
+  const selected = selectedCluster;
+  if (!result || !selected) {
+    elements.similarIntersections.innerHTML = `<p class="population-rate-empty">${escapeHtml(tr("similar.empty"))}</p>`;
+    return;
+  }
+
+  const signature = selectedRoadClassSignature;
+  if (!signature) {
+    elements.similarIntersections.innerHTML = `<p class="population-rate-empty">${escapeHtml(tr("similar.noClass"))}</p>`;
+    return;
+  }
+
+  elements.similarIntersections.innerHTML = renderSimilarIntersectionComparison(
+    buildSimilarIntersectionComparison(selected, signature, result.clusters)
+  );
+}
+
+function renderSimilarIntersectionsIfVisible(): void {
+  if (activeView !== "similar") {
+    return;
+  }
+  renderSimilarIntersections();
+}
+
+function buildSimilarIntersectionComparison(
+  selected: IntersectionCluster,
+  signature: RoadClassSignature,
+  clusters: IntersectionCluster[]
+): SimilarIntersectionComparison {
+  const accumulators = new Map<SimilarIntersectionFeatureGroupKey, SimilarIntersectionGroupAccumulator>();
+  SIMILAR_INTERSECTION_FEATURE_GROUPS.forEach((group) => {
+    accumulators.set(group.id, createSimilarIntersectionGroupAccumulator(group.id, tr(group.labelKey), group.sortOrder));
+  });
+
+  let matchedClusterCount = 0;
+  let omittedCount = 0;
+  for (const cluster of clusters) {
+    if (cluster.id === selected.id) {
+      continue;
+    }
+
+    const clusterSignature = roadClassSignatureForCluster(cluster);
+    if (clusterSignature?.key !== signature.key) {
+      continue;
+    }
+
+    matchedClusterCount += 1;
+    const group = similarIntersectionFeatureGroup(cluster);
+    if (!group) {
+      omittedCount += 1;
+      continue;
+    }
+    addClusterToSimilarIntersectionGroup(accumulators.get(group), cluster);
+  }
+
+  return {
+    selected,
+    signature,
+    selectedFeatureGroup: similarIntersectionFeatureGroup(selected),
+    groups: finalizeSimilarIntersectionGroups(Array.from(accumulators.values())),
+    matchedClusterCount,
+    omittedCount
+  };
+}
+
+function createSimilarIntersectionGroupAccumulator(
+  id: SimilarIntersectionFeatureGroupKey,
+  label: string,
+  sortOrder: number
+): SimilarIntersectionGroupAccumulator {
+  return {
+    id,
+    label,
+    clusterCount: 0,
+    accidentCount: 0,
+    fatalCount: 0,
+    seriousCount: 0,
+    weightedSeverityPercent: 0,
+    severityPercent: 0,
+    sortOrder,
+    clusters: []
+  };
+}
+
+function addClusterToSimilarIntersectionGroup(
+  accumulator: SimilarIntersectionGroupAccumulator | undefined,
+  cluster: IntersectionCluster
+): void {
+  if (!accumulator) {
+    return;
+  }
+  accumulator.clusterCount += 1;
+  accumulator.accidentCount += cluster.accidentCount;
+  accumulator.fatalCount += cluster.fatalCount;
+  accumulator.seriousCount += cluster.seriousCount;
+  accumulator.weightedSeverityPercent += cluster.severityPercent * cluster.accidentCount;
+  accumulator.clusters.push(cluster);
+}
+
+function finalizeSimilarIntersectionGroups(accumulators: SimilarIntersectionGroupAccumulator[]): SimilarIntersectionGroupRow[] {
+  return accumulators
+    .map((group) => ({
+      ...group,
+      severityPercent: group.accidentCount > 0 ? group.weightedSeverityPercent / group.accidentCount : 0,
+      clusters: group.clusters.sort(compareClusterCoreMetric)
+    }))
+    .sort((a, b) => a.sortOrder - b.sortOrder);
+}
+
+function renderSimilarIntersectionComparison(comparison: SimilarIntersectionComparison): string {
+  const selectedFeatureLabel = similarIntersectionFeatureGroupLabel(comparison.selectedFeatureGroup);
+  const overview = `
+    <div class="similar-overview">
+      <div class="similar-overview-item">
+        <span>${escapeHtml(tr("similar.class"))}</span>
+        <strong>${escapeHtml(comparison.signature.label)}</strong>
+      </div>
+      <div class="similar-overview-item">
+        <span>${escapeHtml(tr("similar.selectedFeatures"))}</span>
+        <strong>${escapeHtml(selectedFeatureLabel)}</strong>
+      </div>
+      <div class="similar-overview-item">
+        <span>${escapeHtml(trf("similar.otherMatches", { count: formatInteger(comparison.matchedClusterCount) }))}</span>
+      </div>
+    </div>
+  `;
+
+  if (comparison.matchedClusterCount === 0) {
+    return `${overview}<p class="population-rate-empty">${escapeHtml(
+      trf("similar.noMatches", { class: comparison.signature.label })
+    )}</p>`;
+  }
+
+  const omittedNote =
+    comparison.omittedCount > 0
+      ? `<p class="similar-note">${escapeHtml(trf("similar.omitted", { count: formatInteger(comparison.omittedCount) }))}</p>`
+      : "";
+
+  return `
+    ${overview}
+    ${renderIntersectionFeatureSection(comparison.groups)}
+    ${omittedNote}
+    ${renderSimilarClusterGroups(comparison.groups)}
+  `;
+}
+
+function renderSimilarClusterGroups(groups: SimilarIntersectionGroupRow[]): string {
+  return `
+    <div class="similar-group-grid">
+      ${groups.map(renderSimilarClusterGroup).join("")}
+    </div>
+  `;
+}
+
+function renderSimilarClusterGroup(group: SimilarIntersectionGroupRow): string {
+  const shownClusters = group.clusters.slice(0, SIMILAR_INTERSECTION_PREVIEW_LIMIT);
+  const limitNote =
+    group.clusters.length > shownClusters.length
+      ? `<p class="similar-list-note">${escapeHtml(
+          trf("similar.listLimit", { shown: formatInteger(shownClusters.length), total: formatInteger(group.clusters.length) })
+        )}</p>`
+      : "";
+  const body =
+    shownClusters.length > 0
+      ? `
+        <div class="similar-cluster-table" role="table">
+          <div class="similar-cluster-row similar-cluster-row-header" role="row">
+            <div role="columnheader">${escapeHtml(tr("similar.intersection"))}</div>
+            <div role="columnheader">${escapeHtml(tr("similar.area"))}</div>
+            <div role="columnheader">${escapeHtml(tr("table.accidents"))}</div>
+            <div role="columnheader">${escapeHtml(tr("severity.fatal"))}</div>
+            <div role="columnheader">${escapeHtml(tr("severity.serious"))}</div>
+            <div role="columnheader">${escapeHtml(tr("metric.severityPercent"))}</div>
+          </div>
+          ${shownClusters.map(renderSimilarClusterRow).join("")}
+        </div>
+        ${limitNote}
+      `
+      : `<p class="population-rate-empty">${escapeHtml(tr("similar.noGroupMatches"))}</p>`;
+
+  return `
+    <section class="similar-group-section">
+      <div class="similar-group-heading">
+        <h3>${escapeHtml(group.label)}</h3>
+        <span>${formatInteger(group.clusterCount)} ${escapeHtml(tr("intersectionFeature.intersections").toLowerCase())}</span>
+      </div>
+      <h4>${escapeHtml(tr("similar.topIntersections"))}</h4>
+      ${body}
+    </section>
+  `;
+}
+
+function renderSimilarClusterRow(cluster: IntersectionCluster): string {
+  return `
+    <button class="similar-cluster-row similar-cluster-button" type="button" data-similar-cluster-id="${escapeHtml(cluster.id)}" role="row">
+      <span class="similar-cluster-primary" role="cell">${escapeHtml(similarClusterStreetText(cluster))}</span>
+      <span role="cell">${escapeHtml(clusterAreaText(cluster))}</span>
+      <span class="similar-cluster-number" role="cell">${formatInteger(cluster.accidentCount)}</span>
+      <span class="similar-cluster-number" role="cell">${formatInteger(cluster.fatalCount)}</span>
+      <span class="similar-cluster-number" role="cell">${formatInteger(cluster.seriousCount)}</span>
+      <span class="similar-cluster-number" role="cell">${formatSeverityPercent(cluster)}</span>
+    </button>
+  `;
+}
+
+function similarClusterStreetText(cluster: IntersectionCluster): string {
+  const streetNames = clusterStreetNamesForDisplay(cluster);
+  return streetNames.length > 0 ? formatClusterStreetNames(streetNames) : clusterLocationText(cluster);
+}
+
+function roadClassSignatureForCluster(cluster: IntersectionCluster): RoadClassSignature | null {
+  return roadClassSignatureForStreetNames(clusterStreetNamesForDisplay(cluster));
+}
+
+function roadClassSignatureForStreetNames(streetNames: string[]): RoadClassSignature | null {
+  const tokens = displayStreetNames(streetNames).map(roadClassTokenForStreetName);
+  if (tokens.length === 0 || !tokens.some(isKnownRoadClassToken)) {
+    return null;
+  }
+
+  const sortedTokens = tokens.slice().sort(compareRoadClassTokens);
+  return {
+    key: sortedTokens.map((token) => token.key).join("|"),
+    label: sortedTokens.map((token) => token.label).join(STREET_NAME_SEPARATOR)
+  };
+}
+
+function isKnownRoadClassToken(token: RoadClassToken): boolean {
+  return token.key !== "other";
+}
+
+function roadClassTokenForStreetName(streetName: string): RoadClassToken {
+  const routeMatch = formatStreetNameForDisplay(streetName).match(/\b(St|A|B|L|K|S)\s*\d+[a-z]?\b/i);
+  if (!routeMatch) {
+    return { key: "other", label: tr("similar.classOther") };
+  }
+
+  const prefix = routeMatch[1].toLocaleLowerCase("en") === "st" ? "St" : routeMatch[1].toUpperCase();
+  return { key: prefix.toLocaleLowerCase("en"), label: prefix };
+}
+
+function compareRoadClassTokens(a: RoadClassToken, b: RoadClassToken): number {
+  return roadClassSortValue(a.key) - roadClassSortValue(b.key) || a.label.localeCompare(b.label, "de", { sensitivity: "base" });
+}
+
+function roadClassSortValue(key: string): number {
+  const order = ["a", "b", "k", "l", "s", "st", "other"];
+  const index = order.indexOf(key);
+  return index === -1 ? order.length : index;
+}
+
+function similarIntersectionFeatureGroup(cluster: IntersectionCluster): SimilarIntersectionFeatureGroupKey | null {
+  if (cluster.osmRoundabout === false && cluster.osmTrafficSignal === false) {
+    return "plain";
+  }
+  if (cluster.osmRoundabout === true && cluster.osmTrafficSignal === false) {
+    return "roundabout";
+  }
+  if (cluster.osmRoundabout === false && cluster.osmTrafficSignal === true) {
+    return "trafficSignal";
+  }
+  return null;
+}
+
+function similarIntersectionFeatureGroupLabel(group: SimilarIntersectionFeatureGroupKey | null): string {
+  const definition = group ? SIMILAR_INTERSECTION_FEATURE_GROUPS.find((candidate) => candidate.id === group) : null;
+  return definition ? tr(definition.labelKey) : tr("similar.group.excluded");
 }
 
 function renderPopulationScatterComparison(container: HTMLElement, summaries: PopulationAccidentSummary[], showStateLabel: boolean): void {
@@ -4344,7 +4740,7 @@ function renderEmptySelection(): void {
   clearSelectedPreviewMap();
   map.setSelectedIncidentPoints([]);
   updateContextTabs();
-  if (activeView === "details") {
+  if (activeView === "details" || activeView === "similar") {
     setView("map");
   } else {
     updateStreetViewPanel();
@@ -4379,6 +4775,12 @@ function buildSelectedIntersectionViewModel(cluster: IntersectionCluster): Selec
     () => clusterStreetNamesForDisplay(cluster, accidentRecords),
     (names) => ({ streetCount: names.length })
   );
+  const roadClassSignature = measureActiveInteractionStep(
+    "derive selected road class signature",
+    cluster.id,
+    () => roadClassSignatureForStreetNames(streetNames),
+    (signature) => ({ comparable: signature !== null, roadClass: signature?.label ?? null })
+  );
   const pressSearchUrl = measureActiveInteractionStep("build press search URL", cluster.id, () =>
     pressSearchUrlForCluster(cluster, streetNames)
   );
@@ -4403,6 +4805,7 @@ function buildSelectedIntersectionViewModel(cluster: IntersectionCluster): Selec
     accidentRecords,
     pressSearchUrl,
     streetNames,
+    roadClassSignature,
     trendPanel,
     roadUserPanel,
     recordPanel,
@@ -4416,6 +4819,7 @@ function buildSelectedIntersectionViewModel(cluster: IntersectionCluster): Selec
 
 function applySelectedIntersectionViewModel(viewModel: SelectedIntersectionViewModel): void {
   const { cluster } = viewModel;
+  selectedRoadClassSignature = viewModel.roadClassSignature;
   elements.selectedAside.hidden = false;
   elements.mapView.classList.add("has-selection");
   measureActiveInteractionStep(
@@ -4436,6 +4840,13 @@ function applySelectedIntersectionViewModel(viewModel: SelectedIntersectionViewM
     elements.selectionDetails.innerHTML = detailsHtml;
   });
   measureActiveInteractionStep("update details tabs", cluster.id, updateContextTabs);
+  if (activeView === "similar") {
+    if (!viewModel.roadClassSignature) {
+      measureActiveInteractionStep("fallback from unavailable comparison", cluster.id, () => setView("map"));
+    } else {
+      measureActiveInteractionStep("render visible comparison", cluster.id, renderSimilarIntersections);
+    }
+  }
   measureActiveInteractionStep("update street view panel", cluster.id, updateStreetViewPanel, () => ({
     streetViewOpen: isStreetViewOpen
   }));
@@ -4668,6 +5079,7 @@ function drawSelectedPreviewMapAttribution(context: CanvasRenderingContext2D, fr
 
 function renderSelectedPanelHtml(viewModel: SelectedIntersectionViewModel): string {
   const { cluster, urls, pressSearchUrl, streetNames, trendPanel, roadUserPanel, recordPanel } = viewModel;
+  const canCompareSimilar = viewModel.roadClassSignature !== null;
   return `
       <dl>
         <div><dt>${escapeHtml(tr("details.region"))}</dt><dd>${escapeHtml(clusterAreaText(cluster))}</dd></div>
@@ -4680,7 +5092,7 @@ function renderSelectedPanelHtml(viewModel: SelectedIntersectionViewModel): stri
         <div><dt>${escapeHtml(tr("details.severityPercent"))}</dt><dd>${escapeHtml(formatSeverityPercentWithContext(cluster))}</dd></div>
       </dl>
       ${renderMapServiceActions(urls.openStreetMapUrl, urls.googleMapsUrl, urls.streetViewUrl)}
-      ${renderSelectedWorkflowActions(urls.authoritySearchUrl, pressSearchUrl)}
+      ${renderSelectedWorkflowActions(urls.authoritySearchUrl, pressSearchUrl, canCompareSimilar)}
       ${trendPanel}
       ${roadUserPanel}
       ${recordPanel}
@@ -4993,9 +5405,16 @@ function mapServiceLink(url: string, accessibleLabel: string, visibleLabel: stri
   return `<a class="map-service-link" href="${url}" target="_blank" rel="noopener noreferrer" aria-label="${label}" title="${label}">${escapeHtml(visibleLabel)}</a>`;
 }
 
-function renderSelectedWorkflowActions(authoritySearchUrl: string, pressSearchUrl: string): string {
+function renderSelectedWorkflowActions(authoritySearchUrl: string, pressSearchUrl: string, canCompareSimilar: boolean): string {
+  const similarButton = canCompareSimilar
+    ? `
+      <button class="map-service-link" type="button" data-selected-action="similar" aria-label="${escapeHtml(tr("action.findSimilar"))}" title="${escapeHtml(tr("action.findSimilar"))}">
+        ${escapeHtml(tr("action.findSimilar"))}
+      </button>`
+    : "";
   return `
     <div class="selected-workflow-actions">
+      ${similarButton}
       <button class="map-service-link factsheet-button" type="button" data-selected-action="factsheet" aria-label="${escapeHtml(tr("action.downloadFactsheet"))}" title="${escapeHtml(tr("action.downloadFactsheet"))}">
         ${escapeHtml(tr("action.labelFactsheet"))}
       </button>
@@ -5761,6 +6180,10 @@ function setView(view: ViewKey): void {
     setStatus(tr("details.selectFirst"), 100);
     view = "map";
   }
+  if (view === "similar" && !hasComparableSelectedIntersection()) {
+    setStatus(selectedCluster ? tr("similar.selectComparable") : tr("details.selectFirst"), 100);
+    view = "map";
+  }
 
   activeView = view;
   elements.app.dataset.activeView = view;
@@ -5770,6 +6193,7 @@ function setView(view: ViewKey): void {
     { key: "explore", tab: elements.exploreTab },
     { key: "map", tab: elements.mapTab },
     { key: "details", tab: elements.detailsTab },
+    { key: "similar", tab: elements.similarTab },
     { key: "state", tab: elements.stateTab },
     { key: "state", tab: elements.mobileStateTab },
     { key: "region", tab: elements.regionTab },
@@ -5794,10 +6218,12 @@ function setView(view: ViewKey): void {
   elements.mapView.classList.toggle("active", view === "map" || view === "details");
   elements.stateView.classList.toggle("active", view === "state");
   elements.regionView.classList.toggle("active", view === "region");
+  elements.similarView.classList.toggle("active", view === "similar");
   elements.tableView.classList.toggle("active", view === "table");
   elements.settingsView.classList.toggle("active", view === "settings");
 
   updateContextTabs();
+  renderSimilarIntersectionsIfVisible();
   updateStreetViewPanel();
   setMobileMoreMenuOpen(false);
   scheduleMapRefresh();
@@ -5805,7 +6231,14 @@ function setView(view: ViewKey): void {
 
 function updateContextTabs(): void {
   const hasSelection = selectedCluster !== null;
+  const canCompareSimilar = hasComparableSelectedIntersection();
   elements.detailsTab.disabled = !hasSelection;
+  elements.similarTab.hidden = !canCompareSimilar;
+  elements.similarTab.disabled = !canCompareSimilar;
+}
+
+function hasComparableSelectedIntersection(): boolean {
+  return selectedCluster !== null && selectedRoadClassSignature !== null;
 }
 
 function isMobilePaneView(view: ViewKey): boolean {

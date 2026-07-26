@@ -431,6 +431,10 @@ select {
   color: #ffffff;
 }
 
+.tab-button[hidden] {
+  display: none !important;
+}
+
 .tab-button:disabled {
   cursor: default;
   opacity: 0.45;
@@ -513,7 +517,8 @@ select {
 }
 
 #stateView.active,
-#regionView.active {
+#regionView.active,
+#similarView.active {
   grid-template-rows: auto;
   gap: 14px;
   align-content: start;
@@ -1785,6 +1790,176 @@ button.map-service-link {
   font-weight: 700;
 }
 
+.similar-panel {
+  display: grid;
+  gap: 14px;
+  width: min(100%, 1100px);
+  max-width: 1100px;
+  min-width: 0;
+  padding: 14px 16px 16px;
+  border: 1px solid #d7ddd7;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.similar-header,
+.similar-group-heading {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.similar-header h2,
+.similar-group-heading h3 {
+  margin: 0;
+  color: #172126;
+}
+
+.similar-header h2 {
+  font-size: 1rem;
+}
+
+.similar-group-heading h3 {
+  font-size: 0.94rem;
+}
+
+.similar-header span,
+.similar-group-heading span,
+.similar-note,
+.similar-list-note {
+  color: #53636d;
+  font-size: 0.84rem;
+}
+
+.similar-content {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.similar-overview {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
+.similar-overview-item {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px 12px;
+  border-left: 3px solid #166b6d;
+  background: #f8faf7;
+}
+
+.similar-overview-item span {
+  color: #53636d;
+  font-size: 0.78rem;
+}
+
+.similar-overview-item strong {
+  min-width: 0;
+  color: #172126;
+  font-size: 0.96rem;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.similar-note,
+.similar-list-note {
+  margin: 0;
+  line-height: 1.35;
+}
+
+.similar-group-grid {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.similar-group-section {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding-top: 14px;
+  border-top: 1px solid #e1e5df;
+}
+
+.similar-group-section h4 {
+  margin: 0;
+  color: #38454b;
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.similar-cluster-table {
+  display: grid;
+  min-width: 0;
+  overflow-x: auto;
+  border: 1px solid #e1e5df;
+  border-radius: 7px;
+}
+
+.similar-cluster-row {
+  display: grid;
+  grid-template-columns:
+    minmax(190px, 1.65fr)
+    minmax(180px, 1.35fr)
+    repeat(4, minmax(62px, 0.5fr));
+  min-width: 740px;
+  border-bottom: 1px solid #e5e9e4;
+}
+
+.similar-cluster-row:last-child {
+  border-bottom: 0;
+}
+
+.similar-cluster-row > * {
+  min-width: 0;
+  padding: 8px 10px;
+  align-content: center;
+}
+
+.similar-cluster-row-header {
+  background: #f4f6f2;
+  color: #38454b;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.similar-cluster-button {
+  width: 100%;
+  border: 0;
+  background: #ffffff;
+  color: #38454b;
+  font: inherit;
+  text-align: left;
+}
+
+.similar-cluster-button:hover,
+.similar-cluster-button:focus-visible {
+  background: #eef6f4;
+  outline: none;
+}
+
+.similar-cluster-primary {
+  color: #172126;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.similar-cluster-number {
+  color: #38454b;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
 .table-shell {
   min-height: 0;
   overflow: auto;
@@ -2538,6 +2713,11 @@ tbody tr:focus {
     white-space: nowrap;
   }
 
+  #similarTab {
+    flex-grow: 1.35;
+    font-size: 0.74rem;
+  }
+
   .mobile-more-tab {
     flex: 0 0 38px;
     padding: 0;
@@ -2647,10 +2827,19 @@ tbody tr:focus {
   }
 
   #stateView.active,
-  #regionView.active {
+  #regionView.active,
+  #similarView.active {
     grid-template-rows: auto;
     gap: 12px;
     overflow: auto;
+  }
+
+  .similar-panel {
+    padding: 12px;
+  }
+
+  .similar-overview {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   #tableView.active .table-shell {

@@ -8,7 +8,7 @@
     <meta http-equiv="Expires" content="0" />
     <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
     <title>Safe Intersections</title>
-    <link rel="stylesheet" href="./assets/app.css?v=d985f4a2e537e101" />
+    <link rel="stylesheet" href="./assets/app.css?v=8a3bd1834509059d" />
   </head>
   <body>
     <div id="appSplash" class="splash-screen" role="status" aria-live="polite" aria-busy="true">
@@ -55,6 +55,7 @@
           <div class="tabs" role="tablist" aria-label="Views" data-i18n-aria-label="aria.views">
             <button id="exploreTab" class="tab-button mobile-pane-tab" role="tab" type="button" aria-selected="false" data-i18n="tab.browse">Browse</button>
             <button id="mapTab" class="tab-button active" role="tab" type="button" aria-selected="true" data-i18n="tab.map">Map</button>
+            <button id="similarTab" class="tab-button" role="tab" type="button" aria-selected="false" data-i18n="tab.comparison" hidden>Comparison</button>
             <button id="detailsTab" class="tab-button mobile-pane-tab" role="tab" type="button" aria-selected="false" disabled data-i18n="tab.details">Details</button>
             <button id="moreTab" class="tab-button mobile-more-tab" type="button" aria-label="More views" title="More views" aria-haspopup="menu" aria-expanded="false" aria-controls="mobileMoreMenu" data-i18n-aria-label="tab.moreViews" data-i18n-title="tab.moreViews">
               <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -235,6 +236,16 @@
           </div>
         </section>
 
+        <section id="similarView" class="view similar-view" aria-label="Similar intersection comparison" data-i18n-aria-label="aria.similarView">
+          <section class="similar-panel">
+            <div class="similar-header">
+              <h2 data-i18n="similar.title">Similar intersections</h2>
+              <span data-i18n="similar.caption">Same road-class mix, grouped by roundabout and traffic light</span>
+            </div>
+            <div id="similarIntersections" class="similar-content"></div>
+          </section>
+        </section>
+
         <section id="tableView" class="view">
           <section class="intersection-feature-summary" aria-label="Area population comparison" data-i18n-aria-label="aria.intersectionFeatureSummary">
             <div class="intersection-feature-header">
@@ -412,7 +423,7 @@
 
       </main>
     </div>
-    <script src="./assets/data-manifest.js?v=d985f4a2e537e101"></script>
-    <script src="./assets/app.js?v=d985f4a2e537e101"></script>
+    <script src="./assets/data-manifest.js?v=8a3bd1834509059d"></script>
+    <script src="./assets/app.js?v=8a3bd1834509059d"></script>
   </body>
 </html>
