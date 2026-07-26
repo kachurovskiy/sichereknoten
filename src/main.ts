@@ -1,4 +1,4 @@
-﻿import "./styles.css";
+import "./styles.css";
 import { serializeAnalysisOptions } from "./analysisOptions";
 import { analyzeDangerousIntersectionsInBackground, type AnalysisExecutionPlan } from "./analysisRunner";
 import { DataRepository, type AnalysisCacheContext, type DataRepositoryTelemetry } from "./dataRepository";
@@ -9,20 +9,27 @@ import {
   clusterStreetNamesForDisplay,
   compareClusterCoreMetric,
   displayStreetNames,
-  formatAccidentStreetNames,
   isCityTitleSuffix
 } from "./clusterDisplay";
+import { accidentKey, accidentRecordRows, accidentSeverityLabel, accidentTimeLabel } from "./accidentRecordDisplay";
+import {
+  accidentMatchesAnalysisOptions,
+  analysisOptionsIndexKey,
+  clusteredAccidentMembership,
+  ClusterAccidentRecordMatcher,
+  type ClusterAccidentRecordsSnapshot,
+  type CrossingAccident
+} from "./clusterAccidentRecords";
 import {
   configureNumberLocale,
   formatCompactPopulation,
   formatDistance,
   formatInteger,
-  formatNumber,
   formatSeverityPercent,
   severityPercentValue
 } from "./formatting";
 import { createFactsheetPdf, factsheetFileName, type CreateFactsheetPdfOptions } from "./factsheet";
-import { distanceMeters, GeoGridIndex } from "./geo";
+import { distanceMeters } from "./geo";
 import { escapeHtml } from "./html";
 import { applyStaticTranslations, configureI18n, detectLocale, tr, trf, type AppLocale } from "./i18n";
 import { DEFAULT_LOADING_FACT_META, LOADING_FACTS } from "./loadingFacts";
@@ -37,7 +44,7 @@ import {
   wrapOsmTileX
 } from "./osmTiles";
 import { RequestGate, type RequestToken } from "./requestGate";
-import { accidentMatchesRoadUserFocus, ROAD_USER_DEFINITIONS, roadUserFocusKey } from "./roadUsers";
+import { ROAD_USER_DEFINITIONS, roadUserFocusKey } from "./roadUsers";
 import { STATE_NAMES } from "./states";
 import {
   createInitializationTelemetry,
@@ -119,47 +126,6 @@ const LOADING_FACT_STORAGE_KEY = "sichere-knoten:loading-fact-index";
 const ACTIVE_LOCALE: AppLocale = detectLocale();
 configureI18n(ACTIVE_LOCALE, TRANSLATIONS);
 configureNumberLocale(ACTIVE_LOCALE);
-const ACCIDENT_CATEGORY_LABELS: Record<number, string> = {
-  1: "accident.category.killed",
-  2: "accident.category.seriouslyInjured",
-  3: "accident.category.slightlyInjured"
-};
-const ACCIDENT_KIND_LABELS: Record<number, string> = {
-  0: "accident.kind.other",
-  1: "accident.kind.startsStopsStationary",
-  2: "accident.kind.movingAheadWaiting",
-  3: "accident.kind.lateralSameDirection",
-  4: "accident.kind.oncoming",
-  5: "accident.kind.turnsOrCrosses",
-  6: "accident.kind.pedestrian",
-  7: "accident.kind.obstacle",
-  8: "accident.kind.leavingRight",
-  9: "accident.kind.leavingLeft"
-};
-const ACCIDENT_TYPE_LABELS: Record<number, string> = {
-  1: "accident.type.driving",
-  2: "accident.type.turningOff",
-  3: "accident.type.turningIntoCrossing",
-  4: "accident.type.crossingRoad",
-  5: "accident.type.stationaryTraffic",
-  6: "accident.type.sameCarriageway",
-  7: "accident.type.other"
-};
-const LIGHT_CONDITION_LABELS: Record<number, string> = {
-  0: "accident.light.daylight",
-  1: "accident.light.twilight",
-  2: "accident.light.darkness"
-};
-const ROAD_SURFACE_LABELS: Record<number, string> = {
-  0: "accident.surface.dry",
-  1: "accident.surface.wet",
-  2: "accident.surface.winter"
-};
-const PLAUSIBILITY_LEVEL_LABELS: Record<number, string> = {
-  1: "accident.plausibility.regular",
-  2: "accident.plausibility.bicycle"
-};
-
 interface BrowseIndex {
   clusters: IntersectionCluster[];
   regionSummaries: RegionSummary[];
@@ -197,22 +163,6 @@ interface PostRenderCacheWrites {
   analysis: PendingAnalysisCacheWrite | null;
 }
 
-interface AccidentIndexCache {
-  key: string;
-  source: AccidentRecord[];
-  index: GeoGridIndex<AccidentRecord>;
-}
-
-interface AccidentKeyLookupCache {
-  source: AccidentRecord[];
-  map: Map<string, AccidentRecord>;
-}
-
-interface AccidentRecordIndexLookupCache {
-  source: AccidentRecord[];
-  map: Map<number, AccidentRecord>;
-}
-
 interface UnclusteredIncidentMapCache {
   key: string;
   loadedStateCodes: Set<string>;
@@ -220,16 +170,6 @@ interface UnclusteredIncidentMapCache {
   records: AccidentRecord[];
   clusteredAccidentKeys: Set<string>;
   clusteredAccidentIndexes: Set<number>;
-}
-
-interface CrossingAccident {
-  accident: AccidentRecord;
-  distanceMeters: number;
-}
-
-interface ClusterAccidentRecordsSnapshot {
-  records: CrossingAccident[];
-  loading: boolean;
 }
 
 interface SelectedIncidentPoint {
@@ -265,9 +205,6 @@ let selectedRoadClassSignature: RoadClassSignature | null = null;
 let analysisSettingsDirty = false;
 let activeDataVersion: string | null = null;
 let userLocation: { lat: number; lon: number; accuracyMeters: number | null } | null = null;
-let crossingAccidentIndexCache: AccidentIndexCache | null = null;
-let accidentKeyLookupCache: AccidentKeyLookupCache | null = null;
-let accidentRecordIndexLookupCache: AccidentRecordIndexLookupCache | null = null;
 let severityRankCache: SeverityRankCache | null = null;
 let browseIndexCache: BrowseIndex | null = null;
 let unclusteredIncidentMapCache: UnclusteredIncidentMapCache | null = null;
@@ -370,13 +307,10 @@ const elements = {
 
 const dataRepository = new DataRepository();
 const requestGate = new RequestGate();
+const clusterAccidentRecordMatcher = new ClusterAccidentRecordMatcher(measureActiveInteractionStep);
 const selectedIntersectionPanelView = new SelectedIntersectionPanelView({
   container: elements.selectionDetails,
   formatSeverityPercentWithContext,
-  accidentRecordRows,
-  accidentSeverity,
-  accidentSeverityLabel,
-  accidentTimeLabel,
   pressSearchUrlForAccident
 });
 const map = new MapCanvas(
@@ -853,9 +787,7 @@ function commitAnalysisState(options: AnalysisOptions, analysisResult: AnalysisR
 }
 
 function clearAnalysisDerivedState(): void {
-  crossingAccidentIndexCache = null;
-  accidentKeyLookupCache = null;
-  accidentRecordIndexLookupCache = null;
+  clusterAccidentRecordMatcher.clearCaches();
   severityRankCache = null;
   browseIndexCache = null;
   invalidateRenderedAnalysisViews();
@@ -1561,20 +1493,6 @@ function unclusteredIncidentMapCacheKey(): string | null {
     result.filteredAccidentCount,
     result.clusters.length
   ].join("|");
-}
-
-function clusteredAccidentMembership(clusters: IntersectionCluster[]): { keys: Set<string>; indexes: Set<number> } {
-  const keys = new Set<string>();
-  const indexes = new Set<number>();
-  for (const cluster of clusters) {
-    for (const key of cluster.accidentKeys ?? []) {
-      keys.add(key);
-    }
-    for (const index of cluster.accidentIndexes ?? []) {
-      indexes.add(index);
-    }
-  }
-  return { keys, indexes };
 }
 
 async function loadUnclusteredIncidentState(stateCode: string, cacheKey: string): Promise<void> {
@@ -2617,48 +2535,14 @@ function handleIncidentDialogClick(event: MouseEvent): void {
   }
 }
 
-function accidentRecordRows(
-  accident: AccidentRecord,
-  distanceMeters: number | null,
-  streetOrder: string[] = []
-): Array<{ label: string; value: string }> {
-  const rows: Array<{ label: string; value: string }> = [];
-  addRecordRow(rows, tr("records.category"), codeLabel(accident.category, ACCIDENT_CATEGORY_LABELS));
-  addRecordRow(rows, tr("records.kind"), codeLabel(accident.accidentKind, ACCIDENT_KIND_LABELS));
-  addRecordRow(rows, tr("records.type"), codeLabel(accident.accidentType, ACCIDENT_TYPE_LABELS));
-  addRecordRow(rows, tr("records.light"), codeLabel(accident.lightCondition, LIGHT_CONDITION_LABELS));
-  addRecordRow(rows, tr("records.surface"), codeLabel(accident.roadSurface, ROAD_SURFACE_LABELS));
-  addRecordRow(rows, tr("records.street"), formatAccidentStreetNames(accident, streetOrder));
-  addRecordRow(rows, tr("records.roadUsers"), roadUsersLabel(accident));
-  addRecordRow(rows, tr("records.area"), administrativeAreaLabel(accident));
-  addRecordRow(rows, tr("records.coordinates"), `${accident.lat.toFixed(6)}, ${accident.lon.toFixed(6)}`);
-  addRecordRow(rows, "LINREF", linRefLabel(accident));
-  addRecordRow(rows, tr("records.locationCheck"), codeLabel(accident.plausibilityLevel, PLAUSIBILITY_LEVEL_LABELS));
-  addRecordRow(rows, tr("records.distance"), distanceMeters === null ? null : `${formatInteger(Math.round(distanceMeters))} m`);
-  addRecordRow(rows, tr("records.recordId"), recordIdLabel(accident));
-  addRecordRow(rows, tr("records.source"), accident.source);
-  return rows;
-}
-
-function addRecordRow(rows: Array<{ label: string; value: string }>, label: string, value: string | null): void {
-  if (value) {
-    rows.push({ label, value });
-  }
-}
-
 function clusterAccidentRecordsSnapshot(cluster: IntersectionCluster): ClusterAccidentRecordsSnapshot {
   const sourceRecords = cachedAccidentRecordsForCluster(cluster);
-  if (sourceRecords) {
-    return {
-      records: clusterAccidentRecords(cluster, sourceRecords),
-      loading: false
-    };
-  }
-
-  return {
-    records: [],
-    loading: hasAccidentStateShard(cluster.stateCode)
-  };
+  return clusterAccidentRecordMatcher.snapshot(
+    cluster,
+    sourceRecords,
+    hasAccidentStateShard(cluster.stateCode),
+    currentAccidentRecordMatchingOptions()
+  );
 }
 
 function cachedAccidentRecordsForCluster(cluster: IntersectionCluster): AccidentRecord[] | null {
@@ -2687,329 +2571,11 @@ function queueSelectedAccidentRecordsLoad(cluster: IntersectionCluster): void {
 
 async function clusterAccidentRecordsReady(cluster: IntersectionCluster): Promise<CrossingAccident[]> {
   const sourceRecords = cachedAccidentRecordsForCluster(cluster) ?? (await loadAccidentsForState(cluster.stateCode));
-  return clusterAccidentRecords(cluster, sourceRecords);
+  return clusterAccidentRecordMatcher.records(cluster, sourceRecords, currentAccidentRecordMatchingOptions());
 }
 
-function clusterAccidentRecords(cluster: IntersectionCluster, sourceRecords: AccidentRecord[] = accidents): CrossingAccident[] {
-  if (sourceRecords.length === 0) {
-    return [];
-  }
-
-  const exactRecords = exactClusterAccidentRecords(cluster, sourceRecords);
-  if (exactRecords.length > 0) {
-    return exactRecords.sort(compareCrossingAccidents);
-  }
-
-  const options = committedAnalysis?.options ?? readDraftAnalysisOptions();
-  const searchRadiusMeters = clusterAccidentSearchRadius(options);
-  const index = accidentIndexForCrossings(options, searchRadiusMeters, sourceRecords);
-  const candidates = index
-    .nearby(cluster)
-    .map((accident) => ({ accident, distanceMeters: distanceMeters(cluster, accident) }))
-    .filter((entry) => entry.distanceMeters <= searchRadiusMeters)
-    .sort((a, b) => a.distanceMeters - b.distanceMeters);
-
-  return pickClusterAccidents(candidates, cluster).sort(compareCrossingAccidents);
-}
-
-function exactClusterAccidentRecords(cluster: IntersectionCluster, sourceRecords: AccidentRecord[]): CrossingAccident[] {
-  const indexedRecords = exactClusterAccidentRecordsByIndex(cluster, sourceRecords);
-  if (indexedRecords.length > 0) {
-    return indexedRecords;
-  }
-
-  if (!cluster.accidentKeys?.length) {
-    return [];
-  }
-
-  const lookup = accidentKeyLookup(sourceRecords);
-  return cluster.accidentKeys
-    .map((key) => lookup.get(key))
-    .filter((accident): accident is AccidentRecord => Boolean(accident))
-    .map((accident) => ({ accident, distanceMeters: distanceMeters(cluster, accident) }));
-}
-
-function exactClusterAccidentRecordsByIndex(cluster: IntersectionCluster, sourceRecords: AccidentRecord[]): CrossingAccident[] {
-  const indexes = cluster.accidentIndexes;
-  if (!indexes?.length) {
-    return [];
-  }
-
-  const lookup = accidentRecordIndexLookup(sourceRecords);
-  return measureActiveInteractionStep(
-    "read indexed accident records",
-    cluster.id,
-    () =>
-      indexes
-        .map((index) => lookup.get(index))
-        .filter((accident): accident is AccidentRecord => Boolean(accident))
-        .map((accident) => ({ accident, distanceMeters: distanceMeters(cluster, accident) })),
-    (records) => ({
-      recordCount: records.length,
-      indexCount: indexes.length
-    })
-  );
-}
-
-function accidentRecordIndexLookup(sourceRecords: AccidentRecord[]): Map<number, AccidentRecord> {
-  if (accidentRecordIndexLookupCache?.source === sourceRecords) {
-    return accidentRecordIndexLookupCache.map;
-  }
-
-  const map = new Map<number, AccidentRecord>();
-  for (let index = 0; index < sourceRecords.length; index += 1) {
-    const accident = sourceRecords[index];
-    map.set(accident.recordIndex ?? index, accident);
-  }
-  accidentRecordIndexLookupCache = { source: sourceRecords, map };
-  return map;
-}
-
-function accidentKeyLookup(sourceRecords: AccidentRecord[] = accidents): Map<string, AccidentRecord> {
-  if (accidentKeyLookupCache?.source === sourceRecords) {
-    return accidentKeyLookupCache.map;
-  }
-
-  return measureActiveInteractionStep(
-    "build accident key lookup",
-    "all accident records",
-    () => buildAccidentKeyLookup(sourceRecords),
-    (map) => ({
-      accidentCount: sourceRecords.length,
-      recordCount: map.size
-    })
-  );
-}
-
-function buildAccidentKeyLookup(sourceRecords: AccidentRecord[]): Map<string, AccidentRecord> {
-  const map = new Map<string, AccidentRecord>();
-  for (const accident of sourceRecords) {
-    map.set(accidentKey(accident), accident);
-  }
-  accidentKeyLookupCache = { source: sourceRecords, map };
-  return map;
-}
-
-function pickClusterAccidents(candidates: CrossingAccident[], cluster: IntersectionCluster): CrossingAccident[] {
-  const selected = new Set<AccidentRecord>();
-  const selectedRecords: CrossingAccident[] = [];
-  const remainingBySeverity = new Map<SeverityFilterKey, number>([
-    ["fatal", cluster.fatalCount],
-    ["serious", cluster.seriousCount],
-    ["other", Math.max(0, cluster.accidentCount - cluster.fatalCount - cluster.seriousCount)]
-  ]);
-
-  for (const candidate of candidates) {
-    const severity = accidentSeverity(candidate.accident);
-    const remaining = remainingBySeverity.get(severity) ?? 0;
-    if (remaining <= 0) {
-      continue;
-    }
-    selected.add(candidate.accident);
-    selectedRecords.push(candidate);
-    remainingBySeverity.set(severity, remaining - 1);
-    if (selectedRecords.length >= cluster.accidentCount) {
-      return selectedRecords;
-    }
-  }
-
-  for (const candidate of candidates) {
-    if (selected.has(candidate.accident)) {
-      continue;
-    }
-    selectedRecords.push(candidate);
-    if (selectedRecords.length >= cluster.accidentCount) {
-      break;
-    }
-  }
-
-  return selectedRecords;
-}
-
-function accidentIndexForCrossings(
-  options: AnalysisOptions,
-  searchRadiusMeters: number,
-  sourceRecords: AccidentRecord[] = accidents
-): GeoGridIndex<AccidentRecord> {
-  const key = analysisOptionsIndexKey(options, searchRadiusMeters);
-  if (crossingAccidentIndexCache?.key === key && crossingAccidentIndexCache.source === sourceRecords) {
-    return crossingAccidentIndexCache.index;
-  }
-
-  const index = new GeoGridIndex<AccidentRecord>(searchRadiusMeters);
-  for (const accident of sourceRecords) {
-    if (accidentMatchesAnalysisOptions(accident, options)) {
-      index.insert(accident);
-    }
-  }
-  crossingAccidentIndexCache = { key, source: sourceRecords, index };
-  return index;
-}
-
-function accidentMatchesAnalysisOptions(accident: AccidentRecord, options: AnalysisOptions): boolean {
-  if (options.years.size > 0 && !options.years.has(accident.year)) {
-    return false;
-  }
-  if (options.stateCode !== "all" && accident.stateCode !== options.stateCode) {
-    return false;
-  }
-  return accidentMatchesRoadUserFocus(accident, options.roadUserFocus);
-}
-
-function analysisOptionsIndexKey(options: AnalysisOptions, searchRadiusMeters: number): string {
-  return [
-    options.stateCode,
-    options.clusterRadiusMeters,
-    searchRadiusMeters,
-    [...options.years].sort((a, b) => a - b).join(","),
-    roadUserFocusKey(options.roadUserFocus) || "all"
-  ].join("|");
-}
-
-function clusterAccidentSearchRadius(options: AnalysisOptions): number {
-  return Math.max(150, options.clusterRadiusMeters * 3);
-}
-
-function compareCrossingAccidents(a: CrossingAccident, b: CrossingAccident): number {
-  return (
-    b.accident.year - a.accident.year ||
-    (b.accident.month ?? 0) - (a.accident.month ?? 0) ||
-    (b.accident.day ?? 0) - (a.accident.day ?? 0) ||
-    (b.accident.hour ?? -1) - (a.accident.hour ?? -1) ||
-    severityOrder(a.accident) - severityOrder(b.accident) ||
-    a.distanceMeters - b.distanceMeters
-  );
-}
-
-function severityOrder(accident: AccidentRecord): number {
-  switch (accidentSeverity(accident)) {
-    case "fatal":
-      return 0;
-    case "serious":
-      return 1;
-    case "other":
-      return 2;
-  }
-}
-
-function accidentSeverity(accident: AccidentRecord): SeverityFilterKey {
-  if (accident.category === 1) {
-    return "fatal";
-  }
-  if (accident.category === 2) {
-    return "serious";
-  }
-  return "other";
-}
-
-function accidentSeverityLabel(accident: AccidentRecord): string {
-  if (accident.category === 1) {
-    return tr("severity.fatal");
-  }
-  if (accident.category === 2) {
-    return tr("severity.serious");
-  }
-  if (accident.category === 3) {
-    return tr("severity.light");
-  }
-  return accident.category === null ? tr("severity.unknown") : trf("records.categoryNumber", { category: accident.category });
-}
-
-function accidentTimeLabel(accident: AccidentRecord): string {
-  const parts = [accident.year ? String(accident.year) : tr("records.unknownYear")];
-  if (accident.month) {
-    parts.push(accident.day ? `${monthLabel(accident.month)} ${formatInteger(accident.day)}` : `${monthLabel(accident.month)} (${tr("records.dayNotProvided")})`);
-  }
-  if (accident.weekday) {
-    parts.push(weekdayLabel(accident.weekday));
-  }
-  if (accident.hour !== null) {
-    parts.push(`${String(accident.hour).padStart(2, "0")}:00`);
-  }
-  return parts.join(", ");
-}
-
-function monthLabel(month: number): string {
-  return tr(`month.${month}`);
-}
-
-function weekdayLabel(weekday: number): string {
-  return tr(`weekday.${weekday}`);
-}
-
-function codeLabel(value: number | null | undefined, labels: Record<number, string>): string | null {
-  if (typeof value !== "number") {
-    return null;
-  }
-  return `${value} - ${labels[value] ? tr(labels[value]) : tr("records.unknownCode")}`;
-}
-
-function roadUsersLabel(accident: AccidentRecord): string {
-  const flags: Array<[string, boolean | null]> = ROAD_USER_DEFINITIONS.map((definition) => [
-    tr(definition.labelKey),
-    definition.read(accident)
-  ]);
-  const knownFlags = flags.filter((entry): entry is [string, boolean] => entry[1] !== null);
-  if (knownFlags.length === 0) {
-    return tr("records.noRoadUserFields");
-  }
-  const involved = knownFlags.filter(([, value]) => value).map(([label]) => label);
-  return involved.length > 0 ? involved.join(", ") : tr("records.noRoadUsersInvolved");
-}
-
-function administrativeAreaLabel(accident: AccidentRecord): string {
-  const parts = [`${accident.stateName} (${accident.stateCode})`];
-  if (accident.administrativeRegionCode) {
-    parts.push(namedCodeLabel(accident.administrativeRegionName, accident.administrativeRegionCode) ?? trf("records.adminRegion", { code: accident.administrativeRegionCode }));
-  }
-  if (accident.districtCode) {
-    parts.push(namedCodeLabel(accident.districtName, accident.districtCode) ?? trf("records.district", { code: accident.districtCode }));
-  }
-  if (accident.municipalityCode) {
-    const municipalityLabel = namedCodeLabel(accident.municipalityName, accident.municipalityCode);
-    if (municipalityLabel && accident.municipalityName !== accident.districtName) {
-      parts.push(municipalityLabel);
-    } else if (!municipalityLabel && !hasEquivalentDistrictMunicipalityCode(accident)) {
-      parts.push(trf("records.municipality", { code: accident.municipalityCode }));
-    }
-  }
-  return parts.join(", ");
-}
-
-function namedCodeLabel(name: string | null, code: string | null): string | null {
-  return name && code ? `${name} (${code})` : null;
-}
-
-function hasEquivalentDistrictMunicipalityCode(accident: AccidentRecord): boolean {
-  return Boolean(
-    accident.districtName &&
-      accident.districtCode &&
-      accident.municipalityCode &&
-      normalizeCodePart(accident.municipalityCode, 3).endsWith(normalizeCodePart(accident.districtCode, 2))
-  );
-}
-
-function normalizeCodePart(value: string, width: number): string {
-  return value.trim().replace(/\D/g, "").padStart(width, "0").slice(-width);
-}
-
-function linRefLabel(accident: AccidentRecord): string | null {
-  if (typeof accident.linRefX !== "number" || typeof accident.linRefY !== "number") {
-    return null;
-  }
-  return `${formatNumber(accident.linRefX)}, ${formatNumber(accident.linRefY)} (EPSG:25832)`;
-}
-
-function recordIdLabel(accident: AccidentRecord): string {
-  const parts = [accident.id];
-  if (accident.serialNumber && accident.serialNumber !== accident.id) {
-    parts.push(trf("records.serial", { serial: accident.serialNumber }));
-  }
-  return parts.join(", ");
-}
-
-function accidentKey(accident: AccidentRecord): string {
-  return `${accident.source}\0${accident.id}`;
+function currentAccidentRecordMatchingOptions(): AnalysisOptions {
+  return committedAnalysis?.options ?? readDraftAnalysisOptions();
 }
 
 function clusterTrendSeries(cluster: IntersectionCluster, years: number[]): ClusterYearStat[] {
@@ -3456,9 +3022,7 @@ async function loadAccidentData(
   );
   if (accidents !== records) {
     accidents = records;
-    crossingAccidentIndexCache = null;
-    accidentKeyLookupCache = null;
-    accidentRecordIndexLookupCache = null;
+    clusterAccidentRecordMatcher.clearCaches();
     populateFilters();
   }
   return accidents;
@@ -3477,9 +3041,7 @@ async function loadAccidentsForAnalysis(
   );
   if (options.stateCode === "all" && accidents !== records) {
     accidents = records;
-    crossingAccidentIndexCache = null;
-    accidentKeyLookupCache = null;
-    accidentRecordIndexLookupCache = null;
+    clusterAccidentRecordMatcher.clearCaches();
     populateFilters();
   }
   return records;

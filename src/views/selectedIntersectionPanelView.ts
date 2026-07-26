@@ -1,4 +1,10 @@
 import {
+  accidentRecordRows,
+  accidentSeverity,
+  accidentSeverityLabel,
+  accidentTimeLabel
+} from "../accidentRecordDisplay";
+import {
   clusterAreaText,
   clusterStreetLabel,
   formatClusterStreetNames,
@@ -12,8 +18,6 @@ import { linePath, round, uniqueNumbers } from "../math";
 import { ROAD_USER_DEFINITIONS, type RoadUserDefinition } from "../roadUsers";
 import type { AccidentRecord, AccidentTrendDirection, ClusterYearStat, IntersectionCluster, RoadUserKey } from "../types";
 
-export type SelectedIntersectionPanelSeverity = "fatal" | "serious" | "other";
-
 export interface SelectedIntersectionPanelUrls {
   openStreetMapUrl: string;
   googleMapsUrl: string;
@@ -24,11 +28,6 @@ export interface SelectedIntersectionPanelUrls {
 export interface SelectedIntersectionPanelAccidentRecord {
   accident: AccidentRecord;
   distanceMeters: number;
-}
-
-export interface SelectedIntersectionPanelRecordRow {
-  label: string;
-  value: string;
 }
 
 export interface SelectedIntersectionPanelViewModel {
@@ -52,14 +51,6 @@ export interface RoadUserSummaryItem {
 export interface SelectedIntersectionPanelViewDependencies {
   container: HTMLElement;
   formatSeverityPercentWithContext: (cluster: IntersectionCluster) => string;
-  accidentRecordRows: (
-    accident: AccidentRecord,
-    distanceMeters: number | null,
-    streetOrder?: string[]
-  ) => SelectedIntersectionPanelRecordRow[];
-  accidentSeverity: (accident: AccidentRecord) => SelectedIntersectionPanelSeverity;
-  accidentSeverityLabel: (accident: AccidentRecord) => string;
-  accidentTimeLabel: (accident: AccidentRecord) => string;
   pressSearchUrlForAccident: (accident: AccidentRecord) => string;
 }
 
@@ -229,20 +220,19 @@ export class SelectedIntersectionPanelView {
     options: { className?: string; closeButton?: boolean; tagName?: "article" | "li" } = {}
   ): string {
     const tagName = options.tagName ?? "li";
-    const severity = this.deps.accidentSeverity(accident);
+    const severity = accidentSeverity(accident);
     const actionLinks = this.renderAccidentActionLinks(accident);
     const closeButton = options.closeButton ? this.renderIncidentDialogCloseButton() : "";
     const className = ["accident-record-item", options.className].filter(Boolean).join(" ");
-    const rows = this.deps
-      .accidentRecordRows(accident, distanceMeters, streetOrder)
+    const rows = accidentRecordRows(accident, distanceMeters, streetOrder)
       .map((row) => `<div><dt>${escapeHtml(row.label)}</dt><dd>${escapeHtml(row.value)}</dd></div>`)
       .join("");
     return `
     <${tagName} class="${className}">
       <div class="accident-record-topline">
         <span class="accident-record-number" aria-label="${escapeHtml(trf("records.incidentNumber", { number: recordNumber }))}">${recordNumber}</span>
-        <span class="severity-pill severity-${severity}">${this.deps.accidentSeverityLabel(accident)}</span>
-        <strong>${escapeHtml(this.deps.accidentTimeLabel(accident))}</strong>
+        <span class="severity-pill severity-${severity}">${accidentSeverityLabel(accident)}</span>
+        <strong>${escapeHtml(accidentTimeLabel(accident))}</strong>
         ${actionLinks}
         ${closeButton}
       </div>
