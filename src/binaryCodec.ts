@@ -13,6 +13,133 @@ export function zigZagDecode(value: number): number {
   return value % 2 === 0 ? value / 2 : -(value + 1) / 2;
 }
 
+export function writeStringId(
+  writer: BinaryWriter,
+  stringIds: Map<string, number>,
+  value: string,
+  dictionaryLabel = "binary"
+): void {
+  const id = stringIds.get(value);
+  if (id === undefined) {
+    throw new Error(`String is missing from ${dictionaryLabel} dictionary: ${value}`);
+  }
+  writer.writeVarUint(id);
+}
+
+export function writeNullableStringId(
+  writer: BinaryWriter,
+  stringIds: Map<string, number>,
+  value: string | null,
+  dictionaryLabel = "binary"
+): void {
+  if (value === null) {
+    writer.writeVarUint(0);
+    return;
+  }
+  const id = stringIds.get(value);
+  if (id === undefined) {
+    throw new Error(`String is missing from ${dictionaryLabel} dictionary: ${value}`);
+  }
+  writer.writeVarUint(id + 1);
+}
+
+export function readStringId(reader: BinaryReader, strings: string[], dictionaryLabel = "binary"): string {
+  const id = reader.readVarUint();
+  const value = strings[id];
+  if (value === undefined) {
+    throw new Error(`Invalid ${dictionaryLabel} string id ${id}.`);
+  }
+  return value;
+}
+
+export function readNullableStringId(reader: BinaryReader, strings: string[], dictionaryLabel = "binary"): string | null {
+  const id = reader.readVarUint();
+  if (id === 0) {
+    return null;
+  }
+  const value = strings[id - 1];
+  if (value === undefined) {
+    throw new Error(`Invalid ${dictionaryLabel} nullable string id ${id}.`);
+  }
+  return value;
+}
+
+export function writeNullableUint(writer: BinaryWriter, value: number | null, fieldLabel = "binary field"): void {
+  if (value === null) {
+    writer.writeVarUint(0);
+    return;
+  }
+  if (!Number.isFinite(value) || value < 0) {
+    throw new Error(`Invalid ${fieldLabel}: ${value}`);
+  }
+  writer.writeVarUint(Math.round(value) + 1);
+}
+
+export function readNullableUint(reader: BinaryReader): number | null {
+  const value = reader.readVarUint();
+  return value === 0 ? null : value - 1;
+}
+
+export function writeNullableScaledSigned(
+  writer: BinaryWriter,
+  value: number | null,
+  scale: number,
+  fieldLabel = "binary field"
+): void {
+  if (value === null) {
+    writer.writeVarUint(0);
+    return;
+  }
+  if (!Number.isFinite(value)) {
+    throw new Error(`Invalid ${fieldLabel}: ${value}`);
+  }
+  writer.writeVarUint(zigZagEncode(Math.round(value * scale)) + 1);
+}
+
+export function readNullableScaledSigned(reader: BinaryReader, scale: number): number | null {
+  const value = reader.readVarUint();
+  return value === 0 ? null : zigZagDecode(value - 1) / scale;
+}
+
+export function nullableBooleanId(value: boolean | null): number {
+  if (value === true) {
+    return 2;
+  }
+  if (value === false) {
+    return 1;
+  }
+  return 0;
+}
+
+export function readNullableBoolean(reader: BinaryReader, fieldLabel = "binary nullable boolean"): boolean | null {
+  const value = reader.readByte();
+  if (value === 0) {
+    return null;
+  }
+  if (value === 1) {
+    return false;
+  }
+  if (value === 2) {
+    return true;
+  }
+  throw new Error(`Invalid ${fieldLabel} id ${value}.`);
+}
+
+export function stateCodeNumber(value: string, fieldLabel = "binary payload"): number {
+  const number = Number.parseInt(value, 10);
+  if (!Number.isFinite(number) || number < 0) {
+    throw new Error(`Invalid state code for ${fieldLabel}: ${value}`);
+  }
+  return number;
+}
+
+export function stateCodeFromNumber(value: number): string {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`Invalid state code number for binary payload: ${value}`);
+  }
+  return String(value).padStart(2, "0");
+}
+
 export class BinaryWriter {
   private readonly chunks: Uint8Array[] = [];
   private readonly scratch = new ArrayBuffer(8);

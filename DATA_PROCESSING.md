@@ -35,7 +35,7 @@ tsc --noEmit && node scripts/build-docs.mjs
 1. Removes known generated non-data files from `docs/assets`.
 2. Builds `src/main.ts` into `docs/assets/app.js` with esbuild as a classic IIFE script for GitHub Pages and the local docs server.
 3. Creates or reuses offline data assets:
-   - `docs/assets/data-manifest.js`
+   - `docs/assets/data-manifest.json`
    - `docs/assets/accidents-state-01-*.bin.gz`, `accidents-state-02-*.bin.gz`, etc.
    - `docs/assets/analysis-default-*.bin.gz`.
 
@@ -45,15 +45,15 @@ The default all-Germany analysis is precomputed at build time. Hosted pages load
 
 When the local PBF exists, `scripts/build-streets.mjs` streams it during build and creates a compact OSM lookup bundle used while normalizing accident records. The bundle uses one global street-name dictionary and per-CSV-row integer street indexes instead of repeating street names for every accident. Rows near multiple named streets store a short integer list so intersection incidents can keep more than one nearby street name. The same lookup stores a small per-row bitmask for nearby OSM road-control tags: `junction=roundabout`/`highway=mini_roundabout` for roundabouts and `highway=traffic_signals`/`crossing=traffic_signals` for traffic lights. A local rebuild cache is written to `data/generated/street-lookup.json` and ignored by Git. The runtime app does not ship or load this lookup because normalized accident shards already contain the street names and OSM road-control flags needed by the UI.
 
-The build script also computes a SHA-256 based data version from the raw CSV file paths and bytes, the generated street lookup version when present, and the source files that define the binary data format. `docs/assets/data-manifest.js` exposes that version as `globalThis.__SICHERE_KNOTEN_DATA__.version`. It separately computes an app build fingerprint from the source files and injects it into `app.js` for analysis-cache invalidation.
+The build script also computes a SHA-256 based data version from the raw CSV file paths and bytes, the generated street lookup version when present, and the source files that define the binary data format. `docs/assets/data-manifest.json` exposes that version and the generated asset list. It separately computes an app build fingerprint from the source files and injects it into `app.js` for analysis-cache invalidation.
 
-`docs/index.html` loads the manifest before `app.js`; the app then lazy-loads accident state shard files only after a parsed-cache miss or after a user chooses an analysis setting that cannot use the bundled default analysis. Local development uses `scripts/serve-docs.mjs`, a plain HTTP server for `docs/` on `http://127.0.0.1:5173/`; rerunning it stops the previous server process first. Direct `file://` use is not supported because browsers block `fetch()` access to local gzip assets.
+`docs/index.html` loads `app.js`; the app fetches the manifest first, then lazy-loads accident state shard files only after a parsed-cache miss or after a user chooses an analysis setting that cannot use the bundled default analysis. Local development uses `scripts/serve-docs.mjs`, a plain HTTP server for `docs/` on `http://127.0.0.1:5173/`; rerunning it stops the previous server process first. Direct `file://` use is not supported because browsers block `fetch()` access to local gzip assets.
 
 ## Runtime Loading
 
 On startup, `src/main.ts` calls `loadBundledData()`.
 
-The app first ensures `docs/assets/data-manifest.js` has populated `globalThis.__SICHERE_KNOTEN_DATA__`, then attempts to load the default analysis from `analysis-default-*.bin.gz` when the current controls match the bundled defaults. When a non-default analysis needs accident records, `readBundledAccidents()` starts fetching the listed `accidents-state-*.bin.gz` files in parallel, then decodes them in manifest order. Each shard is decompressed with `fflate.gunzipSync` and decoded by `src/accidentRecordsBinary.ts` into `AccidentRecord` objects.
+The app first fetches `docs/assets/data-manifest.json`, then attempts to load the default analysis from `analysis-default-*.bin.gz` when the current controls match the bundled defaults. When a non-default analysis needs accident records, `readBundledAccidents()` starts fetching the listed `accidents-state-*.bin.gz` files in parallel, then decodes them in manifest order. Each shard is decompressed with `fflate.gunzipSync` and decoded by `src/accidentRecordsBinary.ts` into `AccidentRecord` objects.
 
 There is no runtime CSV fallback. If the generated manifest or accident state shards are missing, run `npm run build`.
 
@@ -229,7 +229,7 @@ This regenerates:
 - `docs/assets/app.js`
 - `docs/assets/app.css`
 - `docs/assets/accidents-state-*.bin.gz` only when data changed, the binary format changed, or generated shard files are missing
-- the data version in `docs/assets/data-manifest.js`
+- the data version in `docs/assets/data-manifest.json`
 
 Do not edit generated files in `docs/assets` by hand. Change source code under `src/` or raw data under `data/csv`, then rebuild. Existing browser caches are invalidated automatically when the generated data version changes.
 

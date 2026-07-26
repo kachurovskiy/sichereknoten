@@ -1,6 +1,8 @@
 import "./styles.css";
+import { serializeAnalysisOptions } from "./analysisOptions";
 import { analyzeDangerousIntersectionsInBackground, type AnalysisExecutionPlan } from "./analysisRunner";
 import { DataRepository, type AnalysisCacheContext, type DataRepositoryTelemetry } from "./dataRepository";
+import { normalizeTrendYears } from "./defaults";
 import { GeoGridIndex } from "./geo";
 import { MapCanvas, type MapIncidentViewportRequest } from "./mapCanvas";
 import { RequestGate, type RequestToken } from "./requestGate";
@@ -2334,25 +2336,7 @@ function cloneAnalysisOptions(options: AnalysisOptions): AnalysisOptions {
 }
 
 function analysisOptionsEqual(left: AnalysisOptions, right: AnalysisOptions): boolean {
-  return JSON.stringify(analysisOptionsSignature(left)) === JSON.stringify(analysisOptionsSignature(right));
-}
-
-function analysisOptionsSignature(options: AnalysisOptions): Record<string, string | number | string[]> {
-  return {
-    clusterRadiusMeters: options.clusterRadiusMeters,
-    minAccidents: options.minAccidents,
-    years: Array.from(options.years).sort((a, b) => a - b).map(String),
-    roadUserFocus: Array.from(options.roadUserFocus).sort(),
-    stateCode: options.stateCode,
-    fatalWeight: options.severityPercent.fatalWeight,
-    seriousWeight: options.severityPercent.seriousWeight,
-    fullSampleAccidents: options.severityPercent.fullSampleAccidents,
-    trendYears: options.severityPercent.trendYears,
-    trendDeadZone: options.severityPercent.trendDeadZone,
-    trendFullSignal: options.severityPercent.trendFullSignal,
-    maxTrendAdjustment: options.severityPercent.maxTrendAdjustment,
-    maxSeverityPercent: options.severityPercent.maxSeverityPercent
-  };
+  return JSON.stringify(serializeAnalysisOptions(left)) === JSON.stringify(serializeAnalysisOptions(right));
 }
 
 function populateFilters(): void {
@@ -6708,7 +6692,7 @@ function factsheetMethodologyText(cluster: IntersectionCluster): string {
 
 function factsheetTrendPeriodSetting(cluster: IntersectionCluster): number {
   const configuredTrendYears = committedAnalysis?.options.severityPercent.trendYears ?? cluster.accidentTrend.years;
-  return Math.max(2, Math.trunc(Number.isFinite(configuredTrendYears) ? configuredTrendYears : 4));
+  return normalizeTrendYears(configuredTrendYears);
 }
 
 function formatYearSelection(years: number[]): string {

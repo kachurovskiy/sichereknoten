@@ -1,6 +1,8 @@
+import { normalizeTrendYears } from "./defaults";
 import { lonLatToMeterPoint } from "./geo";
 import { administrativeRegionPopulationFor, municipalityPopulationFor, statePopulationFor } from "./municipalities";
 import { accidentMatchesRoadUserFocus } from "./roadUsers";
+import { stateNameFor } from "./states";
 import {
   AccidentRecord,
   AccidentTrend,
@@ -340,7 +342,7 @@ function finalizeCluster(
     lon: cluster.lon,
     lat: cluster.lat,
     stateCode,
-    stateName: stateNameFromCode(stateCode),
+    stateName: stateNameFor(stateCode),
     administrativeRegionCode,
     administrativeRegionName: topMapEntry(cluster.administrativeRegionCounts),
     administrativeRegionPopulation:
@@ -500,8 +502,7 @@ function summarizeStates(
 }
 
 function trendAnalysisYears(analysisYears: number[], options: SeverityPercentOptions): number[] {
-  const trendYears = Math.max(2, Math.trunc(Number.isFinite(options.trendYears) ? options.trendYears : 4));
-  return analysisYears.slice(-trendYears);
+  return analysisYears.slice(-normalizeTrendYears(options.trendYears));
 }
 
 function summarizeStateAccidents(accidents: AccidentRecord[]): PopulationAccidentSummary[] {
@@ -680,28 +681,6 @@ function topMapEntry(map: Map<string, number>): string | null {
     }
   }
   return topKey;
-}
-
-function stateNameFromCode(code: string): string {
-  const names: Record<string, string> = {
-    "01": "Schleswig-Holstein",
-    "02": "Hamburg",
-    "03": "Niedersachsen",
-    "04": "Bremen",
-    "05": "Nordrhein-Westfalen",
-    "06": "Hessen",
-    "07": "Rheinland-Pfalz",
-    "08": "Baden-Wuerttemberg",
-    "09": "Bayern",
-    "10": "Saarland",
-    "11": "Berlin",
-    "12": "Brandenburg",
-    "13": "Mecklenburg-Vorpommern",
-    "14": "Sachsen",
-    "15": "Sachsen-Anhalt",
-    "16": "Thueringen"
-  };
-  return names[code] ?? `Bundesland ${code}`;
 }
 
 function key(cx: number, cy: number): string {

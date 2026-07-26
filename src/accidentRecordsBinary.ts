@@ -1,4 +1,19 @@
-import { BinaryReader, BinaryWriter, zigZagDecode, zigZagEncode } from "./binaryCodec";
+import {
+  BinaryReader,
+  BinaryWriter,
+  nullableBooleanId,
+  readNullableBoolean,
+  readNullableScaledSigned,
+  readNullableStringId,
+  readNullableUint,
+  readStringId,
+  stateCodeFromNumber,
+  stateCodeNumber,
+  writeNullableScaledSigned,
+  writeNullableStringId,
+  writeNullableUint,
+  writeStringId
+} from "./binaryCodec";
 import { stateNameFor } from "./states";
 import type { AccidentRecord } from "./types";
 
@@ -115,15 +130,15 @@ function writeAccidentRecord(writer: BinaryWriter, stringIds: Map<string, number
   writeInlineString(writer, record.id);
   writeNullableInlineString(writer, record.serialNumber);
   writeSourceType(writer, record.sourceType);
-  writeStringId(writer, stringIds, record.source);
+  writeStringId(writer, stringIds, record.source, "accident records");
   writeNullableUint(writer, record.recordIndex ?? null, "recordIndex");
-  writer.writeVarUint(stateCodeNumber(record.stateCode));
-  writeNullableStringId(writer, stringIds, record.administrativeRegionCode);
-  writeNullableStringId(writer, stringIds, record.districtCode);
-  writeNullableStringId(writer, stringIds, record.municipalityCode);
-  writeNullableStringId(writer, stringIds, record.administrativeRegionName);
-  writeNullableStringId(writer, stringIds, record.districtName);
-  writeNullableStringId(writer, stringIds, record.municipalityName);
+  writer.writeVarUint(stateCodeNumber(record.stateCode, "accident records binary"));
+  writeNullableStringId(writer, stringIds, record.administrativeRegionCode, "accident records");
+  writeNullableStringId(writer, stringIds, record.districtCode, "accident records");
+  writeNullableStringId(writer, stringIds, record.municipalityCode, "accident records");
+  writeNullableStringId(writer, stringIds, record.administrativeRegionName, "accident records");
+  writeNullableStringId(writer, stringIds, record.districtName, "accident records");
+  writeNullableStringId(writer, stringIds, record.municipalityName, "accident records");
   writeRequiredUint(writer, record.year, "year");
   for (const field of ACCIDENT_NULLABLE_INTEGER_FIELDS) {
     writeNullableUint(writer, record[field], field);
@@ -142,15 +157,15 @@ function readAccidentRecord(reader: BinaryReader, strings: string[]): AccidentRe
   const id = readInlineString(reader);
   const serialNumber = readNullableInlineString(reader);
   const sourceType = readSourceType(reader);
-  const source = readString(reader, strings);
+  const source = readStringId(reader, strings, "accident records");
   const recordIndex = readNullableUint(reader);
   const stateCode = stateCodeFromNumber(reader.readVarUint());
-  const administrativeRegionCode = readNullableString(reader, strings);
-  const districtCode = readNullableString(reader, strings);
-  const municipalityCode = readNullableString(reader, strings);
-  const administrativeRegionName = readNullableString(reader, strings);
-  const districtName = readNullableString(reader, strings);
-  const municipalityName = readNullableString(reader, strings);
+  const administrativeRegionCode = readNullableStringId(reader, strings, "accident records");
+  const districtCode = readNullableStringId(reader, strings, "accident records");
+  const municipalityCode = readNullableStringId(reader, strings, "accident records");
+  const administrativeRegionName = readNullableStringId(reader, strings, "accident records");
+  const districtName = readNullableStringId(reader, strings, "accident records");
+  const municipalityName = readNullableStringId(reader, strings, "accident records");
   const year = reader.readVarUint();
   const month = readNullableUint(reader);
   const day = readNullableUint(reader);
@@ -230,28 +245,8 @@ function writeStringDictionary(writer: BinaryWriter, strings: string[]): void {
 function writeStringArray(writer: BinaryWriter, stringIds: Map<string, number>, values: string[]): void {
   writer.writeVarUint(values.length);
   for (const value of values) {
-    writeStringId(writer, stringIds, value);
+    writeStringId(writer, stringIds, value, "accident records");
   }
-}
-
-function writeStringId(writer: BinaryWriter, stringIds: Map<string, number>, value: string): void {
-  const id = stringIds.get(value);
-  if (id === undefined) {
-    throw new Error(`String is missing from accident records dictionary: ${value}`);
-  }
-  writer.writeVarUint(id);
-}
-
-function writeNullableStringId(writer: BinaryWriter, stringIds: Map<string, number>, value: string | null): void {
-  if (value === null) {
-    writer.writeVarUint(0);
-    return;
-  }
-  const id = stringIds.get(value);
-  if (id === undefined) {
-    throw new Error(`String is missing from accident records dictionary: ${value}`);
-  }
-  writer.writeVarUint(id + 1);
 }
 
 function writeInlineString(writer: BinaryWriter, value: string): void {
@@ -282,43 +277,11 @@ function writeRequiredUint(writer: BinaryWriter, value: number, field: string): 
   writer.writeVarUint(Math.round(value));
 }
 
-function writeNullableUint(writer: BinaryWriter, value: number | null, field: string): void {
-  if (value === null) {
-    writer.writeVarUint(0);
-    return;
-  }
-  if (!Number.isFinite(value) || value < 0) {
-    throw new Error(`Invalid accident record ${field}: ${value}`);
-  }
-  writer.writeVarUint(Math.round(value) + 1);
-}
-
 function writeFloat64(writer: BinaryWriter, value: number, field: string): void {
   if (!Number.isFinite(value)) {
     throw new Error(`Invalid accident record ${field}: ${value}`);
   }
   writer.writeFloat64(value);
-}
-
-function writeNullableScaledSigned(writer: BinaryWriter, value: number | null, scale: number, field: string): void {
-  if (value === null) {
-    writer.writeVarUint(0);
-    return;
-  }
-  if (!Number.isFinite(value)) {
-    throw new Error(`Invalid accident record ${field}: ${value}`);
-  }
-  writer.writeVarUint(zigZagEncode(Math.round(value * scale)) + 1);
-}
-
-function nullableBooleanId(value: boolean | null): number {
-  if (value === true) {
-    return 2;
-  }
-  if (value === false) {
-    return 1;
-  }
-  return 0;
 }
 
 function readStringDictionary(reader: BinaryReader): string[] {
@@ -334,30 +297,9 @@ function readStringArray(reader: BinaryReader, strings: string[]): string[] {
   const count = reader.readVarUint();
   const values: string[] = new Array(count);
   for (let index = 0; index < count; index += 1) {
-    values[index] = readString(reader, strings);
+    values[index] = readStringId(reader, strings, "accident records");
   }
   return values;
-}
-
-function readString(reader: BinaryReader, strings: string[]): string {
-  const id = reader.readVarUint();
-  const value = strings[id];
-  if (value === undefined) {
-    throw new Error(`Invalid accident records string id ${id}.`);
-  }
-  return value;
-}
-
-function readNullableString(reader: BinaryReader, strings: string[]): string | null {
-  const id = reader.readVarUint();
-  if (id === 0) {
-    return null;
-  }
-  const value = strings[id - 1];
-  if (value === undefined) {
-    throw new Error(`Invalid accident records nullable string id ${id}.`);
-  }
-  return value;
 }
 
 function readInlineString(reader: BinaryReader): string {
@@ -382,40 +324,4 @@ function readSourceType(reader: BinaryReader): AccidentRecord["sourceType"] {
     throw new Error(`Invalid accident record source type id ${id}.`);
   }
   return sourceType;
-}
-
-function readNullableUint(reader: BinaryReader): number | null {
-  const value = reader.readVarUint();
-  return value === 0 ? null : value - 1;
-}
-
-function readNullableScaledSigned(reader: BinaryReader, scale: number): number | null {
-  const value = reader.readVarUint();
-  return value === 0 ? null : zigZagDecode(value - 1) / scale;
-}
-
-function readNullableBoolean(reader: BinaryReader): boolean | null {
-  const value = reader.readByte();
-  if (value === 0) {
-    return null;
-  }
-  if (value === 1) {
-    return false;
-  }
-  if (value === 2) {
-    return true;
-  }
-  throw new Error(`Invalid accident records nullable boolean id ${value}.`);
-}
-
-function stateCodeNumber(value: string): number {
-  const number = Number.parseInt(value, 10);
-  if (!Number.isFinite(number) || number < 0) {
-    throw new Error(`Invalid state code for accident records binary: ${value}`);
-  }
-  return number;
-}
-
-function stateCodeFromNumber(value: number): string {
-  return String(value).padStart(2, "0");
 }

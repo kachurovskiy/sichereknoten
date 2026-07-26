@@ -1,15 +1,9 @@
 import { gunzipSync } from "fflate";
 import { decodeAccidentRecordsBinary } from "./accidentRecordsBinary";
+import { analysisOptionsMetadataMatches, type SerializedAnalysisOptions } from "./analysisOptions";
 import { readAnalysisCache, resetAppStorage, writeAnalysisCache } from "./cache";
 import { decodeDefaultAnalysisBinary } from "./defaultAnalysisBinary";
-import { roadUserFocusKey } from "./roadUsers";
-import {
-  AccidentRecord,
-  AnalysisOptions,
-  AnalysisResult,
-  RoadUserKey,
-  SeverityPercentOptions
-} from "./types";
+import { AccidentRecord, AnalysisOptions, AnalysisResult } from "./types";
 
 export type DataRepositoryTelemetryMetadata = Record<string, string | number | boolean | null>;
 
@@ -46,15 +40,6 @@ interface LoadedAccidentShard {
   compressedBytes: Uint8Array;
 }
 
-interface SerializedAnalysisOptions {
-  clusterRadiusMeters: number;
-  minAccidents: number;
-  years: number[];
-  roadUserFocus: RoadUserKey[];
-  stateCode: string | "all";
-  severityPercent: SeverityPercentOptions;
-}
-
 interface EmbeddedDefaultAnalysisMetadata {
   dataVersion: string;
   analysisCacheVersion: string;
@@ -77,10 +62,6 @@ interface EmbeddedDataBundle {
   defaultAnalysisMetadata?: EmbeddedDefaultAnalysisMetadata;
 }
 
-declare global {
-  var __SICHERE_KNOTEN_DATA__: EmbeddedDataBundle | undefined;
-}
-
 export interface AnalysisCacheContext {
   dataVersion: string;
   appVersion: string;
@@ -96,7 +77,7 @@ export class DataRepository {
   private accidentDataLoadPromise: Promise<AccidentRecord[]> | null = null;
   private accidentStateRecords = new Map<string, AccidentRecord[]>();
   private accidentStateLoadPromises = new Map<string, Promise<AccidentRecord[]>>();
-  private readonly offlineBundleScriptPromises = new Map<string, Promise<string>>();
+  private manifest: EmbeddedDataBundle | null = null;
 
   resetRuntimeState(): void {
     this.accidents = [];
@@ -121,36 +102,38 @@ export class DataRepository {
   }
 
   hasStateShard(stateCode: string): boolean {
-    const bundle = globalThis.__SICHERE_KNOTEN_DATA__;
+    const bundle = this.manifest;
     return Boolean(bundle?.accidentShardFiles?.some((entry) => entry.stateCode === stateCode));
   }
 
   async ensureManifest(telemetry: DataRepositoryTelemetry | null): Promise<EmbeddedDataBundle> {
-    const existingBundle = globalThis.__SICHERE_KNOTEN_DATA__;
+    const existingBundle = this.manifest;
     if (existingBundle?.version) {
       return existingBundle;
     }
 
-    await this.measure(
+    const loaded = await this.measure(
       telemetry,
       "load data manifest",
-      "data-manifest.js",
-      () => this.loadOfflineBundleScript("data-manifest.js"),
-      (url) => ({
+      "data-manifest.json",
+      () => this.fetchOfflineBundleJson<EmbeddedDataBundle>("data-manifest.json"),
+      ({ url, byteLength }) => ({
         url,
+        bytes: byteLength,
         automatic: true
       })
     );
 
-    const loadedBundle = globalThis.__SICHERE_KNOTEN_DATA__;
-    if (!loadedBundle?.version) {
+    const loadedBundle = loaded.data;
+    if (!loadedBundle?.version || !Array.isArray(loadedBundle.files)) {
       throw new Error("Bundled data manifest is missing. Run npm run build so docs/assets contains the generated offline bundle.");
     }
+    this.manifest = loadedBundle;
     return loadedBundle;
   }
 
   dataVersion(): string {
-    const bundle = globalThis.__SICHERE_KNOTEN_DATA__;
+    const bundle = this.manifest;
     if (bundle?.version) {
       return bundle.version;
     }
@@ -162,7 +145,7 @@ export class DataRepository {
 
   bundledYears(): number[] {
     const years = new Set<number>();
-    for (const file of globalThis.__SICHERE_KNOTEN_DATA__?.files ?? []) {
+    for (const file of this.manifest?.files ?? []) {
       const label = `${file.path} ${file.name}`;
       for (const match of label.matchAll(/(20\d{2})/g)) {
         years.add(Number(match[1]));
@@ -172,7 +155,7 @@ export class DataRepository {
   }
 
   latestBundledFileDate(): Date | null {
-    const timestamps = (globalThis.__SICHERE_KNOTEN_DATA__?.files ?? [])
+    const timestamps = (this.manifest?.files ?? [])
       .map((file) => (file.modifiedTime ? new Date(file.modifiedTime) : null))
       .filter((date): date is Date => date instanceof Date && Number.isFinite(date.getTime()))
       .sort((a, b) => b.getTime() - a.getTime());
@@ -186,7 +169,7 @@ export class DataRepository {
     detail: string,
     telemetry: DataRepositoryTelemetry | null
   ): Promise<AnalysisResult | null> {
-    const bundle = globalThis.__SICHERE_KNOTEN_DATA__;
+    const bundle = await this.ensureManifest(telemetry);
     const fileName = bundle?.defaultAnalysisFile;
     const metadata = bundle?.defaultAnalysisMetadata;
     if (typeof fileName !== "string" || !metadata) {
@@ -195,7 +178,7 @@ export class DataRepository {
       });
       return null;
     }
-    if (!this.defaultAnalysisMetadataMatches(metadata, dataVersion, analysisCacheVersion, options)) {
+    if (!analysisOptionsMetadataMatches(metadata, dataVersion, analysisCacheVersion, options)) {
       telemetry?.record("skip bundled default analysis", detail, {
         reason: "settings or version mismatch"
       });
@@ -203,8 +186,8 @@ export class DataRepository {
     }
 
     try {
-      const bundledAnalysis = await this.ensureBundledDefaultAnalysis(fileName, telemetry);
-      if (!this.defaultAnalysisMetadataMatches(bundledAnalysis.metadata, dataVersion, analysisCacheVersion, options)) {
+      const bundledAnalysis = await this.ensureBundledDefaultAnalysis(fileName, metadata, telemetry);
+      if (!analysisOptionsMetadataMatches(bundledAnalysis.metadata, dataVersion, analysisCacheVersion, options)) {
         telemetry?.record("skip bundled default analysis", detail, {
           reason: "loaded bundle metadata mismatch"
         });
@@ -383,6 +366,7 @@ export class DataRepository {
 
   private async ensureBundledDefaultAnalysis(
     fileName: string,
+    metadata: EmbeddedDefaultAnalysisMetadata,
     telemetry: DataRepositoryTelemetry | null
   ): Promise<LoadedDefaultAnalysis> {
     if (!fileName.toLowerCase().endsWith(".bin.gz")) {
@@ -391,7 +375,7 @@ export class DataRepository {
     const compressedBytes = await this.loadBundledDefaultAnalysisBytes(fileName, telemetry);
     return {
       id: "analysis-default",
-      metadata: globalThis.__SICHERE_KNOTEN_DATA__!.defaultAnalysisMetadata!,
+      metadata,
       size: 0,
       compressedSize: compressedBytes.byteLength,
       compressedBytes
@@ -443,43 +427,22 @@ export class DataRepository {
     };
   }
 
-  private defaultAnalysisMetadataMatches(
-    metadata: EmbeddedDefaultAnalysisMetadata,
-    dataVersion: string,
-    analysisCacheVersion: string,
-    options: AnalysisOptions
-  ): boolean {
-    return (
-      metadata.dataVersion === dataVersion &&
-      metadata.analysisCacheVersion === analysisCacheVersion &&
-      JSON.stringify(metadata.options) === JSON.stringify(serializeAnalysisOptionsForBundle(options))
-    );
+  private async fetchOfflineBundleJson<T>(fileName: string): Promise<{ data: T; url: string; byteLength: number }> {
+    const { bytes, url } = await this.fetchOfflineBundleAsset(fileName, { cache: "no-store" });
+    return {
+      data: JSON.parse(new TextDecoder().decode(bytes)) as T,
+      url,
+      byteLength: bytes.byteLength
+    };
   }
 
-  private async loadOfflineBundleScript(fileName: string): Promise<string> {
+  private async fetchOfflineBundleAsset(fileName: string, init?: RequestInit): Promise<{ bytes: Uint8Array; url: string }> {
     const urls = this.offlineBundleAssetUrls(fileName);
     let lastError: unknown = null;
 
     for (const url of urls) {
       try {
-        await this.appendOfflineBundleScript(url);
-        return url;
-      } catch (error) {
-        lastError = error;
-      }
-    }
-
-    const detail = lastError ? ` Last error: ${errorMessage(lastError)}` : "";
-    throw new Error(`Could not load offline data asset ${fileName}.${detail}`);
-  }
-
-  private async fetchOfflineBundleAsset(fileName: string): Promise<{ bytes: Uint8Array; url: string }> {
-    const urls = this.offlineBundleAssetUrls(fileName);
-    let lastError: unknown = null;
-
-    for (const url of urls) {
-      try {
-        const response = await fetch(url);
+        const response = await fetch(url, init);
         if (!response.ok) {
           throw new Error(`HTTP ${response.status} ${response.statusText}`.trim());
         }
@@ -507,28 +470,6 @@ export class DataRepository {
     return uniqueStrings([new URL(preferred, document.baseURI).href, new URL(fallback, document.baseURI).href]);
   }
 
-  private appendOfflineBundleScript(url: string): Promise<string> {
-    const existingPromise = this.offlineBundleScriptPromises.get(url);
-    if (existingPromise) {
-      return existingPromise;
-    }
-
-    const promise = new Promise<string>((resolve, reject) => {
-      const script = document.createElement("script");
-      script.src = url;
-      script.async = false;
-      script.onload = () => resolve(url);
-      script.onerror = () => {
-        script.remove();
-        this.offlineBundleScriptPromises.delete(url);
-        reject(new Error(`Failed to load ${url}`));
-      };
-      document.head.append(script);
-    });
-    this.offlineBundleScriptPromises.set(url, promise);
-    return promise;
-  }
-
   private normalizeAccidentRecordIndexes(records: AccidentRecord[]): AccidentRecord[] {
     if (records.every((record) => typeof record.recordIndex === "number")) {
       return records.sort((a, b) => (a.recordIndex ?? 0) - (b.recordIndex ?? 0));
@@ -548,17 +489,6 @@ export class DataRepository {
   ): Promise<T> {
     return telemetry ? telemetry.measure(name, detail, work, metadata) : work();
   }
-}
-
-function serializeAnalysisOptionsForBundle(options: AnalysisOptions): SerializedAnalysisOptions {
-  return {
-    clusterRadiusMeters: options.clusterRadiusMeters,
-    minAccidents: options.minAccidents,
-    years: Array.from(options.years).sort((a, b) => a - b),
-    roadUserFocus: Array.from(options.roadUserFocus).sort(),
-    stateCode: options.stateCode,
-    severityPercent: { ...options.severityPercent }
-  };
 }
 
 function uniqueStrings(values: string[]): string[] {

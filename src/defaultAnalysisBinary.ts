@@ -1,4 +1,19 @@
-import { BinaryReader, BinaryWriter, zigZagDecode, zigZagEncode } from "./binaryCodec";
+import {
+  BinaryReader,
+  BinaryWriter,
+  nullableBooleanId,
+  readNullableBoolean,
+  readNullableScaledSigned,
+  readNullableStringId,
+  readNullableUint,
+  readStringId,
+  stateCodeFromNumber,
+  stateCodeNumber,
+  writeNullableScaledSigned,
+  writeNullableStringId,
+  writeNullableUint,
+  writeStringId
+} from "./binaryCodec";
 import { stateNameFor } from "./states";
 import type {
   AccidentTrendDirection,
@@ -116,15 +131,15 @@ function writeAnalysisCluster(writer: BinaryWriter, stringIds: Map<string, numbe
   writer.writeVarUint(clusterIdNumber(cluster.id));
   writer.writeSignedVarInt(Math.round(cluster.lon * DEFAULT_ANALYSIS_COORDINATE_SCALE));
   writer.writeSignedVarInt(Math.round(cluster.lat * DEFAULT_ANALYSIS_COORDINATE_SCALE));
-  writer.writeVarUint(stateCodeNumber(cluster.stateCode));
-  writeNullableStringId(writer, stringIds, cluster.administrativeRegionCode);
-  writeNullableStringId(writer, stringIds, cluster.administrativeRegionName);
-  writeNullableUint(writer, cluster.administrativeRegionPopulation);
-  writeNullableStringId(writer, stringIds, cluster.districtCode);
-  writeNullableStringId(writer, stringIds, cluster.districtName);
-  writeNullableStringId(writer, stringIds, cluster.municipalityCode);
-  writeNullableStringId(writer, stringIds, cluster.municipalityName);
-  writeNullableUint(writer, cluster.municipalityPopulation);
+  writer.writeVarUint(stateCodeNumber(cluster.stateCode, "default analysis binary"));
+  writeNullableStringId(writer, stringIds, cluster.administrativeRegionCode, "default analysis");
+  writeNullableStringId(writer, stringIds, cluster.administrativeRegionName, "default analysis");
+  writeNullableUint(writer, cluster.administrativeRegionPopulation, "default analysis administrativeRegionPopulation");
+  writeNullableStringId(writer, stringIds, cluster.districtCode, "default analysis");
+  writeNullableStringId(writer, stringIds, cluster.districtName, "default analysis");
+  writeNullableStringId(writer, stringIds, cluster.municipalityCode, "default analysis");
+  writeNullableStringId(writer, stringIds, cluster.municipalityName, "default analysis");
+  writeNullableUint(writer, cluster.municipalityPopulation, "default analysis municipalityPopulation");
   writer.writeVarUint(cluster.accidentCount);
   writer.writeVarUint(cluster.fatalCount);
   writer.writeVarUint(cluster.seriousCount);
@@ -132,7 +147,7 @@ function writeAnalysisCluster(writer: BinaryWriter, stringIds: Map<string, numbe
   writer.writeVarUint(cluster.vulnerableCount);
   writer.writeVarUint(streetNames.length);
   for (const streetName of streetNames) {
-    writeStringId(writer, stringIds, streetName);
+    writeStringId(writer, stringIds, streetName, "default analysis");
   }
   writer.writeByte(nullableBooleanId(cluster.osmRoundabout));
   writer.writeByte(nullableBooleanId(cluster.osmTrafficSignal));
@@ -150,7 +165,7 @@ function writeAnalysisCluster(writer: BinaryWriter, stringIds: Map<string, numbe
 }
 
 function writeStateSummary(writer: BinaryWriter, summary: StateSummary): void {
-  writer.writeVarUint(stateCodeNumber(summary.stateCode));
+  writer.writeVarUint(stateCodeNumber(summary.stateCode, "default analysis binary"));
   writer.writeVarUint(summary.accidentCount);
   writer.writeVarUint(summary.clusterCount);
   writer.writeVarUint(summary.fatalCount);
@@ -162,10 +177,10 @@ function writeStateSummary(writer: BinaryWriter, summary: StateSummary): void {
 function writePopulationSummaries(writer: BinaryWriter, stringIds: Map<string, number>, summaries: PopulationAccidentSummary[]): void {
   writer.writeVarUint(summaries.length);
   for (const summary of summaries) {
-    writeStringId(writer, stringIds, summary.key);
-    writeStringId(writer, stringIds, summary.name);
-    writer.writeVarUint(stateCodeNumber(summary.stateCode));
-    writeNullableUint(writer, summary.population);
+    writeStringId(writer, stringIds, summary.key, "default analysis");
+    writeStringId(writer, stringIds, summary.name, "default analysis");
+    writer.writeVarUint(stateCodeNumber(summary.stateCode, "default analysis binary"));
+    writeNullableUint(writer, summary.population, "default analysis population");
     writer.writeVarUint(summary.accidentCount);
     writer.writeVarUint(summary.fatalCount);
     writer.writeVarUint(summary.seriousCount);
@@ -175,10 +190,15 @@ function writePopulationSummaries(writer: BinaryWriter, stringIds: Map<string, n
 
 function writeAccidentTrend(writer: BinaryWriter, trend: IntersectionCluster["accidentTrend"]): void {
   writer.writeByte(DEFAULT_ANALYSIS_TREND_DIRECTION_IDS.get(trend.direction) ?? 0);
-  writeNullableScaledSigned(writer, trend.slopePerYear, DEFAULT_ANALYSIS_TREND_SCALE);
-  writeNullableScaledSigned(writer, trend.relativeSlopePerYear, DEFAULT_ANALYSIS_TREND_SCALE);
-  writeNullableUint(writer, trend.startAccidents);
-  writeNullableUint(writer, trend.endAccidents);
+  writeNullableScaledSigned(writer, trend.slopePerYear, DEFAULT_ANALYSIS_TREND_SCALE, "default analysis trend slopePerYear");
+  writeNullableScaledSigned(
+    writer,
+    trend.relativeSlopePerYear,
+    DEFAULT_ANALYSIS_TREND_SCALE,
+    "default analysis trend relativeSlopePerYear"
+  );
+  writeNullableUint(writer, trend.startAccidents, "default analysis trend startAccidents");
+  writeNullableUint(writer, trend.endAccidents, "default analysis trend endAccidents");
   writer.writeVarUint(trend.years);
 }
 
@@ -203,44 +223,6 @@ function writeNullableClusterId(writer: BinaryWriter, cluster: IntersectionClust
   writer.writeVarUint(cluster ? clusterIdNumber(cluster.id) + 1 : 0);
 }
 
-function writeNullableUint(writer: BinaryWriter, value: number | null): void {
-  writer.writeVarUint(typeof value === "number" ? Math.max(0, Math.round(value)) + 1 : 0);
-}
-
-function writeNullableScaledSigned(writer: BinaryWriter, value: number | null, scale: number): void {
-  writer.writeVarUint(typeof value === "number" ? zigZagEncode(Math.round(value * scale)) + 1 : 0);
-}
-
-function writeStringId(writer: BinaryWriter, stringIds: Map<string, number>, value: string): void {
-  const id = stringIds.get(value);
-  if (id === undefined) {
-    throw new Error(`String is missing from default analysis dictionary: ${value}`);
-  }
-  writer.writeVarUint(id);
-}
-
-function writeNullableStringId(writer: BinaryWriter, stringIds: Map<string, number>, value: string | null): void {
-  if (value === null) {
-    writer.writeVarUint(0);
-    return;
-  }
-  const id = stringIds.get(value);
-  if (id === undefined) {
-    throw new Error(`String is missing from default analysis dictionary: ${value}`);
-  }
-  writer.writeVarUint(id + 1);
-}
-
-function nullableBooleanId(value: boolean | null): number {
-  if (value === true) {
-    return 2;
-  }
-  if (value === false) {
-    return 1;
-  }
-  return 0;
-}
-
 function readAnalysisCluster(reader: BinaryReader, strings: string[]): IntersectionCluster {
   const id = `c-${reader.readVarUint()}`;
   const lon = reader.readSignedVarInt() / DEFAULT_ANALYSIS_COORDINATE_SCALE;
@@ -252,13 +234,13 @@ function readAnalysisCluster(reader: BinaryReader, strings: string[]): Intersect
     lat,
     stateCode,
     stateName: stateNameFor(stateCode),
-    administrativeRegionCode: readNullableString(reader, strings),
-    administrativeRegionName: readNullableString(reader, strings),
+    administrativeRegionCode: readNullableStringId(reader, strings, "default analysis"),
+    administrativeRegionName: readNullableStringId(reader, strings, "default analysis"),
     administrativeRegionPopulation: readNullableUint(reader),
-    districtCode: readNullableString(reader, strings),
-    districtName: readNullableString(reader, strings),
-    municipalityCode: readNullableString(reader, strings),
-    municipalityName: readNullableString(reader, strings),
+    districtCode: readNullableStringId(reader, strings, "default analysis"),
+    districtName: readNullableStringId(reader, strings, "default analysis"),
+    municipalityCode: readNullableStringId(reader, strings, "default analysis"),
+    municipalityName: readNullableStringId(reader, strings, "default analysis"),
     municipalityPopulation: readNullableUint(reader),
     accidentCount: reader.readVarUint(),
     fatalCount: reader.readVarUint(),
@@ -330,8 +312,8 @@ function readPopulationSummaries(reader: BinaryReader, strings: string[]): Popul
   const count = reader.readVarUint();
   const summaries: PopulationAccidentSummary[] = new Array(count);
   for (let index = 0; index < count; index += 1) {
-    const key = readString(reader, strings);
-    const name = readString(reader, strings);
+    const key = readStringId(reader, strings, "default analysis");
+    const name = readStringId(reader, strings, "default analysis");
     const stateCode = stateCodeFromNumber(reader.readVarUint());
     summaries[index] = {
       key,
@@ -362,7 +344,7 @@ function readStringArray(reader: BinaryReader, strings: string[]): string[] {
   const count = reader.readVarUint();
   const values: string[] = new Array(count);
   for (let index = 0; index < count; index += 1) {
-    values[index] = readString(reader, strings);
+    values[index] = readStringId(reader, strings, "default analysis");
   }
   return values;
 }
@@ -411,63 +393,6 @@ function readVarUintArray(reader: BinaryReader): number[] {
     values[index] = reader.readVarUint();
   }
   return values;
-}
-
-function readString(reader: BinaryReader, strings: string[]): string {
-  const id = reader.readVarUint();
-  const value = strings[id];
-  if (value === undefined) {
-    throw new Error(`Invalid default analysis string id ${id}.`);
-  }
-  return value;
-}
-
-function readNullableString(reader: BinaryReader, strings: string[]): string | null {
-  const id = reader.readVarUint();
-  if (id === 0) {
-    return null;
-  }
-  const value = strings[id - 1];
-  if (value === undefined) {
-    throw new Error(`Invalid default analysis nullable string id ${id}.`);
-  }
-  return value;
-}
-
-function readNullableUint(reader: BinaryReader): number | null {
-  const value = reader.readVarUint();
-  return value === 0 ? null : value - 1;
-}
-
-function readNullableScaledSigned(reader: BinaryReader, scale: number): number | null {
-  const value = reader.readVarUint();
-  return value === 0 ? null : zigZagDecode(value - 1) / scale;
-}
-
-function readNullableBoolean(reader: BinaryReader): boolean | null {
-  const value = reader.readByte();
-  if (value === 0) {
-    return null;
-  }
-  if (value === 1) {
-    return false;
-  }
-  if (value === 2) {
-    return true;
-  }
-  throw new Error(`Invalid default analysis nullable boolean id ${value}.`);
-}
-
-function stateCodeNumber(value: string): number {
-  const number = Number.parseInt(value, 10);
-  if (!Number.isFinite(number) || number < 0) {
-    throw new Error(`Invalid state code for default analysis binary: ${value}`);
-  }
-  return number;
-}
-
-function stateCodeFromNumber(value: number): string {
-  return String(value).padStart(2, "0");
 }
 
 function clusterIdNumber(value: string): number {

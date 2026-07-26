@@ -3,7 +3,6 @@ import { createHash } from "node:crypto";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { copyFile, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { runInNewContext } from "node:vm";
 import { buildStreetLookupBundle } from "./build-streets.mjs";
 
 const root = process.cwd();
@@ -19,7 +18,7 @@ async function buildDocs() {
   const streetLookupBundle = await buildStreetLookupBundle({ root, sourceDataDir, csvFiles: csvFileList });
   const appVersion = await hashAppSources();
   const analysisCacheVersion = await hashAnalysisSources();
-  const dataScriptTags = await writeDataBundle(normalizedDataCsvFileList, streetLookupBundle, analysisCacheVersion);
+  await writeDataBundle(normalizedDataCsvFileList, streetLookupBundle, analysisCacheVersion);
 
   await build({
     entryPoints: [path.join(root, "src/main.ts")],
@@ -53,7 +52,7 @@ async function buildDocs() {
     .replace("  </head>", `    <link rel="stylesheet" href="./assets/app.css?v=${appVersion}" />\n  </head>`)
     .replace(
       '    <script type="module" src="/src/main.ts"></script>',
-      `${dataScriptTags.map((fileName) => `    <script src="./assets/${fileName}?v=${appVersion}"></script>`).join("\n")}\n    <script src="./assets/app.js?v=${appVersion}"></script>`
+      `    <script src="./assets/app.js?v=${appVersion}"></script>`
     );
 
   await writeFile(path.join(docsDir, "index.html"), docsHtml);
@@ -65,11 +64,18 @@ async function writeDataBundle(files, streetLookup, analysisCacheVersion) {
   const dataVersion = await hashFiles(files, streetLookup);
   const fileMetadata = await sourceFileMetadata(files);
   const defaultAnalysisOptions = await defaultAnalysisOptionsFromHtml(files);
+  const { analysisOptionsMetadataMatches, serializeAnalysisOptionsForBundle } = await loadAnalysisOptionsModule();
   const reusableAccidentShardFiles = await reusableAccidentShards(dataVersion);
   const accidentShardFiles = reusableAccidentShardFiles ?? (await writeAccidentShards(dataVersion, files, streetLookup));
   const defaultAnalysis =
-    (await reusableDefaultAnalysis(dataVersion, analysisCacheVersion, defaultAnalysisOptions)) ??
-    (await writeDefaultAnalysis(dataVersion, analysisCacheVersion, accidentShardFiles, defaultAnalysisOptions));
+    (await reusableDefaultAnalysis(dataVersion, analysisCacheVersion, defaultAnalysisOptions, analysisOptionsMetadataMatches)) ??
+    (await writeDefaultAnalysis(
+      dataVersion,
+      analysisCacheVersion,
+      accidentShardFiles,
+      defaultAnalysisOptions,
+      serializeAnalysisOptionsForBundle
+    ));
 
   if (reusableAccidentShardFiles) {
     await removeGeneratedAccidentDataFiles(new Set(reusableAccidentShardFiles.map((file) => file.fileName)));
@@ -80,7 +86,6 @@ async function writeDataBundle(files, streetLookup, analysisCacheVersion) {
   await removeGeneratedDefaultAnalysisFiles(new Set([defaultAnalysis.fileName]));
 
   await writeDataManifest(dataVersion, fileMetadata, accidentShardFiles, defaultAnalysis);
-  return ["data-manifest.js"];
 }
 
 async function writeAccidentShards(dataVersion, files, streetLookup) {
@@ -105,12 +110,14 @@ async function writeAccidentShards(dataVersion, files, streetLookup) {
 
 async function writeDataManifest(dataVersion, fileMetadata, accidentShardFiles, defaultAnalysis) {
   await writeFile(
-    path.join(assetsDir, "data-manifest.js"),
-    `globalThis.__SICHERE_KNOTEN_DATA__={version:${JSON.stringify(dataVersion)},files:${JSON.stringify(
-      fileMetadata
-    )},accidentShardFiles:${JSON.stringify(accidentShardFiles)},defaultAnalysisFile:${JSON.stringify(
-      defaultAnalysis.fileName
-    )},defaultAnalysisMetadata:${JSON.stringify(defaultAnalysis.metadata)}};\n`
+    path.join(assetsDir, "data-manifest.json"),
+    `${JSON.stringify({
+      version: dataVersion,
+      files: fileMetadata,
+      accidentShardFiles,
+      defaultAnalysisFile: defaultAnalysis.fileName,
+      defaultAnalysisMetadata: defaultAnalysis.metadata
+    })}\n`
   );
 }
 
@@ -141,6 +148,7 @@ function isGeneratedAsset(fileName) {
     fileName === "csv-parser-worker.js" ||
     fileName === "streets.js" ||
     fileName === "site-version.json" ||
+    fileName === "data-manifest.js" ||
     /^data-\d+\.js$/.test(fileName)
   );
 }
@@ -176,7 +184,7 @@ async function reusableAccidentShards(dataVersion) {
   return shardFiles.sort((a, b) => a.stateCode.localeCompare(b.stateCode));
 }
 
-async function reusableDefaultAnalysis(dataVersion, analysisCacheVersion, options) {
+async function reusableDefaultAnalysis(dataVersion, analysisCacheVersion, options, analysisOptionsMetadataMatches) {
   const manifest = await readExistingDataManifest();
   const fileName = manifest?.defaultAnalysisFile;
   const metadata = manifest?.defaultAnalysisMetadata;
@@ -185,7 +193,7 @@ async function reusableDefaultAnalysis(dataVersion, analysisCacheVersion, option
     manifest.version !== dataVersion ||
     typeof fileName !== "string" ||
     !/^analysis-default-[\w-]+\.bin\.gz$/.test(fileName) ||
-    !defaultAnalysisMetadataMatches(metadata, dataVersion, analysisCacheVersion, options)
+    !analysisOptionsMetadataMatches(metadata, dataVersion, analysisCacheVersion, options)
   ) {
     return null;
   }
@@ -197,7 +205,7 @@ async function reusableDefaultAnalysis(dataVersion, analysisCacheVersion, option
   return { fileName, metadata };
 }
 
-async function writeDefaultAnalysis(dataVersion, analysisCacheVersion, accidentShardFiles, options) {
+async function writeDefaultAnalysis(dataVersion, analysisCacheVersion, accidentShardFiles, options, serializeAnalysisOptionsForBundle) {
   const analyzeDangerousIntersections = await loadAnalysisModule();
   const { encodeDefaultAnalysisBinary } = await loadDefaultAnalysisBinaryModule();
   const accidents = await loadNormalizedAccidentsFromShards(accidentShardFiles);
@@ -219,21 +227,9 @@ function defaultAnalysisFileName(dataVersion, analysisCacheVersion) {
   return `analysis-default-${dataVersion}-${analysisCacheVersion}.bin.gz`;
 }
 
-function defaultAnalysisMetadataMatches(metadata, dataVersion, analysisCacheVersion, options) {
-  return (
-    metadata &&
-    metadata.dataVersion === dataVersion &&
-    metadata.analysisCacheVersion === analysisCacheVersion &&
-    JSON.stringify(metadata.options) === JSON.stringify(serializeAnalysisOptionsForBundle(options))
-  );
-}
-
 async function readExistingDataManifest() {
   try {
-    const script = await readFile(path.join(assetsDir, "data-manifest.js"), "utf8");
-    const sandbox = { globalThis: {} };
-    runInNewContext(script, sandbox, { timeout: 1000 });
-    const manifest = sandbox.globalThis.__SICHERE_KNOTEN_DATA__;
+    const manifest = JSON.parse(await readFile(path.join(assetsDir, "data-manifest.json"), "utf8"));
     return manifest && typeof manifest === "object" ? manifest : null;
   } catch {
     return null;
@@ -362,6 +358,10 @@ async function loadAccidentRecordsBinaryModule() {
   return loadBundledTsModule("src/accidentRecordsBinary.ts");
 }
 
+async function loadAnalysisOptionsModule() {
+  return loadBundledTsModule("src/analysisOptions.ts");
+}
+
 async function loadBundledTsModule(relativePath) {
   const result = await build({
     entryPoints: [path.join(root, relativePath)],
@@ -471,15 +471,6 @@ function compactAnalysisCluster(cluster) {
   return compact;
 }
 
-function serializeAnalysisOptionsForBundle(options) {
-  return {
-    ...options,
-    years: Array.from(options.years).sort((a, b) => a - b),
-    roadUserFocus: Array.from(options.roadUserFocus).sort(),
-    severityPercent: { ...options.severityPercent }
-  };
-}
-
 async function hashFiles(files, streetLookup) {
   const hash = createHash("sha256");
   for (const file of files) {
@@ -518,6 +509,7 @@ async function hashAppSources() {
 async function hashAnalysisSources() {
   const files = [
     path.join(root, "src/analysis.ts"),
+    path.join(root, "src/analysisOptions.ts"),
     path.join(root, "src/analysisRunner.ts"),
     path.join(root, "src/analysisWorker.ts"),
     path.join(root, "src/analysisWorkerProtocol.ts"),
@@ -525,6 +517,7 @@ async function hashAnalysisSources() {
     path.join(root, "src/binaryCodec.ts"),
     path.join(root, "src/cache.ts"),
     path.join(root, "src/defaultAnalysisBinary.ts"),
+    path.join(root, "src/defaults.ts"),
     path.join(root, "src/geo.ts"),
     path.join(root, "src/roadUsers.ts"),
     path.join(root, "src/states.ts"),
