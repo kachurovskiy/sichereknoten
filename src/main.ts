@@ -1,9 +1,8 @@
 import "./styles.css";
-import { serializeAnalysisOptions } from "./analysisOptions";
+import { AnalysisOptionsForm, analysisOptionsEqual, cloneAnalysisOptions } from "./analysisOptionsForm";
 import { analyzeDangerousIntersectionsInBackground, type AnalysisExecutionPlan } from "./analysisRunner";
 import { BrowseIndexStore, regionOptionLabel, STATE_BROWSE_MAX_INTERSECTIONS, type BrowseIndex } from "./browseIndex";
 import { DataRepository, type AnalysisCacheContext, type DataRepositoryTelemetry } from "./dataRepository";
-import { normalizeTrendYears } from "./defaults";
 import {
   clusterLocationText,
   clusterStreetNamesForDisplay,
@@ -30,10 +29,10 @@ import { distanceMeters } from "./geo";
 import { escapeHtml } from "./html";
 import { applyStaticTranslations, configureI18n, detectLocale, tr, trf, type AppLocale } from "./i18n";
 import { DEFAULT_LOADING_FACT_META, LOADING_FACTS } from "./loadingFacts";
-import { clampNumber, round } from "./math";
+import { round } from "./math";
 import { MapCanvas, type MapIncidentViewportRequest } from "./mapCanvas";
 import { RequestGate, type RequestToken } from "./requestGate";
-import { ROAD_USER_DEFINITIONS, roadUserFocusKey } from "./roadUsers";
+import { roadUserFocusKey } from "./roadUsers";
 import {
   SeverityRankIndexStore,
   type SeverityRank,
@@ -64,9 +63,7 @@ import {
   AnalysisOptions,
   AnalysisResult,
   ClusterYearStat,
-  SeverityPercentOptions,
-  IntersectionCluster,
-  RoadUserKey
+  IntersectionCluster
 } from "./types";
 import { TRANSLATIONS } from "./translations";
 import {
@@ -162,7 +159,6 @@ let result: AnalysisResult | null = null;
 let committedAnalysis: CommittedAnalysisState | null = null;
 let selectedCluster: IntersectionCluster | null = null;
 let selectedRoadClassSignature: RoadClassSignature | null = null;
-let analysisSettingsDirty = false;
 let activeDataVersion: string | null = null;
 let userLocation: { lat: number; lon: number; accuracyMeters: number | null } | null = null;
 let unclusteredIncidentMapCache: UnclusteredIncidentMapCache | null = null;
@@ -267,6 +263,28 @@ const requestGate = new RequestGate();
 const clusterAccidentRecordMatcher = new ClusterAccidentRecordMatcher(measureActiveInteractionStep);
 const severityRankIndexes = new SeverityRankIndexStore();
 const browseIndexes = new BrowseIndexStore();
+const analysisOptionsForm = new AnalysisOptionsForm(
+  {
+    analyzeButton: elements.analyzeBtn,
+    clusterRadius: elements.clusterRadius,
+    clusterRadiusOut: elements.clusterRadiusOut,
+    minAccidents: elements.minAccidents,
+    fatalWeight: elements.fatalWeight,
+    seriousWeight: elements.seriousWeight,
+    severityFullSample: elements.severityFullSample,
+    severityTrendYears: elements.severityTrendYears,
+    severityTrendDeadZone: elements.severityTrendDeadZone,
+    severityTrendFullSignal: elements.severityTrendFullSignal,
+    severityMaxTrendAdjustment: elements.severityMaxTrendAdjustment,
+    severityMaxPercent: elements.severityMaxPercent,
+    stateFilter: elements.stateFilter,
+    roadUserFocus: elements.roadUserFocus,
+    yearFilter: elements.yearFilter
+  },
+  {
+    onDraftChange: markAnalysisSettingsDirty
+  }
+);
 const selectedIntersectionPanelView = new SelectedIntersectionPanelView({
   container: elements.selectionDetails,
   formatSeverityPercentWithContext
@@ -335,7 +353,7 @@ function startApp(): void {
   applyStaticTranslations();
   showNextLoadingFact();
   isSplashDisplayed = !elements.splash.hidden;
-  resetAnalysisControlsToDefaults();
+  analysisOptionsForm.resetToDefaults();
   wireEvents();
   setView(initialView());
   renderAll();
@@ -363,16 +381,7 @@ function wireApplicationCommands(): void {
 }
 
 function wireAnalysisControlEvents(): void {
-  wireLinkedNumberRange(elements.clusterRadius, elements.clusterRadiusOut, markAnalysisSettingsDirty);
-
-  wireClampedNumberInput(elements.minAccidents, markAnalysisSettingsDirty);
-  wireClampedNumberInput(elements.severityFullSample, markAnalysisSettingsDirty);
-  wireClampedNumberInput(elements.severityTrendYears, markAnalysisSettingsDirty);
-  severityPercentDecimalInputs().forEach((input) => wireClampedDecimalInput(input, markAnalysisSettingsDirty));
-
-  elements.stateFilter.addEventListener("input", markAnalysisSettingsDirty);
-  elements.stateFilter.addEventListener("change", markAnalysisSettingsDirty);
-  roadUserFocusInputs().forEach((input) => input.addEventListener("change", markAnalysisSettingsDirty));
+  analysisOptionsForm.bindEvents();
 }
 
 function wireMapControlEvents(): void {
@@ -552,126 +561,13 @@ function handleSelectionDetailsClick(event: MouseEvent): void {
   }
 }
 
-function wireLinkedNumberRange(range: HTMLInputElement, numberInput: HTMLInputElement, onDraftChange: () => void): void {
-  range.addEventListener("input", () => {
-    numberInput.value = range.value;
-    onDraftChange();
-  });
-
-  numberInput.addEventListener("input", () => {
-    const value = Number(numberInput.value);
-    if (Number.isFinite(value)) {
-      range.value = String(clampNumber(value, inputMin(range), inputMax(range)));
-    }
-    onDraftChange();
-  });
-
-  numberInput.addEventListener("change", () => {
-    normalizeLinkedNumberRange(range, numberInput);
-    onDraftChange();
-  });
-}
-
-function wireClampedNumberInput(input: HTMLInputElement, onDraftChange: () => void): void {
-  input.addEventListener("input", onDraftChange);
-  input.addEventListener("change", () => {
-    normalizeNumberInput(input);
-    onDraftChange();
-  });
-}
-
-function wireClampedDecimalInput(input: HTMLInputElement, onDraftChange: () => void): void {
-  input.addEventListener("input", onDraftChange);
-  input.addEventListener("change", () => {
-    normalizeDecimalInput(input);
-    onDraftChange();
-  });
-}
-
-function resetAnalysisControlsToDefaults(): void {
-  resetInputToDefault(elements.clusterRadius);
-  resetInputToDefault(elements.clusterRadiusOut);
-  resetInputToDefault(elements.minAccidents);
-  severityPercentInputs().forEach(resetInputToDefault);
-  roadUserFocusInputs().forEach((input) => {
-    input.checked = input.defaultChecked;
-  });
-  normalizeLinkedNumberRange(elements.clusterRadius, elements.clusterRadiusOut);
-  normalizeNumberInput(elements.minAccidents);
-  normalizeSeverityPercentInputs();
-}
-
-function resetInputToDefault(input: HTMLInputElement): void {
-  if (input.defaultValue !== "") {
-    input.value = input.defaultValue;
-  }
-}
-
-function normalizeLinkedNumberRange(range: HTMLInputElement, numberInput: HTMLInputElement): void {
-  const fallback = Number(range.value);
-  const value = Number.isFinite(Number(numberInput.value)) ? Number(numberInput.value) : fallback;
-  const normalized = clampNumber(value, inputMin(numberInput), inputMax(numberInput));
-  numberInput.value = String(normalized);
-  range.value = String(normalized);
-}
-
-function normalizeNumberInput(input: HTMLInputElement): number {
-  const fallback = Number.isFinite(Number(input.defaultValue)) ? Number(input.defaultValue) : inputMin(input);
-  const value = Number.isFinite(Number(input.value)) ? Number(input.value) : fallback;
-  const normalized = Math.trunc(clampNumber(value, inputMin(input), inputMax(input)));
-  input.value = String(normalized);
-  return normalized;
-}
-
-function normalizeDecimalInput(input: HTMLInputElement): number {
-  const fallback = Number.isFinite(Number(input.defaultValue)) ? Number(input.defaultValue) : inputMin(input);
-  const value = Number.isFinite(Number(input.value)) ? Number(input.value) : fallback;
-  const normalized = clampNumber(value, inputMin(input), inputMax(input));
-  input.value = formatInputNumber(normalized);
-  return normalized;
-}
-
-function normalizeSeverityPercentInputs(): void {
-  normalizeNumberInput(elements.severityFullSample);
-  normalizeNumberInput(elements.severityTrendYears);
-  severityPercentDecimalInputs().forEach(normalizeDecimalInput);
-}
-
-function severityPercentInputs(): HTMLInputElement[] {
-  return [
-    elements.fatalWeight,
-    elements.seriousWeight,
-    elements.severityFullSample,
-    elements.severityTrendYears,
-    elements.severityTrendDeadZone,
-    elements.severityTrendFullSignal,
-    elements.severityMaxTrendAdjustment,
-    elements.severityMaxPercent
-  ];
-}
-
-function severityPercentDecimalInputs(): HTMLInputElement[] {
-  return [
-    elements.fatalWeight,
-    elements.seriousWeight,
-    elements.severityTrendDeadZone,
-    elements.severityTrendFullSignal,
-    elements.severityMaxTrendAdjustment,
-    elements.severityMaxPercent
-  ];
-}
-
-function formatInputNumber(value: number): string {
-  return Number.isInteger(value) ? String(value) : String(round(value, 4));
-}
-
 function markAnalysisSettingsDirty(): void {
   if (!dataRepository.hasAnyAccidents() && !committedAnalysis) {
     return;
   }
-  analysisSettingsDirty = !committedAnalysis || !analysisOptionsEqual(readDraftAnalysisOptions(), committedAnalysis.options);
-  updateAnalyzeButton();
-  if (analysisSettingsDirty && committedAnalysis) {
+  const isDirty = !committedAnalysis || !analysisOptionsEqual(analysisOptionsForm.readOptions(), committedAnalysis.options);
+  analysisOptionsForm.setDirty(isDirty);
+  if (isDirty && committedAnalysis) {
     setStatus(tr("status.settingsChanged"), 100);
   }
 }
@@ -732,8 +628,7 @@ function clearCommittedAnalysisState(): void {
   selectedCluster = null;
   selectedRoadClassSignature = null;
   clearAnalysisDerivedState();
-  analysisSettingsDirty = false;
-  updateAnalyzeButton();
+  analysisOptionsForm.setDirty(false);
 }
 
 function commitAnalysisState(options: AnalysisOptions, analysisResult: AnalysisResult): void {
@@ -746,8 +641,7 @@ function commitAnalysisState(options: AnalysisOptions, analysisResult: AnalysisR
   selectedCluster = null;
   selectedRoadClassSignature = null;
   clearAnalysisDerivedState();
-  analysisSettingsDirty = false;
-  updateAnalyzeButton();
+  analysisOptionsForm.setDirty(false);
 }
 
 function clearAnalysisDerivedState(): void {
@@ -786,7 +680,7 @@ async function loadBundledData(): Promise<void> {
       reason: "normalized bundle is faster than IndexedDB object cache"
     });
 
-    const options = readDraftAnalysisOptions();
+    const options = analysisOptionsForm.readOptions();
     const cacheContext = { dataVersion, appVersion: ANALYSIS_CACHE_VERSION };
     const bundledDefaultAnalysis = await dataRepository.readDefaultAnalysis(
       dataVersion,
@@ -860,8 +754,8 @@ async function loadBundledData(): Promise<void> {
 }
 
 function runAnalysis(initializationTelemetry: InitializationTelemetry | null = null): void {
-  normalizeLinkedNumberRange(elements.clusterRadius, elements.clusterRadiusOut);
-  const options = readDraftAnalysisOptions();
+  analysisOptionsForm.normalizeClusterRadius();
+  const options = analysisOptionsForm.readOptions();
   const cacheContext = activeDataVersion ? { dataVersion: activeDataVersion, appVersion: ANALYSIS_CACHE_VERSION } : null;
   const requestToken = requestGate.start("analysis", analysisTelemetryDetail(options));
   setBusy(true);
@@ -1006,109 +900,24 @@ function updateAnalysisPlanStatus(): void {
   setStatus(tr("status.analyzingIntersections"), 75);
 }
 
-function readDraftAnalysisOptions(): AnalysisOptions {
-  const years = new Set<number>();
-  elements.yearFilter.querySelectorAll<HTMLInputElement>("input[type='checkbox']").forEach((input) => {
-    if (input.checked) {
-      years.add(Number(input.value));
-    }
-  });
-
-  return {
-    clusterRadiusMeters: Number(elements.clusterRadiusOut.value),
-    minAccidents: normalizeNumberInput(elements.minAccidents),
-    years,
-    roadUserFocus: readRoadUserFocus(),
-    stateCode: elements.stateFilter.value as AnalysisOptions["stateCode"],
-    severityPercent: readSeverityPercentOptions()
-  };
-}
-
-function readRoadUserFocus(): Set<RoadUserKey> {
-  const focus = new Set<RoadUserKey>();
-  roadUserFocusInputs().forEach((input) => {
-    if (input.checked && isRoadUserKey(input.value)) {
-      focus.add(input.value);
-    }
-  });
-  return focus;
-}
-
-function roadUserFocusInputs(): HTMLInputElement[] {
-  return Array.from(elements.roadUserFocus.querySelectorAll<HTMLInputElement>("input[data-road-user-focus]"));
-}
-
-function isRoadUserKey(value: string): value is RoadUserKey {
-  return ROAD_USER_DEFINITIONS.some((definition) => definition.key === value);
-}
-
-function readSeverityPercentOptions(): SeverityPercentOptions {
-  const trendDeadZonePercent = normalizeDecimalInput(elements.severityTrendDeadZone);
-  const trendFullSignalPercent = Math.max(trendDeadZonePercent + 0.1, normalizeDecimalInput(elements.severityTrendFullSignal));
-  elements.severityTrendFullSignal.value = formatInputNumber(trendFullSignalPercent);
-
-  return {
-    fatalWeight: normalizeDecimalInput(elements.fatalWeight),
-    seriousWeight: normalizeDecimalInput(elements.seriousWeight),
-    fullSampleAccidents: normalizeNumberInput(elements.severityFullSample),
-    trendYears: normalizeNumberInput(elements.severityTrendYears),
-    trendDeadZone: trendDeadZonePercent / 100,
-    trendFullSignal: trendFullSignalPercent / 100,
-    maxTrendAdjustment: normalizeDecimalInput(elements.severityMaxTrendAdjustment) / 100,
-    maxSeverityPercent: normalizeDecimalInput(elements.severityMaxPercent) / 100
-  };
-}
-
-function cloneAnalysisOptions(options: AnalysisOptions): AnalysisOptions {
-  return {
-    ...options,
-    years: new Set(options.years),
-    roadUserFocus: new Set(options.roadUserFocus),
-    severityPercent: { ...options.severityPercent }
-  };
-}
-
-function analysisOptionsEqual(left: AnalysisOptions, right: AnalysisOptions): boolean {
-  return JSON.stringify(serializeAnalysisOptions(left)) === JSON.stringify(serializeAnalysisOptions(right));
-}
-
 function populateFilters(): void {
-  const selectedState = elements.stateFilter.value;
   const selectedBrowseState = elements.browseState.value;
   const selectedBrowseRegion = elements.browseRegion.value;
-  const previousYearInputs = Array.from(elements.yearFilter.querySelectorAll<HTMLInputElement>("input[type='checkbox']"));
-  const selectedYears = new Set(previousYearInputs.filter((input) => input.checked).map((input) => Number(input.value)));
-  const hadYearFilters = previousYearInputs.length > 0;
-  elements.stateFilter.replaceChildren(new Option(tr("option.allStates"), "all"));
-  elements.browseState.replaceChildren(new Option(tr("option.allStates"), "all"));
   const availableStateCodes = stateCodesForFilters();
+
+  analysisOptionsForm.populateFilters(availableStateCodes, yearsForFilters());
+
+  elements.browseState.replaceChildren(new Option(tr("option.allStates"), "all"));
   const stateOptions = Object.entries(STATE_NAMES).sort((a, b) => a[1].localeCompare(b[1], "de", { sensitivity: "base" }));
   for (const [code, name] of stateOptions) {
     if (availableStateCodes.has(code)) {
-      elements.stateFilter.append(new Option(name, code));
       elements.browseState.append(new Option(name, code));
     }
   }
-  elements.stateFilter.value = [...elements.stateFilter.options].some((option) => option.value === selectedState) ? selectedState : "all";
   elements.browseState.value = [...elements.browseState.options].some((option) => option.value === selectedBrowseState)
     ? selectedBrowseState
     : "all";
   updateBrowseRegionOptions(selectedBrowseRegion);
-
-  const years = yearsForFilters();
-  elements.yearFilter.innerHTML = "";
-  for (const year of years) {
-    const label = document.createElement("label");
-    label.className = "year-pill";
-    const input = document.createElement("input");
-    input.type = "checkbox";
-    input.value = String(year);
-    input.checked = hadYearFilters ? selectedYears.has(year) : true;
-    input.addEventListener("change", markAnalysisSettingsDirty);
-    label.append(input, document.createTextNode(String(year)));
-    elements.yearFilter.append(label);
-  }
-  setAnalysisControlsDisabled(elements.analyzeBtn.disabled);
 }
 
 function updateBrowseRegionOptions(preferredRegion = elements.browseRegion.value): void {
@@ -1156,7 +965,7 @@ function bundledDataYears(): number[] {
 }
 
 function renderAll(): void {
-  updateRangeOutputs();
+  analysisOptionsForm.updateRangeOutputs();
   exploreView.render();
   renderActiveAnalysisView();
   applySeverityFilter();
@@ -1933,7 +1742,7 @@ async function clusterAccidentRecordsReady(cluster: IntersectionCluster): Promis
 }
 
 function currentAccidentRecordMatchingOptions(): AnalysisOptions {
-  return committedAnalysis?.options ?? readDraftAnalysisOptions();
+  return committedAnalysis?.options ?? analysisOptionsForm.readOptions();
 }
 
 function clusterTrendSeries(cluster: IntersectionCluster, years: number[]): ClusterYearStat[] {
@@ -2058,10 +1867,6 @@ function initialView(): ViewKey {
     return urlView;
   }
   return mobileLayout.matches ? "explore" : "map";
-}
-
-function updateRangeOutputs(): void {
-  elements.clusterRadiusOut.value = elements.clusterRadius.value;
 }
 
 async function resetApp(): Promise<void> {
@@ -2288,7 +2093,7 @@ function normalizeLoadingFactIndex(index: number): number {
 }
 
 function setBusy(isBusy: boolean): void {
-  elements.analyzeBtn.disabled = isBusy;
+  analysisOptionsForm.setDisabled(isBusy);
   elements.resetAppBtn.disabled = isBusy;
   if (isBusy && !isSplashDisplayed) {
     showNextLoadingFact();
@@ -2296,31 +2101,6 @@ function setBusy(isBusy: boolean): void {
   isSplashDisplayed = isBusy;
   elements.splash.hidden = !isBusy;
   elements.splash.setAttribute("aria-busy", String(isBusy));
-  setAnalysisControlsDisabled(isBusy);
-  updateAnalyzeButton();
-}
-
-function setAnalysisControlsDisabled(isDisabled: boolean): void {
-  const controls: HTMLElement[] = [
-    elements.clusterRadius,
-    elements.clusterRadiusOut,
-    elements.minAccidents,
-    elements.stateFilter,
-    ...severityPercentInputs()
-  ];
-  roadUserFocusInputs().forEach((input) => controls.push(input));
-  elements.yearFilter.querySelectorAll<HTMLInputElement>("input").forEach((input) => controls.push(input));
-
-  for (const control of controls) {
-    if (control instanceof HTMLInputElement || control instanceof HTMLSelectElement || control instanceof HTMLButtonElement) {
-      control.disabled = isDisabled;
-    }
-  }
-}
-
-function updateAnalyzeButton(): void {
-  elements.analyzeBtn.textContent = analysisSettingsDirty ? tr("action.analyzeChanges") : tr("action.analyze");
-  elements.analyzeBtn.classList.toggle("dirty", analysisSettingsDirty);
 }
 
 function setStatus(message: string, progress: number, kind: LoadingStatusKind = "normal"): void {
@@ -2403,14 +2183,6 @@ async function loadAccidentsForAnalysis(
 
 async function loadAccidentsForState(stateCode: string, telemetry: InitializationTelemetry | null = null): Promise<AccidentRecord[]> {
   return dataRepository.loadAccidentsForState(stateCode, repositoryTelemetry(telemetry));
-}
-
-function inputMin(input: HTMLInputElement): number {
-  return input.min === "" ? Number.NEGATIVE_INFINITY : Number(input.min);
-}
-
-function inputMax(input: HTMLInputElement): number {
-  return input.max === "" ? Number.POSITIVE_INFINITY : Number(input.max);
 }
 
 function csvCell(value: unknown): string {
