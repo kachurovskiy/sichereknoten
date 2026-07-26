@@ -5,12 +5,6 @@ import { AppRouter } from "./appRouter";
 import { BrowseIndexStore, regionOptionLabel, STATE_BROWSE_MAX_INTERSECTIONS, type BrowseIndex } from "./browseIndex";
 import { DataRepository, type AnalysisCacheContext, type DataRepositoryTelemetry } from "./dataRepository";
 import { clusterLocationText, compareClusterCoreMetric } from "./clusterDisplay";
-import { accidentKey } from "./accidentRecordDisplay";
-import {
-  accidentMatchesAnalysisOptions,
-  analysisOptionsIndexKey,
-  clusteredAccidentMembership
-} from "./clusterAccidentRecords";
 import {
   configureNumberLocale,
   formatDistance,
@@ -23,7 +17,7 @@ import { escapeHtml } from "./html";
 import { applyStaticTranslations, configureI18n, detectLocale, tr, trf, type AppLocale } from "./i18n";
 import { DEFAULT_LOADING_FACT_META, LOADING_FACTS } from "./loadingFacts";
 import { round } from "./math";
-import { MapCanvas, type MapIncidentViewportRequest } from "./mapCanvas";
+import { MapCanvas } from "./mapCanvas";
 import { RequestGate, type RequestToken } from "./requestGate";
 import { roadUserFocusKey } from "./roadUsers";
 import { SelectedIntersectionController } from "./selectedIntersectionController";
@@ -52,6 +46,7 @@ import {
   type InteractionTelemetry,
   type TelemetryMetadata
 } from "./telemetry";
+import { UnclusteredIncidentLayer } from "./unclusteredIncidentLayer";
 import {
   AccidentRecord,
   AnalysisOptions,
@@ -108,15 +103,6 @@ interface PostRenderCacheWrites {
   analysis: PendingAnalysisCacheWrite | null;
 }
 
-interface UnclusteredIncidentMapCache {
-  key: string;
-  loadedStateCodes: Set<string>;
-  loadingStateCodes: Set<string>;
-  records: AccidentRecord[];
-  clusteredAccidentKeys: Set<string>;
-  clusteredAccidentIndexes: Set<number>;
-}
-
 interface CommittedAnalysisState {
   result: AnalysisResult;
   options: AnalysisOptions;
@@ -128,7 +114,6 @@ let result: AnalysisResult | null = null;
 let committedAnalysis: CommittedAnalysisState | null = null;
 let activeDataVersion: string | null = null;
 let userLocation: { lat: number; lon: number; accuracyMeters: number | null } | null = null;
-let unclusteredIncidentMapCache: UnclusteredIncidentMapCache | null = null;
 let renderedMapClusters: IntersectionCluster[] | null | undefined;
 let postRenderCacheWriteQueue: Promise<void> = Promise.resolve();
 let loadingStatusKind: LoadingStatusKind = "normal";
@@ -257,6 +242,7 @@ let selectedIntersectionController: SelectedIntersectionController;
 let appRouter: AppRouter;
 let similarView: SimilarView;
 let exploreView: ExploreView;
+let unclusteredIncidentLayer: UnclusteredIncidentLayer;
 const selectedPreviewMapView = new SelectedPreviewMapView({
   container: elements.selectedPreviewMap,
   canvas: elements.selectedPreviewCanvas,
@@ -267,10 +253,16 @@ const map = new MapCanvas(
   elements.mapCanvas,
   (cluster, reason) => selectedIntersectionController.handleMapSelection(cluster, reason),
   (accident) => selectedIntersectionController.openUnclusteredIncidentDialog(accident),
-  handleMapIncidentViewportRequest,
+  (request) => unclusteredIncidentLayer.handleViewportRequest(request),
   setMapIncidentLegendVisible,
   handleMapZoomChange
 );
+unclusteredIncidentLayer = new UnclusteredIncidentLayer({
+  map,
+  getAnalysisState: () => committedAnalysis,
+  hasStateShard: (stateCode) => dataRepository.hasStateShard(stateCode),
+  loadAccidentsForState: (stateCode) => loadAccidentsForState(stateCode)
+});
 selectedIntersectionController = new SelectedIntersectionController({
   elements: {
     mapColumn: elements.mapColumn,
@@ -654,8 +646,7 @@ function clearAnalysisDerivedState(): void {
   severityRankIndexes.clear();
   browseIndexes.clear();
   invalidateRenderedAnalysisViews();
-  unclusteredIncidentMapCache = null;
-  map.setUnclusteredIncidentPoints([]);
+  unclusteredIncidentLayer.reset();
 }
 
 function invalidateRenderedAnalysisViews(): void {
@@ -1100,124 +1091,6 @@ function handleMapZoomChange(): void {
   if (selectedCluster) {
     updateIntersectionSelectionUrl(selectedCluster);
   }
-}
-
-function handleMapIncidentViewportRequest(request: MapIncidentViewportRequest): void {
-  const stateCodes = stateCodesForIncidentMapRequest(request);
-  if (stateCodes.length === 0) {
-    return;
-  }
-  ensureUnclusteredIncidentStatesLoaded(stateCodes);
-}
-
-function stateCodesForIncidentMapRequest(request: MapIncidentViewportRequest): string[] {
-  const options = committedAnalysis?.options;
-  if (!options) {
-    return [];
-  }
-  if (options.stateCode !== "all") {
-    return [options.stateCode];
-  }
-  const seen = new Set<string>();
-  const stateCodes: string[] = [];
-  for (const stateCode of request.stateCodes) {
-    if (!STATE_NAMES[stateCode] || seen.has(stateCode)) {
-      continue;
-    }
-    seen.add(stateCode);
-    stateCodes.push(stateCode);
-  }
-  return stateCodes;
-}
-
-function ensureUnclusteredIncidentStatesLoaded(stateCodes: string[]): void {
-  const cache = unclusteredIncidentMapCacheForCurrentResult();
-  if (!cache) {
-    return;
-  }
-
-  for (const stateCode of stateCodes) {
-    if (cache.loadedStateCodes.has(stateCode) || cache.loadingStateCodes.has(stateCode) || !dataRepository.hasStateShard(stateCode)) {
-      continue;
-    }
-    cache.loadingStateCodes.add(stateCode);
-    void loadUnclusteredIncidentState(stateCode, cache.key);
-  }
-}
-
-function unclusteredIncidentMapCacheForCurrentResult(): UnclusteredIncidentMapCache | null {
-  const key = unclusteredIncidentMapCacheKey();
-  if (!key || !result) {
-    return null;
-  }
-  if (unclusteredIncidentMapCache?.key === key) {
-    return unclusteredIncidentMapCache;
-  }
-
-  const membership = clusteredAccidentMembership(result.clusters);
-  unclusteredIncidentMapCache = {
-    key,
-    loadedStateCodes: new Set(),
-    loadingStateCodes: new Set(),
-    records: [],
-    clusteredAccidentKeys: membership.keys,
-    clusteredAccidentIndexes: membership.indexes
-  };
-  map.setUnclusteredIncidentPoints([]);
-  return unclusteredIncidentMapCache;
-}
-
-function unclusteredIncidentMapCacheKey(): string | null {
-  if (!committedAnalysis || !result) {
-    return null;
-  }
-  return [
-    committedAnalysis.dataVersion ?? "unknown-data",
-    analysisOptionsIndexKey(committedAnalysis.options, 0),
-    result.filteredAccidentCount,
-    result.clusters.length
-  ].join("|");
-}
-
-async function loadUnclusteredIncidentState(stateCode: string, cacheKey: string): Promise<void> {
-  try {
-    const stateRecords = await loadAccidentsForState(stateCode);
-    const cache = unclusteredIncidentMapCache;
-    if (!cache || cache.key !== cacheKey || !committedAnalysis) {
-      return;
-    }
-
-    const records = unclusteredIncidentRecordsForMap(stateRecords, committedAnalysis.options, cache);
-    for (const record of records) {
-      cache.records.push(record);
-    }
-    cache.loadedStateCodes.add(stateCode);
-    map.setUnclusteredIncidentPoints(cache.records);
-  } catch (error) {
-    console.warn("[Safe Intersections] Could not load unclustered map incidents.", { stateCode, error });
-  } finally {
-    const cache = unclusteredIncidentMapCache;
-    if (cache?.key === cacheKey) {
-      cache.loadingStateCodes.delete(stateCode);
-    }
-  }
-}
-
-function unclusteredIncidentRecordsForMap(
-  sourceRecords: AccidentRecord[],
-  options: AnalysisOptions,
-  cache: UnclusteredIncidentMapCache
-): AccidentRecord[] {
-  return sourceRecords.filter(
-    (accident) => accidentMatchesAnalysisOptions(accident, options) && !isClusteredAccidentInCurrentResult(accident, cache)
-  );
-}
-
-function isClusteredAccidentInCurrentResult(accident: AccidentRecord, cache: UnclusteredIncidentMapCache): boolean {
-  if (typeof accident.recordIndex === "number" && cache.clusteredAccidentIndexes.has(accident.recordIndex)) {
-    return true;
-  }
-  return cache.clusteredAccidentKeys.has(accidentKey(accident));
 }
 
 function locateUser(options: { selectNearest: boolean }): void {
