@@ -3,17 +3,12 @@ import { formatDistance, formatInteger, formatSeverityPercent } from "../formatt
 import { distanceMeters } from "../geo";
 import { escapeHtml } from "../html";
 import { tr, trf } from "../i18n";
+import type { BrowseIndex } from "../browseIndex";
 import type { AnalysisResult, IntersectionCluster } from "../types";
 
 interface LatLon {
   lat: number;
   lon: number;
-}
-
-interface BrowseIndex {
-  topClustersByState: IntersectionCluster[];
-  browseClustersByState: Map<string, IntersectionCluster[]>;
-  browseClustersByRegion: Map<string, IntersectionCluster[]>;
 }
 
 export interface ExploreViewDependencies {

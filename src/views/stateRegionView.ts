@@ -11,6 +11,7 @@ import { escapeHtml } from "../html";
 import { tr, trf } from "../i18n";
 import { clampNumber, linePath, round, uniqueNumbers } from "../math";
 import { STATE_NAMES } from "../states";
+import type { RegionSummary } from "../browseIndex";
 import type { AnalysisResult, IntersectionCluster, PopulationAccidentSummary } from "../types";
 
 const POPULATION_RATE_DENOMINATOR = 100_000;
@@ -89,24 +90,6 @@ export class StateRegionView {
   private syncResult(): void {
     result = deps.getResult();
   }
-}
-
-export interface RegionSummary extends SeverityPercentSource {
-  key: string;
-  stateCode: string;
-  stateName: string;
-  regionName: string;
-  population: number | null;
-  accidentCount: number;
-  clusterCount: number;
-  fatalCount: number;
-  seriousCount: number;
-  topCluster: IntersectionCluster | null;
-  clusters: IntersectionCluster[];
-}
-
-export interface RegionSummaryAccumulator extends RegionSummary {
-  weightedSeverityPercent: number;
 }
 
 interface PopulationRateRow {

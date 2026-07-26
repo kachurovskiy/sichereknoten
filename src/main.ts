@@ -1,10 +1,10 @@
 import "./styles.css";
 import { serializeAnalysisOptions } from "./analysisOptions";
 import { analyzeDangerousIntersectionsInBackground, type AnalysisExecutionPlan } from "./analysisRunner";
+import { BrowseIndexStore, regionOptionLabel, STATE_BROWSE_MAX_INTERSECTIONS, type BrowseIndex } from "./browseIndex";
 import { DataRepository, type AnalysisCacheContext, type DataRepositoryTelemetry } from "./dataRepository";
 import { normalizeTrendYears } from "./defaults";
 import {
-  cleanAreaNameForDisplay,
   clusterLocationText,
   clusterStreetNamesForDisplay,
   compareClusterCoreMetric
@@ -20,7 +20,6 @@ import {
 } from "./clusterAccidentRecords";
 import {
   configureNumberLocale,
-  formatCompactPopulation,
   formatDistance,
   formatInteger,
   formatSeverityPercent,
@@ -35,6 +34,13 @@ import { clampNumber, round } from "./math";
 import { MapCanvas, type MapIncidentViewportRequest } from "./mapCanvas";
 import { RequestGate, type RequestToken } from "./requestGate";
 import { ROAD_USER_DEFINITIONS, roadUserFocusKey } from "./roadUsers";
+import {
+  SeverityRankIndexStore,
+  type SeverityRank,
+  type SeverityRankContext,
+  type SeverityRankIndex,
+  type SeverityRankIndexHooks
+} from "./severityRankIndex";
 import { STATE_NAMES } from "./states";
 import {
   createInitializationTelemetry,
@@ -78,11 +84,9 @@ import {
 } from "./views/selectedIntersectionPanelView";
 import { SelectedPreviewMapView, type SelectedPreviewMapIncidentPoint } from "./views/selectedPreviewMapView";
 import { SimilarView, type RoadClassSignature } from "./views/similarView";
-import { StateRegionView, type RegionSummary, type RegionSummaryAccumulator } from "./views/stateRegionView";
+import { StateRegionView } from "./views/stateRegionView";
 import { TableView } from "./views/tableView";
 
-const STATE_BROWSE_MIN_SEVERITY_PERCENT = 0.1;
-const STATE_BROWSE_MAX_INTERSECTIONS = 100;
 const INTERSECTION_URL_COORDINATE_DECIMALS = 5;
 const INTERSECTION_URL_MATCH_MAX_DISTANCE_METERS = 75;
 const INTERSECTION_URL_ZOOM_MIN = 0;
@@ -121,33 +125,6 @@ const LOADING_FACT_STORAGE_KEY = "sichere-knoten:loading-fact-index";
 const ACTIVE_LOCALE: AppLocale = detectLocale();
 configureI18n(ACTIVE_LOCALE, TRANSLATIONS);
 configureNumberLocale(ACTIVE_LOCALE);
-interface BrowseIndex {
-  clusters: IntersectionCluster[];
-  regionSummaries: RegionSummary[];
-  regionsByState: Map<string, RegionSummary[]>;
-  topClustersByState: IntersectionCluster[];
-  browseClustersByState: Map<string, IntersectionCluster[]>;
-  browseClustersByRegion: Map<string, IntersectionCluster[]>;
-}
-
-interface SeverityRank {
-  rank: number;
-  percentile: number;
-}
-
-interface SeverityRankContext {
-  state: SeverityRank;
-  germany: SeverityRank | null;
-}
-
-interface SeverityRankCache {
-  clusters: IntersectionCluster[];
-  clusterIndexes: Map<string, number>;
-  hasMultipleStates: boolean;
-  stateRanks: Map<string, SeverityRank>;
-  germanyRanks: Map<string, SeverityRank>;
-}
-
 interface PendingAnalysisCacheWrite {
   cacheContext: AnalysisCacheContext;
   options: AnalysisOptions;
@@ -188,8 +165,6 @@ let selectedRoadClassSignature: RoadClassSignature | null = null;
 let analysisSettingsDirty = false;
 let activeDataVersion: string | null = null;
 let userLocation: { lat: number; lon: number; accuracyMeters: number | null } | null = null;
-let severityRankCache: SeverityRankCache | null = null;
-let browseIndexCache: BrowseIndex | null = null;
 let unclusteredIncidentMapCache: UnclusteredIncidentMapCache | null = null;
 let renderedMapClusters: IntersectionCluster[] | null | undefined;
 let postRenderCacheWriteQueue: Promise<void> = Promise.resolve();
@@ -290,6 +265,8 @@ const elements = {
 const dataRepository = new DataRepository();
 const requestGate = new RequestGate();
 const clusterAccidentRecordMatcher = new ClusterAccidentRecordMatcher(measureActiveInteractionStep);
+const severityRankIndexes = new SeverityRankIndexStore();
+const browseIndexes = new BrowseIndexStore();
 const selectedIntersectionPanelView = new SelectedIntersectionPanelView({
   container: elements.selectionDetails,
   formatSeverityPercentWithContext
@@ -775,8 +752,8 @@ function commitAnalysisState(options: AnalysisOptions, analysisResult: AnalysisR
 
 function clearAnalysisDerivedState(): void {
   clusterAccidentRecordMatcher.clearCaches();
-  severityRankCache = null;
-  browseIndexCache = null;
+  severityRankIndexes.clear();
+  browseIndexes.clear();
   invalidateRenderedAnalysisViews();
   unclusteredIncidentMapCache = null;
   map.setUnclusteredIncidentPoints([]);
@@ -1610,166 +1587,7 @@ function renderActiveAnalysisView(): void {
 }
 
 function browseIndexForCurrentResult(): BrowseIndex | null {
-  const clusters = result?.clusters;
-  if (!clusters) {
-    return null;
-  }
-  if (browseIndexCache?.clusters === clusters) {
-    return browseIndexCache;
-  }
-  browseIndexCache = buildBrowseIndex(clusters);
-  return browseIndexCache;
-}
-
-function buildBrowseIndex(clusters: IntersectionCluster[]): BrowseIndex {
-  const byRegion = new Map<string, RegionSummaryAccumulator>();
-  const regionsByState = new Map<string, RegionSummary[]>();
-  const browseClustersByState = new Map<string, IntersectionCluster[]>();
-  const browseClustersByRegion = new Map<string, IntersectionCluster[]>();
-  const topClusterByState = new Map<string, IntersectionCluster>();
-
-  for (const cluster of clusters) {
-    const regionName = clusterRegionName(cluster);
-    const key = clusterRegionKey(cluster);
-    const summary =
-      byRegion.get(key) ??
-      ({
-        key,
-        stateCode: cluster.stateCode,
-        stateName: cluster.stateName,
-        regionName,
-        population: cluster.administrativeRegionPopulation,
-        accidentCount: 0,
-        clusterCount: 0,
-        fatalCount: 0,
-        seriousCount: 0,
-        severityPercent: 0,
-        weightedSeverityPercent: 0,
-        topCluster: null,
-        clusters: []
-      } satisfies RegionSummaryAccumulator);
-
-    summary.accidentCount += cluster.accidentCount;
-    summary.clusterCount += 1;
-    summary.fatalCount += cluster.fatalCount;
-    summary.seriousCount += cluster.seriousCount;
-    summary.weightedSeverityPercent += cluster.severityPercent * cluster.accidentCount;
-    summary.population ??= cluster.administrativeRegionPopulation;
-    summary.clusters.push(cluster);
-    if (!summary.topCluster || compareClusterCoreMetric(cluster, summary.topCluster) < 0) {
-      summary.topCluster = cluster;
-    }
-    byRegion.set(key, summary);
-
-    const stateTopCluster = topClusterByState.get(cluster.stateCode);
-    if (!stateTopCluster || compareClusterCoreMetric(cluster, stateTopCluster) < 0) {
-      topClusterByState.set(cluster.stateCode, cluster);
-    }
-
-    if (cluster.severityPercent >= STATE_BROWSE_MIN_SEVERITY_PERCENT) {
-      insertSortedClusterMapItem(browseClustersByState, cluster.stateCode, cluster, STATE_BROWSE_MAX_INTERSECTIONS);
-      insertSortedClusterMapItem(browseClustersByRegion, key, cluster, STATE_BROWSE_MAX_INTERSECTIONS);
-    }
-  }
-
-  const regionSummaries = Array.from(byRegion.values())
-    .map((summary): RegionSummary => ({
-      key: summary.key,
-      stateCode: summary.stateCode,
-      stateName: summary.stateName,
-      regionName: summary.regionName,
-      population: summary.population,
-      accidentCount: summary.accidentCount,
-      clusterCount: summary.clusterCount,
-      fatalCount: summary.fatalCount,
-      seriousCount: summary.seriousCount,
-      severityPercent: summary.accidentCount > 0 ? summary.weightedSeverityPercent / summary.accidentCount : 0,
-      topCluster: summary.topCluster,
-      clusters: summary.clusters
-    }))
-    .sort(compareRegionSummaries);
-
-  for (const summary of regionSummaries) {
-    appendMapListItem(regionsByState, summary.stateCode, summary);
-  }
-  for (const stateRegions of regionsByState.values()) {
-    stateRegions.sort((a, b) => a.regionName.localeCompare(b.regionName, "de", { sensitivity: "base" }));
-  }
-
-  return {
-    clusters,
-    regionSummaries,
-    regionsByState,
-    topClustersByState: Array.from(topClusterByState.values()).sort(compareClusterCoreMetric),
-    browseClustersByState,
-    browseClustersByRegion
-  };
-}
-
-function appendMapListItem<K, V>(map: Map<K, V[]>, key: K, item: V): void {
-  const items = map.get(key);
-  if (items) {
-    items.push(item);
-    return;
-  }
-  map.set(key, [item]);
-}
-
-function insertSortedClusterMapItem<K>(
-  map: Map<K, IntersectionCluster[]>,
-  key: K,
-  cluster: IntersectionCluster,
-  limit: number
-): void {
-  const items = map.get(key);
-  if (items) {
-    insertSortedCluster(items, cluster, limit, compareClusterCoreMetric);
-    return;
-  }
-  map.set(key, [cluster]);
-}
-
-function compareRegionSummaries(a: RegionSummary, b: RegionSummary): number {
-  return (
-    b.severityPercent - a.severityPercent ||
-    b.fatalCount - a.fatalCount ||
-    b.seriousCount - a.seriousCount ||
-    b.accidentCount - a.accidentCount ||
-    a.stateName.localeCompare(b.stateName, "de", { sensitivity: "base" }) ||
-    a.regionName.localeCompare(b.regionName, "de", { sensitivity: "base" })
-  );
-}
-
-function regionOptionLabel(region: RegionSummary): string {
-  return region.population === null ? region.regionName : `${region.regionName} (${formatCompactPopulation(region.population)})`;
-}
-
-function clusterRegionName(cluster: IntersectionCluster): string {
-  return cleanAreaNameForDisplay(cluster.administrativeRegionName ?? cluster.stateName);
-}
-
-function clusterRegionKey(cluster: IntersectionCluster): string {
-  return `${cluster.stateCode}:${cluster.administrativeRegionCode ?? "state"}`;
-}
-
-function insertSortedCluster(
-  selected: IntersectionCluster[],
-  cluster: IntersectionCluster,
-  limit: number,
-  comparator: (a: IntersectionCluster, b: IntersectionCluster) => number
-): void {
-  let index = 0;
-  while (index < selected.length && comparator(selected[index], cluster) <= 0) {
-    index += 1;
-  }
-  if (index >= limit) {
-    return;
-  }
-
-  selected.splice(index, 0, cluster);
-  if (selected.length > limit) {
-    selected.length = limit;
-  }
+  return browseIndexes.forClusters(result?.clusters);
 }
 
 function formatSeverityPercentWithContext(cluster: IntersectionCluster): string {
@@ -1799,145 +1617,30 @@ function formatSeverityPercentWithContext(cluster: IntersectionCluster): string 
 }
 
 function severityRankContext(cluster: IntersectionCluster): SeverityRankContext | null {
-  const cache = severityRankCacheForCurrentResult();
-  if (!cache) {
-    return null;
-  }
+  return severityRankIndexes.contextForCluster(result?.clusters, cluster, severityRankIndexHooks(cluster));
+}
 
-  const key = severityRankKey(cluster);
-  const state = cachedSeverityRank(cache.stateRanks, key, () =>
-    measureActiveInteractionStep(
-      "compute state severity rank",
-      cluster.id,
-      () => severityRankInScope(cluster, cache, (candidate) => candidate.stateCode === cluster.stateCode),
-      (rank) => ({
-        rank: rank?.rank ?? null,
-        percentile: rank?.percentile ?? null
-      })
-    )
-  );
-  if (state === null) {
-    return null;
-  }
-
+function severityRankIndexHooks(cluster: IntersectionCluster | null): SeverityRankIndexHooks {
   return {
-    state,
-    germany: cache.hasMultipleStates
-      ? cachedSeverityRank(cache.germanyRanks, key, () =>
-          measureActiveInteractionStep(
-            "compute germany severity rank",
-            cluster.id,
-            () => severityRankInScope(cluster, cache),
-            (rank) => ({
-              rank: rank?.rank ?? null,
-              percentile: rank?.percentile ?? null
-            })
-          )
-        )
-      : null
+    prepareIndex: (compute) =>
+      measureActiveInteractionStep("prepare severity rank cache", null, compute, (index: SeverityRankIndex) => ({
+        clusterCount: index.clusters.length,
+        hasMultipleStates: index.hasMultipleStates
+      })),
+    computeStateRank: cluster
+      ? (compute) => measureActiveInteractionStep("compute state severity rank", cluster.id, compute, severityRankTelemetryMetadata)
+      : undefined,
+    computeGermanyRank: cluster
+      ? (compute) => measureActiveInteractionStep("compute germany severity rank", cluster.id, compute, severityRankTelemetryMetadata)
+      : undefined
   };
 }
 
-function severityRankCacheForCurrentResult(): SeverityRankCache | null {
-  const clusters = result?.clusters;
-  if (!clusters?.length) {
-    return null;
-  }
-  if (severityRankCache?.clusters === clusters) {
-    return severityRankCache;
-  }
-
-  severityRankCache = measureActiveInteractionStep(
-    "prepare severity rank cache",
-    null,
-    () => buildSeverityRankCache(clusters),
-    (cache) => ({
-      clusterCount: cache.clusters.length,
-      hasMultipleStates: cache.hasMultipleStates
-    })
-  );
-  return severityRankCache;
-}
-
-function buildSeverityRankCache(clusters: IntersectionCluster[]): SeverityRankCache {
-  const clusterIndexes = new Map<string, number>();
-  const firstStateCode = clusters[0]?.stateCode ?? null;
-  let hasMultipleStates = false;
-
-  clusters.forEach((cluster, index) => {
-    const key = severityRankKey(cluster);
-    if (!clusterIndexes.has(key)) {
-      clusterIndexes.set(key, index);
-    }
-    if (firstStateCode !== null && cluster.stateCode !== firstStateCode) {
-      hasMultipleStates = true;
-    }
-  });
-
+function severityRankTelemetryMetadata(rank: SeverityRank | null): TelemetryMetadata {
   return {
-    clusters,
-    clusterIndexes,
-    hasMultipleStates,
-    stateRanks: new Map(),
-    germanyRanks: new Map()
+    rank: rank?.rank ?? null,
+    percentile: rank?.percentile ?? null
   };
-}
-
-function cachedSeverityRank(ranks: Map<string, SeverityRank>, key: string, compute: () => SeverityRank | null): SeverityRank | null {
-  const cached = ranks.get(key);
-  if (cached) {
-    return cached;
-  }
-
-  const rank = compute();
-  if (rank) {
-    ranks.set(key, rank);
-  }
-  return rank;
-}
-
-function severityRankInScope(
-  cluster: IntersectionCluster,
-  cache: SeverityRankCache,
-  inScope?: (candidate: IntersectionCluster) => boolean
-): SeverityRank | null {
-  const clusterIndex = cache.clusterIndexes.get(severityRankKey(cluster));
-  if (clusterIndex === undefined) {
-    return null;
-  }
-
-  let scopeSize = 0;
-  let rank = 1;
-  let foundCluster = false;
-  for (let index = 0; index < cache.clusters.length; index += 1) {
-    const candidate = cache.clusters[index];
-    if (inScope && !inScope(candidate)) {
-      continue;
-    }
-
-    scopeSize += 1;
-    if (candidate.id === cluster.id && candidate.stateCode === cluster.stateCode) {
-      foundCluster = true;
-    }
-
-    const order = compareClusterCoreMetric(candidate, cluster);
-    if (order < 0 || (order === 0 && index < clusterIndex)) {
-      rank += 1;
-    }
-  }
-
-  if (!foundCluster || scopeSize === 0) {
-    return null;
-  }
-
-  return {
-    rank,
-    percentile: Math.max(1, Math.ceil((rank / scopeSize) * 100))
-  };
-}
-
-function severityRankKey(cluster: IntersectionCluster): string {
-  return `${cluster.stateCode}\0${cluster.id}`;
 }
 
 function selectClusterOnMap(cluster: IntersectionCluster, telemetrySource = "cluster selection", zoomLevel: number | null = null): void {
@@ -2775,7 +2478,7 @@ function scheduleSelectionSupportPrewarm(): void {
       }
 
       const started = performance.now();
-      severityRankCacheForCurrentResult();
+      severityRankIndexes.forClusters(sourceResult.clusters, severityRankIndexHooks(null));
       const durationMs = round(performance.now() - started, 2);
       if (durationMs >= 10) {
         console.info("[Safe Intersections] selection support prewarm", {
