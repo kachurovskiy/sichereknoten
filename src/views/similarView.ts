@@ -1,4 +1,4 @@
-﻿import type { IntersectionFeatureSummaryRow } from "./tableView";
+import { renderIntersectionFeatureSection, type IntersectionFeatureSummaryRow } from "./intersectionFeatureSummaryView";
 import {
   clusterAreaText,
   clusterLocationText,
@@ -51,7 +51,6 @@ export interface SimilarViewDependencies {
   getSelectedRoadClassSignature: () => RoadClassSignature | null;
   getActiveView: () => string;
   selectCluster: (cluster: IntersectionCluster) => void;
-  renderIntersectionFeatureSection: (rows: readonly IntersectionFeatureSummaryRow[]) => string;
 }
 
 const SIMILAR_INTERSECTION_PREVIEW_LIMIT = 8;
@@ -243,7 +242,7 @@ export class SimilarView {
 
     return `
       ${overview}
-      ${this.deps.renderIntersectionFeatureSection(comparison.groups)}
+      ${renderIntersectionFeatureSection(comparison.groups)}
       ${omittedNote}
       ${this.renderSimilarClusterGroups(comparison.groups)}
     `;

@@ -1,8 +1,7 @@
 ﻿import { clusterLocation, clusterLocationText, compareClusterCoreMetric, renderOsmBooleanBadge } from "../clusterDisplay";
-import { formatInteger, formatRate, formatSeverityPercent, type SeverityPercentSource } from "../formatting";
+import { formatInteger, formatSeverityPercent } from "../formatting";
 import { escapeHtml } from "../html";
 import { tr, trf } from "../i18n";
-import { clampNumber, round } from "../math";
 import type { AnalysisResult, IntersectionCluster } from "../types";
 
 type ClusterSortKey =
@@ -21,47 +20,14 @@ interface ClusterTableSort {
   direction: SortDirection;
 }
 
-export interface IntersectionFeatureSummaryRow extends SeverityPercentSource {
-  id: string;
-  label: string;
-  clusterCount: number;
-  accidentCount: number;
-  fatalCount: number;
-  seriousCount: number;
-  weightedSeverityPercent: number;
-  sortOrder: number;
-}
-
-interface IntersectionFeatureRow extends IntersectionFeatureSummaryRow {}
-
-interface IntersectionFeatureAccumulator {
-  id: string;
-  label: string;
-  clusterCount: number;
-  accidentCount: number;
-  fatalCount: number;
-  seriousCount: number;
-  weightedSeverityPercent: number;
-  sortOrder: number;
-}
-
 export interface TableViewDependencies {
   body: HTMLTableSectionElement;
-  featureSummary: HTMLElement;
   getResult: () => AnalysisResult | null;
   getStateFilterValue: () => string;
   selectCluster: (cluster: IntersectionCluster) => void;
 }
 
 const TABLE_ROWS_PER_STATE = 10;
-const INTERSECTION_FEATURE_MIN_POPULATION = 1;
-const INTERSECTION_FEATURE_POPULATION_BUCKETS = [
-  { id: "under10k", maxExclusive: 10_000, labelKey: "intersectionFeature.populationUnder10k" },
-  { id: "10k50k", maxExclusive: 50_000, labelKey: "intersectionFeature.population10k50k" },
-  { id: "50k100k", maxExclusive: 100_000, labelKey: "intersectionFeature.population50k100k" },
-  { id: "100k500k", maxExclusive: 500_000, labelKey: "intersectionFeature.population100k500k" },
-  { id: "500kPlus", maxExclusive: Number.POSITIVE_INFINITY, labelKey: "intersectionFeature.population500kPlus" }
-] as const;
 
 export class TableView {
   private sort: ClusterTableSort = { key: "severityPercent", direction: "desc" };
@@ -97,7 +63,6 @@ export class TableView {
     }
     this.renderedResult = result;
     this.updateSortHeaders();
-    this.renderIntersectionFeatureSummary(result);
     this.deps.body.innerHTML = "";
     if (!result) {
       return;
@@ -126,170 +91,6 @@ export class TableView {
       });
       this.deps.body.append(row);
     }
-  }
-
-  private renderIntersectionFeatureSummary(result: AnalysisResult | null): void {
-    const clusters = result?.clusters ?? [];
-    if (!result || clusters.length === 0) {
-      this.deps.featureSummary.innerHTML = `<p class="population-rate-empty">${escapeHtml(tr("intersectionFeature.empty"))}</p>`;
-      return;
-    }
-
-    const rows = this.populationIntersectionFeatureRows(clusters);
-    if (rows.length === 0) {
-      this.deps.featureSummary.innerHTML = `<p class="population-rate-empty">${escapeHtml(tr("intersectionFeature.empty"))}</p>`;
-      return;
-    }
-
-    this.deps.featureSummary.innerHTML = this.renderIntersectionFeatureSection(rows);
-  }
-
-  private populationIntersectionFeatureRows(clusters: IntersectionCluster[]): IntersectionFeatureRow[] {
-    const accumulators = new Map<string, IntersectionFeatureAccumulator>();
-    INTERSECTION_FEATURE_POPULATION_BUCKETS.forEach((bucket, index) => {
-      accumulators.set(bucket.id, this.createIntersectionFeatureAccumulator(bucket.id, tr(bucket.labelKey), index));
-    });
-
-    for (const cluster of clusters) {
-      const bucket = this.intersectionFeaturePopulationBucket(cluster);
-      if (!bucket) {
-        continue;
-      }
-      this.addClusterToIntersectionFeatureAccumulator(accumulators.get(bucket.id), cluster);
-    }
-
-    return this.finalizeIntersectionFeatureRows(Array.from(accumulators.values()));
-  }
-
-  private intersectionFeaturePopulationBucket(cluster: IntersectionCluster): (typeof INTERSECTION_FEATURE_POPULATION_BUCKETS)[number] | null {
-    const population = cluster.municipalityPopulation ?? cluster.administrativeRegionPopulation;
-    if (typeof population !== "number" || population < INTERSECTION_FEATURE_MIN_POPULATION) {
-      return null;
-    }
-    return INTERSECTION_FEATURE_POPULATION_BUCKETS.find((bucket) => population < bucket.maxExclusive) ?? null;
-  }
-
-  private createIntersectionFeatureAccumulator(id: string, label: string, sortOrder: number): IntersectionFeatureAccumulator {
-    return {
-      id,
-      label,
-      clusterCount: 0,
-      accidentCount: 0,
-      fatalCount: 0,
-      seriousCount: 0,
-      weightedSeverityPercent: 0,
-      sortOrder
-    };
-  }
-
-  private addClusterToIntersectionFeatureAccumulator(
-    accumulator: IntersectionFeatureAccumulator | undefined,
-    cluster: IntersectionCluster
-  ): void {
-    if (!accumulator) {
-      return;
-    }
-    accumulator.clusterCount += 1;
-    accumulator.accidentCount += cluster.accidentCount;
-    accumulator.fatalCount += cluster.fatalCount;
-    accumulator.seriousCount += cluster.seriousCount;
-    accumulator.weightedSeverityPercent += cluster.severityPercent * cluster.accidentCount;
-  }
-
-  private finalizeIntersectionFeatureRows(accumulators: IntersectionFeatureAccumulator[]): IntersectionFeatureRow[] {
-    return accumulators
-      .filter((row) => row.clusterCount > 0)
-      .map((row) => ({
-        ...row,
-        severityPercent: row.accidentCount > 0 ? row.weightedSeverityPercent / row.accidentCount : 0
-      }))
-      .sort((a, b) => a.sortOrder - b.sortOrder);
-  }
-
-  renderIntersectionFeatureSection(rows: readonly IntersectionFeatureSummaryRow[]): string {
-    const maxSeverityPercent = Math.max(0.1, ...rows.map((row) => this.intersectionFeatureSeverityPercent(row)));
-    const maxTotalPerIntersection = Math.max(1, ...rows.map((row) => this.intersectionFeatureTotalPerIntersection(row)));
-    const maxFatalPer100 = Math.max(1, ...rows.map((row) => this.intersectionFeatureFatalPer100(row)));
-    const maxSeriousPer100 = Math.max(1, ...rows.map((row) => this.intersectionFeatureSeriousPer100(row)));
-    return `
-      <div class="intersection-feature-table" role="table">
-        <div class="intersection-feature-row intersection-feature-row-header" role="row">
-          <div role="columnheader">${escapeHtml(tr("intersectionFeature.group"))}</div>
-          <div role="columnheader">${escapeHtml(tr("intersectionFeature.severity"))}</div>
-          <div role="columnheader">${escapeHtml(tr("intersectionFeature.fatalPer100"))}</div>
-          <div role="columnheader">${escapeHtml(tr("intersectionFeature.seriousPer100"))}</div>
-          <div role="columnheader">${escapeHtml(tr("intersectionFeature.totalPerIntersection"))}</div>
-          <div role="columnheader">${escapeHtml(tr("intersectionFeature.total"))}</div>
-        </div>
-        ${rows
-          .map((row) => this.renderIntersectionFeatureRow(row, maxSeverityPercent, maxTotalPerIntersection, maxFatalPer100, maxSeriousPer100))
-          .join("")}
-      </div>
-    `;
-  }
-
-  private renderIntersectionFeatureRow(
-    row: IntersectionFeatureRow,
-    maxSeverityPercent: number,
-    maxTotalPerIntersection: number,
-    maxFatalPer100: number,
-    maxSeriousPer100: number
-  ): string {
-    const severityPercent = this.intersectionFeatureSeverityPercent(row);
-    const severityLabel = this.formatIntersectionFeatureSeverityPercent(row);
-    const fatalPer100 = this.intersectionFeatureFatalPer100(row);
-    const seriousPer100 = this.intersectionFeatureSeriousPer100(row);
-    const totalPerIntersection = this.intersectionFeatureTotalPerIntersection(row);
-    const title = `${row.label}: ${tr("intersectionFeature.severity")} ${severityLabel}, ${tr(
-      "intersectionFeature.fatalPer100"
-    )} ${formatRate(fatalPer100)}, ${tr("intersectionFeature.seriousPer100")} ${formatRate(
-      seriousPer100
-    )}, ${tr("intersectionFeature.totalPerIntersection")} ${formatRate(totalPerIntersection)}`;
-    return `
-      <div class="intersection-feature-row" role="row" title="${escapeHtml(title)}">
-        <div class="intersection-feature-group" role="cell">
-          <strong>${escapeHtml(row.label)}</strong>
-          <span>${formatInteger(row.clusterCount)} ${escapeHtml(tr("intersectionFeature.intersections").toLowerCase())}</span>
-        </div>
-        <div role="cell">${this.renderIntersectionFeatureMetric(severityLabel, severityPercent, maxSeverityPercent, "severity")}</div>
-        <div role="cell">${this.renderIntersectionFeatureMetric(formatRate(fatalPer100), fatalPer100, maxFatalPer100, "fatal")}</div>
-        <div role="cell">${this.renderIntersectionFeatureMetric(formatRate(seriousPer100), seriousPer100, maxSeriousPer100, "serious")}</div>
-        <div role="cell">${this.renderIntersectionFeatureMetric(formatRate(totalPerIntersection), totalPerIntersection, maxTotalPerIntersection, "total")}</div>
-        <div class="intersection-feature-number intersection-feature-total" role="cell">${formatInteger(row.accidentCount)}</div>
-      </div>
-    `;
-  }
-
-  private renderIntersectionFeatureMetric(label: string, value: number, maxValue: number, kind: string): string {
-    const width = maxValue <= 0 ? 0 : clampNumber((value / maxValue) * 100, 0, 100);
-    return `
-      <span class="intersection-feature-metric">
-        <span class="intersection-feature-meter" aria-hidden="true">
-          <span class="intersection-feature-meter-fill intersection-feature-meter-${kind}" style="width: ${round(width, 1)}%"></span>
-        </span>
-        <strong>${escapeHtml(label)}</strong>
-      </span>
-    `;
-  }
-
-  private intersectionFeatureSeverityPercent(row: IntersectionFeatureRow): number {
-    return row.severityPercent * 100;
-  }
-
-  private formatIntersectionFeatureSeverityPercent(row: IntersectionFeatureRow): string {
-    return `${formatRate(this.intersectionFeatureSeverityPercent(row))}%`;
-  }
-
-  private intersectionFeatureFatalPer100(row: IntersectionFeatureRow): number {
-    return row.clusterCount > 0 ? (row.fatalCount / row.clusterCount) * 100 : 0;
-  }
-
-  private intersectionFeatureSeriousPer100(row: IntersectionFeatureRow): number {
-    return row.clusterCount > 0 ? (row.seriousCount / row.clusterCount) * 100 : 0;
-  }
-
-  private intersectionFeatureTotalPerIntersection(row: IntersectionFeatureRow): number {
-    return row.clusterCount > 0 ? row.accidentCount / row.clusterCount : 0;
   }
 
   private clustersForTable(clusters: IntersectionCluster[]): IntersectionCluster[] {

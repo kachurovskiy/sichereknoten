@@ -55,6 +55,7 @@ import {
 } from "./types";
 import { TRANSLATIONS } from "./translations";
 import { ExploreView } from "./views/exploreView";
+import { IntersectionFeatureSummaryView } from "./views/intersectionFeatureSummaryView";
 import { SelectedIntersectionPanelView } from "./views/selectedIntersectionPanelView";
 import { SelectedPreviewMapView } from "./views/selectedPreviewMapView";
 import { SimilarView } from "./views/similarView";
@@ -243,6 +244,10 @@ let appRouter: AppRouter;
 let similarView: SimilarView;
 let exploreView: ExploreView;
 let unclusteredIncidentLayer: UnclusteredIncidentLayer;
+const intersectionFeatureSummaryView = new IntersectionFeatureSummaryView({
+  container: elements.intersectionFeatureSummary,
+  getResult: () => result
+});
 const selectedPreviewMapView = new SelectedPreviewMapView({
   container: elements.selectedPreviewMap,
   canvas: elements.selectedPreviewCanvas,
@@ -347,7 +352,6 @@ appRouter = new AppRouter(
 );
 const tableView = new TableView({
   body: elements.clusterTableBody,
-  featureSummary: elements.intersectionFeatureSummary,
   getResult: () => result,
   getStateFilterValue: () => elements.stateFilter.value,
   selectCluster: (cluster) => selectClusterOnMap(cluster)
@@ -358,8 +362,7 @@ similarView = new SimilarView({
   getSelectedCluster: () => selectedIntersectionController.selectedCluster,
   getSelectedRoadClassSignature: () => selectedIntersectionController.selectedRoadClassSignature,
   getActiveView: () => appRouter.activeView,
-  selectCluster: (cluster) => selectClusterOnMap(cluster),
-  renderIntersectionFeatureSection: (rows) => tableView.renderIntersectionFeatureSection(rows)
+  selectCluster: (cluster) => selectClusterOnMap(cluster)
 });
 const stateRegionView = new StateRegionView({
   stateRankChart: elements.stateRankChart,
@@ -652,6 +655,7 @@ function clearAnalysisDerivedState(): void {
 function invalidateRenderedAnalysisViews(): void {
   renderedMapClusters = undefined;
   stateRegionView.invalidate();
+  intersectionFeatureSummaryView.invalidate();
   tableView.invalidate();
 }
 
@@ -1156,6 +1160,7 @@ function geolocationErrorMessage(error: GeolocationPositionError): string {
 
 function renderTables(): void {
   stateRegionView.renderAll();
+  intersectionFeatureSummaryView.render();
   tableView.render();
   similarView.renderIfVisible();
 }
@@ -1169,6 +1174,7 @@ function renderActiveAnalysisView(): void {
       stateRegionView.renderRegion();
       return;
     case "table":
+      intersectionFeatureSummaryView.render();
       tableView.render();
       return;
     case "similar":
