@@ -75,7 +75,7 @@ async function writeDataBundle(files, streetLookup, analysisCacheVersion) {
       `Reused ${reusableAccidentShardFiles.length.toLocaleString("en-US")} normalized accident state shard scripts for data version ${dataVersion}.`
     );
   }
-  await removeGeneratedDefaultAnalysisFiles(new Set([defaultAnalysis.fileName]));
+  await removeGeneratedDefaultAnalysisFiles(new Set([defaultAnalysis.fileName, defaultAnalysis.scriptFileName]));
 
   await writeDataManifest(dataVersion, fileMetadata, accidentShardFiles, defaultAnalysis);
   return ["data-manifest.js"];
@@ -113,7 +113,9 @@ async function writeDataManifest(dataVersion, fileMetadata, accidentShardFiles, 
       fileMetadata
     )},accidentShardFiles:${JSON.stringify(accidentShardFiles)},accidentShards:[],defaultAnalysisFile:${JSON.stringify(
       defaultAnalysis.fileName
-    )},defaultAnalysisMetadata:${JSON.stringify(defaultAnalysis.metadata)},defaultAnalysis:null};\n`
+    )},defaultAnalysisScriptFile:${JSON.stringify(defaultAnalysis.scriptFileName)},defaultAnalysisMetadata:${JSON.stringify(
+      defaultAnalysis.metadata
+    )},defaultAnalysis:null};\n`
   );
 }
 
@@ -207,12 +209,15 @@ async function reusableAccidentShards(dataVersion) {
 async function reusableDefaultAnalysis(dataVersion, analysisCacheVersion, options) {
   const manifest = await readExistingDataManifest();
   const fileName = manifest?.defaultAnalysisFile;
+  const scriptFileName = manifest?.defaultAnalysisScriptFile ?? defaultAnalysisScriptFileName(dataVersion, analysisCacheVersion);
   const metadata = manifest?.defaultAnalysisMetadata;
   if (
     !manifest ||
     manifest.version !== dataVersion ||
     typeof fileName !== "string" ||
-    !/^analysis-default-[\w-]+\.js$/.test(fileName) ||
+    !/^analysis-default-[\w-]+\.json\.gz$/.test(fileName) ||
+    typeof scriptFileName !== "string" ||
+    !/^analysis-default-[\w-]+\.js$/.test(scriptFileName) ||
     !defaultAnalysisMetadataMatches(metadata, dataVersion, analysisCacheVersion, options)
   ) {
     return null;
@@ -220,9 +225,12 @@ async function reusableDefaultAnalysis(dataVersion, analysisCacheVersion, option
   if (!(await fileExists(path.join(assetsDir, fileName)))) {
     return null;
   }
+  if (!(await fileExists(path.join(assetsDir, scriptFileName)))) {
+    return null;
+  }
 
   console.log(`Reused bundled default analysis for data version ${dataVersion}.`);
-  return { fileName, metadata };
+  return { fileName, scriptFileName, metadata };
 }
 
 async function writeDefaultAnalysis(dataVersion, analysisCacheVersion, accidentShardFiles, options) {
@@ -237,6 +245,7 @@ async function writeDefaultAnalysis(dataVersion, analysisCacheVersion, accidentS
   const bytes = Buffer.from(JSON.stringify(result));
   const compressed = gzipSync(bytes, { level: 9 });
   const fileName = defaultAnalysisFileName(dataVersion, analysisCacheVersion);
+  const scriptFileName = defaultAnalysisScriptFileName(dataVersion, analysisCacheVersion);
   const bundle = {
     id: "analysis-default",
     encoding: "gzip-base64-json-v1",
@@ -247,15 +256,20 @@ async function writeDefaultAnalysis(dataVersion, analysisCacheVersion, accidentS
     compressedSize: compressed.byteLength,
     chunks: chunkString(compressed.toString("base64"), 256 * 1024)
   };
+  await writeFile(path.join(assetsDir, fileName), compressed);
   const script = `globalThis.__SICHERE_KNOTEN_DATA__=globalThis.__SICHERE_KNOTEN_DATA__||{version:${JSON.stringify(
     dataVersion
   )},files:[],accidentShards:[]};globalThis.__SICHERE_KNOTEN_DATA__.defaultAnalysis=${JSON.stringify(bundle)};\n`;
-  await writeFile(path.join(assetsDir, fileName), script);
+  await writeFile(path.join(assetsDir, scriptFileName), script);
   console.log(`Wrote ${fileName} with ${result.clusters.length.toLocaleString("en-US")} default intersection clusters.`);
-  return { fileName, metadata };
+  return { fileName, scriptFileName, metadata };
 }
 
 function defaultAnalysisFileName(dataVersion, analysisCacheVersion) {
+  return `analysis-default-${dataVersion}-${analysisCacheVersion}.json.gz`;
+}
+
+function defaultAnalysisScriptFileName(dataVersion, analysisCacheVersion) {
   return `analysis-default-${dataVersion}-${analysisCacheVersion}.js`;
 }
 
@@ -357,7 +371,11 @@ async function removeGeneratedDefaultAnalysisFiles(keep = new Set()) {
   const entries = await readdir(assetsDir);
   await Promise.all(
     entries
-      .filter((entry) => (entry === "analysis-default.js" || /^analysis-default-[\w-]+\.js$/.test(entry)) && !keep.has(entry))
+      .filter(
+        (entry) =>
+          (entry === "analysis-default.js" || /^analysis-default-[\w-]+\.js$/.test(entry) || /^analysis-default-[\w-]+\.json\.gz$/.test(entry)) &&
+          !keep.has(entry)
+      )
       .map((entry) => rm(path.join(assetsDir, entry), { force: true }))
   );
 }

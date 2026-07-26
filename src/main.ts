@@ -1395,6 +1395,10 @@ let accidentRecordIndexLookupCache: AccidentRecordIndexLookupCache | null = null
 let severityRankCache: SeverityRankCache | null = null;
 let browseIndexCache: BrowseIndex | null = null;
 let unclusteredIncidentMapCache: UnclusteredIncidentMapCache | null = null;
+let renderedMapClusters: IntersectionCluster[] | null | undefined;
+let renderedStateResult: AnalysisResult | null | undefined;
+let renderedRegionResult: AnalysisResult | null | undefined;
+let renderedTableResult: AnalysisResult | null | undefined;
 let postRenderCacheWriteQueue: Promise<void> = Promise.resolve();
 let isStreetViewOpen = readStoredStreetViewOpen();
 let activeView: ViewKey = "map";
@@ -1648,7 +1652,8 @@ function wireClusterSortEvents(): void {
         clusterTableSort.key === key
           ? { key, direction: clusterTableSort.direction === "asc" ? "desc" : "asc" }
           : { key, direction: defaultClusterSortDirection(key) };
-      renderTables();
+      renderedTableResult = undefined;
+      renderTableAnalysisView();
     });
   }
 }
@@ -2013,8 +2018,16 @@ function clearAnalysisDerivedState(): void {
   accidentRecordIndexLookupCache = null;
   severityRankCache = null;
   browseIndexCache = null;
+  invalidateRenderedAnalysisViews();
   unclusteredIncidentMapCache = null;
   map.setUnclusteredIncidentPoints([]);
+}
+
+function invalidateRenderedAnalysisViews(): void {
+  renderedMapClusters = undefined;
+  renderedStateResult = undefined;
+  renderedRegionResult = undefined;
+  renderedTableResult = undefined;
 }
 
 async function loadBundledData(): Promise<void> {
@@ -2427,15 +2440,26 @@ function bundledDataYears(): number[] {
 
 function renderAll(): void {
   updateRangeOutputs();
-  renderTables();
   renderExplore();
+  renderActiveAnalysisView();
   applySeverityFilter();
+  renderMapResults();
+}
+
+function renderMapResults(): void {
   if (result) {
-    map.setData(result.clusters);
+    if (renderedMapClusters !== result.clusters) {
+      map.setData(result.clusters);
+      renderedMapClusters = result.clusters;
+    }
     elements.mapEmpty.hidden = result.clusters.length > 0;
     updateMapLegendVisibility();
     applyPendingUrlIntersectionSelection();
   } else {
+    if (renderedMapClusters !== null) {
+      map.setData([]);
+      renderedMapClusters = null;
+    }
     elements.mapEmpty.hidden = false;
     elements.mapIncidentLegend.hidden = true;
     updateMapLegendVisibility();
@@ -2835,17 +2859,60 @@ function geolocationErrorMessage(error: GeolocationPositionError): string {
 }
 
 function renderTables(): void {
-  updateClusterSortHeaders();
-  renderStateRankChart();
-  renderRegionRankChart();
-  renderStatePopulationRates();
-  renderRegionPopulationRates();
-  renderStatePopulationScatter();
-  renderRegionPopulationScatter();
-  renderStateSeverityCorrelationScatter();
-  renderRegionSeverityCorrelationScatter();
-  renderIntersectionFeatureSummary();
+  renderStateAnalysisView();
+  renderRegionAnalysisView();
+  renderTableAnalysisView();
   renderSimilarIntersectionsIfVisible();
+}
+
+function renderActiveAnalysisView(): void {
+  switch (activeView) {
+    case "state":
+      renderStateAnalysisView();
+      return;
+    case "region":
+      renderRegionAnalysisView();
+      return;
+    case "table":
+      renderTableAnalysisView();
+      return;
+    case "similar":
+      renderSimilarIntersectionsIfVisible();
+      return;
+    default:
+      return;
+  }
+}
+
+function renderStateAnalysisView(): void {
+  if (renderedStateResult === result) {
+    return;
+  }
+  renderedStateResult = result;
+  renderStateRankChart();
+  renderStatePopulationRates();
+  renderStatePopulationScatter();
+  renderStateSeverityCorrelationScatter();
+}
+
+function renderRegionAnalysisView(): void {
+  if (renderedRegionResult === result) {
+    return;
+  }
+  renderedRegionResult = result;
+  renderRegionRankChart();
+  renderRegionPopulationRates();
+  renderRegionPopulationScatter();
+  renderRegionSeverityCorrelationScatter();
+}
+
+function renderTableAnalysisView(): void {
+  if (renderedTableResult === result) {
+    return;
+  }
+  renderedTableResult = result;
+  updateClusterSortHeaders();
+  renderIntersectionFeatureSummary();
   elements.clusterTableBody.innerHTML = "";
   if (!result) {
     return;
@@ -4137,16 +4204,9 @@ function buildBrowseIndex(clusters: IntersectionCluster[]): BrowseIndex {
     }
 
     if (cluster.severityPercent >= STATE_BROWSE_MIN_SEVERITY_PERCENT) {
-      appendMapListItem(browseClustersByState, cluster.stateCode, cluster);
-      appendMapListItem(browseClustersByRegion, key, cluster);
+      insertSortedClusterMapItem(browseClustersByState, cluster.stateCode, cluster, STATE_BROWSE_MAX_INTERSECTIONS);
+      insertSortedClusterMapItem(browseClustersByRegion, key, cluster, STATE_BROWSE_MAX_INTERSECTIONS);
     }
-  }
-
-  for (const stateClusters of browseClustersByState.values()) {
-    stateClusters.sort(compareClusterCoreMetric);
-  }
-  for (const regionClusters of browseClustersByRegion.values()) {
-    regionClusters.sort(compareClusterCoreMetric);
   }
 
   const regionSummaries = Array.from(byRegion.values())
@@ -4162,7 +4222,7 @@ function buildBrowseIndex(clusters: IntersectionCluster[]): BrowseIndex {
       seriousCount: summary.seriousCount,
       severityPercent: summary.accidentCount > 0 ? summary.weightedSeverityPercent / summary.accidentCount : 0,
       topCluster: summary.topCluster,
-      clusters: summary.clusters.sort(compareClusterCoreMetric)
+      clusters: summary.clusters
     }))
     .sort(compareRegionSummaries);
 
@@ -4190,6 +4250,20 @@ function appendMapListItem<K, V>(map: Map<K, V[]>, key: K, item: V): void {
     return;
   }
   map.set(key, [item]);
+}
+
+function insertSortedClusterMapItem<K>(
+  map: Map<K, IntersectionCluster[]>,
+  key: K,
+  cluster: IntersectionCluster,
+  limit: number
+): void {
+  const items = map.get(key);
+  if (items) {
+    insertSortedCluster(items, cluster, limit, compareClusterCoreMetric);
+    return;
+  }
+  map.set(key, [cluster]);
 }
 
 function compareRegionSummaries(a: RegionSummary, b: RegionSummary): number {
@@ -6223,7 +6297,7 @@ function setView(view: ViewKey): void {
   elements.settingsView.classList.toggle("active", view === "settings");
 
   updateContextTabs();
-  renderSimilarIntersectionsIfVisible();
+  renderActiveAnalysisView();
   updateStreetViewPanel();
   setMobileMoreMenuOpen(false);
   scheduleMapRefresh();

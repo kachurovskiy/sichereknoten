@@ -75,6 +75,10 @@ interface EmbeddedDefaultAnalysis {
   chunks: string[];
 }
 
+interface LoadedDefaultAnalysis extends EmbeddedDefaultAnalysis {
+  compressedBytes?: Uint8Array;
+}
+
 interface EmbeddedDataBundle {
   version?: string;
   files: EmbeddedDataFile[];
@@ -83,6 +87,7 @@ interface EmbeddedDataBundle {
   accidentChunkFiles?: string[];
   accidentChunks?: EmbeddedAccidentChunk[];
   defaultAnalysisFile?: string;
+  defaultAnalysisScriptFile?: string;
   defaultAnalysisMetadata?: EmbeddedDefaultAnalysisMetadata;
   defaultAnalysis?: EmbeddedDefaultAnalysis | null;
 }
@@ -268,8 +273,9 @@ export class DataRepository {
         "read bundled default analysis",
         bundledAnalysis.id,
         async () => {
-          const compressed = this.decodeBase64Chunks(bundledAnalysis.chunks);
-          const bytes = gunzipSync(compressed);
+          const compressed = bundledAnalysis.compressedBytes ?? this.decodeBase64Chunks(bundledAnalysis.chunks);
+          const bytes = gunzipIfNeeded(compressed);
+          bundledAnalysis.size = bytes.byteLength;
           const text = new TextDecoder().decode(bytes);
           const parsed = JSON.parse(text) as AnalysisResult;
           await yieldToBrowser();
@@ -453,12 +459,45 @@ export class DataRepository {
   private async ensureBundledDefaultAnalysis(
     fileName: string,
     telemetry: DataRepositoryTelemetry | null
-  ): Promise<EmbeddedDefaultAnalysis> {
+  ): Promise<LoadedDefaultAnalysis> {
     const existingAnalysis = globalThis.__SICHERE_KNOTEN_DATA__?.defaultAnalysis;
     if (existingAnalysis) {
       return existingAnalysis;
     }
+    if (fileName.toLowerCase().endsWith(".json.gz")) {
+      try {
+        const compressedBytes = await this.loadBundledDefaultAnalysisBytes(fileName, telemetry);
+        return {
+          id: "analysis-default",
+          encoding: "gzip-base64-json-v1",
+          metadata: globalThis.__SICHERE_KNOTEN_DATA__!.defaultAnalysisMetadata!,
+          clusterCount: 0,
+          filteredAccidentCount: 0,
+          size: 0,
+          compressedSize: compressedBytes.byteLength,
+          chunks: [],
+          compressedBytes
+        };
+      } catch (error) {
+        const fallbackFileName = globalThis.__SICHERE_KNOTEN_DATA__?.defaultAnalysisScriptFile;
+        if (!fallbackFileName) {
+          throw error;
+        }
+        telemetry?.record("fallback default analysis script", fileName, {
+          reason: errorMessage(error),
+          fallbackFileName
+        });
+        return this.ensureBundledDefaultAnalysisScript(fallbackFileName, telemetry);
+      }
+    }
 
+    return this.ensureBundledDefaultAnalysisScript(fileName, telemetry);
+  }
+
+  private async ensureBundledDefaultAnalysisScript(
+    fileName: string,
+    telemetry: DataRepositoryTelemetry | null
+  ): Promise<EmbeddedDefaultAnalysis> {
     await this.measure(
       telemetry,
       "load default analysis script",
@@ -478,6 +517,21 @@ export class DataRepository {
       throw new Error(`Bundled default analysis ${fileName} uses unsupported encoding ${loadedAnalysis.encoding}.`);
     }
     return loadedAnalysis;
+  }
+
+  private async loadBundledDefaultAnalysisBytes(fileName: string, telemetry: DataRepositoryTelemetry | null): Promise<Uint8Array> {
+    const loaded = await this.measure(
+      telemetry,
+      "load default analysis file",
+      fileName,
+      () => this.fetchOfflineBundleAsset(fileName),
+      ({ bytes, url }) => ({
+        url,
+        compressedBytes: bytes.byteLength,
+        automatic: true
+      })
+    );
+    return loaded.bytes;
   }
 
   private async ensureBundledAccidentShard(fileName: string, telemetry: DataRepositoryTelemetry | null): Promise<EmbeddedAccidentShard> {
@@ -552,7 +606,7 @@ export class DataRepository {
   }
 
   private async loadOfflineBundleScript(fileName: string): Promise<string> {
-    const urls = this.offlineBundleScriptUrls(fileName);
+    const urls = this.offlineBundleAssetUrls(fileName);
     let lastError: unknown = null;
 
     for (const url of urls) {
@@ -568,7 +622,27 @@ export class DataRepository {
     throw new Error(`Could not load offline data asset ${fileName}.${detail}`);
   }
 
-  private offlineBundleScriptUrls(fileName: string): string[] {
+  private async fetchOfflineBundleAsset(fileName: string): Promise<{ bytes: Uint8Array; url: string }> {
+    const urls = this.offlineBundleAssetUrls(fileName);
+    let lastError: unknown = null;
+
+    for (const url of urls) {
+      try {
+        const response = await fetch(url);
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status} ${response.statusText}`.trim());
+        }
+        return { bytes: new Uint8Array(await response.arrayBuffer()), url };
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    const detail = lastError ? ` Last error: ${errorMessage(lastError)}` : "";
+    throw new Error(`Could not fetch offline data asset ${fileName}.${detail}`);
+  }
+
+  private offlineBundleAssetUrls(fileName: string): string[] {
     const baseUrls = this.offlineBundleAssetBaseUrls();
     return baseUrls.map((baseUrl) => new URL(fileName, baseUrl).href);
   }
@@ -708,6 +782,10 @@ function serializeAnalysisOptionsForBundle(options: AnalysisOptions): Serialized
 
 function uniqueStrings(values: string[]): string[] {
   return Array.from(new Set(values));
+}
+
+function gunzipIfNeeded(bytes: Uint8Array): Uint8Array {
+  return bytes[0] === 0x1f && bytes[1] === 0x8b ? gunzipSync(bytes) : bytes;
 }
 
 function appendItems<T>(target: T[], items: T[]): void {
