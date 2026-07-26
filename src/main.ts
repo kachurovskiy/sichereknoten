@@ -3971,21 +3971,23 @@ function renderRankChart(container: HTMLElement, series: RankChartSeries[], empt
 }
 
 function stateRankChartSeries(clusters: IntersectionCluster[]): RankChartSeries[] {
-  const byState = new Map<string, IntersectionCluster[]>();
+  const byState = new Map<string, RankChartSeries>();
   for (const cluster of clusters) {
-    const stateClusters = byState.get(cluster.stateCode) ?? [];
-    stateClusters.push(cluster);
-    byState.set(cluster.stateCode, stateClusters);
+    const stateSeries =
+      byState.get(cluster.stateCode) ??
+      ({
+        id: cluster.stateCode,
+        name: cluster.stateName ?? STATE_NAMES[cluster.stateCode] ?? cluster.stateCode,
+        color: stateRankChartColor(cluster.stateCode),
+        clusters: []
+      } satisfies RankChartSeries);
+    if (stateSeries.clusters.length < STATE_RANK_CHART_MAX_RANK) {
+      stateSeries.clusters.push(cluster);
+    }
+    byState.set(cluster.stateCode, stateSeries);
   }
 
-  return Array.from(byState.entries())
-    .map(([stateCode, stateClusters]) => ({
-      id: stateCode,
-      name: stateClusters[0]?.stateName ?? STATE_NAMES[stateCode] ?? stateCode,
-      color: stateRankChartColor(stateCode),
-      clusters: [...stateClusters].sort(compareClusterCoreMetric).slice(0, STATE_RANK_CHART_MAX_RANK)
-    }))
-    .sort((a, b) => a.name.localeCompare(b.name, "de", { sensitivity: "base" }));
+  return Array.from(byState.values()).sort((a, b) => a.name.localeCompare(b.name, "de", { sensitivity: "base" }));
 }
 
 function regionRankChartSeries(): RankChartSeries[] {
@@ -3994,7 +3996,7 @@ function regionRankChartSeries(): RankChartSeries[] {
     name: `${summary.regionName}, ${summary.stateName}`,
     tooltip: regionTooltipLabel(summary),
     color: rankChartColor(index),
-    clusters: [...summary.clusters].sort(compareClusterCoreMetric).slice(0, STATE_RANK_CHART_MAX_RANK)
+    clusters: summary.clusters.slice(0, STATE_RANK_CHART_MAX_RANK)
   }));
 }
 
