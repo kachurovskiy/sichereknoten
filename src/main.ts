@@ -1,6 +1,7 @@
 import "./styles.css";
 import { AnalysisOptionsForm, analysisOptionsEqual, cloneAnalysisOptions } from "./analysisOptionsForm";
 import { analyzeDangerousIntersectionsInBackground, type AnalysisExecutionPlan } from "./analysisRunner";
+import { AppRouter } from "./appRouter";
 import { BrowseIndexStore, regionOptionLabel, STATE_BROWSE_MAX_INTERSECTIONS, type BrowseIndex } from "./browseIndex";
 import { DataRepository, type AnalysisCacheContext, type DataRepositoryTelemetry } from "./dataRepository";
 import { clusterLocationText, compareClusterCoreMetric } from "./clusterDisplay";
@@ -69,13 +70,10 @@ const INTERSECTION_URL_COORDINATE_DECIMALS = 5;
 const INTERSECTION_URL_MATCH_MAX_DISTANCE_METERS = 75;
 const INTERSECTION_URL_ZOOM_MIN = 0;
 const INTERSECTION_URL_ZOOM_MAX = 19;
-const VIEW_URL_PARAM = "view";
-
 declare const __SICHERE_KNOTEN_APP_VERSION__: string | undefined;
 declare const __SICHERE_KNOTEN_ANALYSIS_CACHE_VERSION__: string | undefined;
 
 type SeverityFilterKey = "fatal" | "serious" | "other";
-type ViewKey = "explore" | "map" | "details" | "state" | "region" | "similar" | "table" | "settings";
 type LoadingStatusKind = "normal" | "problem" | "idle";
 
 interface LatLon {
@@ -92,7 +90,6 @@ interface SiteVersionManifest {
   analysisCacheVersion?: string;
 }
 
-const MOBILE_LAYOUT_QUERY = "(max-width: 640px)";
 const APP_CACHE_VERSION =
   typeof __SICHERE_KNOTEN_APP_VERSION__ === "string" ? __SICHERE_KNOTEN_APP_VERSION__ : "dev-cluster-streets";
 const ANALYSIS_CACHE_VERSION =
@@ -134,7 +131,6 @@ let userLocation: { lat: number; lon: number; accuracyMeters: number | null } | 
 let unclusteredIncidentMapCache: UnclusteredIncidentMapCache | null = null;
 let renderedMapClusters: IntersectionCluster[] | null | undefined;
 let postRenderCacheWriteQueue: Promise<void> = Promise.resolve();
-let activeView: ViewKey = "map";
 let loadingStatusKind: LoadingStatusKind = "normal";
 let activeInteractionTelemetry: InteractionTelemetry | null = null;
 let isSplashDisplayed = false;
@@ -258,6 +254,7 @@ const selectedIntersectionPanelView = new SelectedIntersectionPanelView({
   formatSeverityPercentWithContext
 });
 let selectedIntersectionController: SelectedIntersectionController;
+let appRouter: AppRouter;
 let similarView: SimilarView;
 let exploreView: ExploreView;
 const selectedPreviewMapView = new SelectedPreviewMapView({
@@ -312,14 +309,50 @@ selectedIntersectionController = new SelectedIntersectionController({
       nearbyCount: elements.nearbyList.children.length
     };
   },
-  getActiveView: () => activeView,
-  isMobileLayout: () => mobileLayout.matches,
-  setView: (view) => setView(view),
+  getActiveView: () => appRouter.activeView,
+  isMobileLayout: () => appRouter.isMobileLayout,
+  setView: (view) => appRouter.setView(view),
   setStatus,
   updateIntersectionSelectionUrl,
   scheduleMapRefresh,
   measureStep: measureActiveInteractionStep
 });
+appRouter = new AppRouter(
+  {
+    app: elements.app,
+    exploreTab: elements.exploreTab,
+    mapTab: elements.mapTab,
+    detailsTab: elements.detailsTab,
+    moreTab: elements.moreTab,
+    stateTab: elements.stateTab,
+    regionTab: elements.regionTab,
+    similarTab: elements.similarTab,
+    tableTab: elements.tableTab,
+    settingsTab: elements.settingsTab,
+    mobileMoreMenu: elements.mobileMoreMenu,
+    mobileStateTab: elements.mobileStateTab,
+    mobileRegionTab: elements.mobileRegionTab,
+    mobileTableTab: elements.mobileTableTab,
+    mobileSettingsTab: elements.mobileSettingsTab,
+    mapView: elements.mapView,
+    stateView: elements.stateView,
+    regionView: elements.regionView,
+    similarView: elements.similarView,
+    tableView: elements.tableView,
+    settingsView: elements.settingsView
+  },
+  {
+    canOpenDetails: () => selectedIntersectionController.hasSelection,
+    canOpenSimilar: () => selectedIntersectionController.canCompareSimilar,
+    setStatus,
+    onViewChanged: () => {
+      selectedIntersectionController.updateContextTabs();
+      renderActiveAnalysisView();
+      selectedIntersectionController.updateStreetViewPanel();
+    },
+    scheduleMapRefresh
+  }
+);
 const tableView = new TableView({
   body: elements.clusterTableBody,
   featureSummary: elements.intersectionFeatureSummary,
@@ -332,7 +365,7 @@ similarView = new SimilarView({
   getResult: () => result,
   getSelectedCluster: () => selectedIntersectionController.selectedCluster,
   getSelectedRoadClassSignature: () => selectedIntersectionController.selectedRoadClassSignature,
-  getActiveView: () => activeView,
+  getActiveView: () => appRouter.activeView,
   selectCluster: (cluster) => selectClusterOnMap(cluster),
   renderIntersectionFeatureSection: (rows) => tableView.renderIntersectionFeatureSection(rows)
 });
@@ -360,9 +393,8 @@ exploreView = new ExploreView({
   browseIndexForCurrentResult,
   updateBrowseRegionOptions,
   selectCluster: (cluster, telemetrySource) => selectClusterOnMap(cluster, telemetrySource),
-  setView: (view) => setView(view)
+  setView: (view) => appRouter.setView(view)
 });
-const mobileLayout = window.matchMedia(MOBILE_LAYOUT_QUERY);
 
 startApp();
 
@@ -372,7 +404,7 @@ function startApp(): void {
   isSplashDisplayed = !elements.splash.hidden;
   analysisOptionsForm.resetToDefaults();
   wireEvents();
-  setView(initialView());
+  appRouter.setView(appRouter.initialView());
   renderAll();
   void checkForFreshDeploymentHtml();
   void loadBundledData();
@@ -413,29 +445,7 @@ function wireMapControlEvents(): void {
 }
 
 function wireNavigationEvents(): void {
-  elements.exploreTab.addEventListener("click", () => setView("explore"));
-  elements.mapTab.addEventListener("click", () => setView("map"));
-  elements.detailsTab.addEventListener("click", () => setView("details"));
-  elements.moreTab.addEventListener("click", toggleMobileMoreMenu);
-  elements.stateTab.addEventListener("click", () => setView("state"));
-  elements.regionTab.addEventListener("click", () => setView("region"));
-  elements.similarTab.addEventListener("click", () => setView("similar"));
-  elements.tableTab.addEventListener("click", () => setView("table"));
-  elements.settingsTab.addEventListener("click", () => setView("settings"));
-  elements.mobileStateTab.addEventListener("click", () => setView("state"));
-  elements.mobileRegionTab.addEventListener("click", () => setView("region"));
-  elements.mobileTableTab.addEventListener("click", () => setView("table"));
-  elements.mobileSettingsTab.addEventListener("click", () => setView("settings"));
-  document.addEventListener("click", closeMobileMoreMenuOnOutsideClick);
-  document.addEventListener("keydown", closeMobileMoreMenuOnEscape);
-  mobileLayout.addEventListener("change", () => {
-    if (!mobileLayout.matches && isMobilePaneView(activeView)) {
-      setView("map");
-      return;
-    }
-    setMobileMoreMenuOpen(false);
-    scheduleMapRefresh();
-  });
+  appRouter.bindEvents();
 }
 
 function wireRankChartEvents(): void {
@@ -1029,59 +1039,6 @@ function readIntersectionSelectionFromUrl(): IntersectionUrlSelection | null {
   return { lat, lon, zoomLevel };
 }
 
-function readViewFromUrl(): ViewKey | null {
-  return parseUrlView(new URLSearchParams(window.location.search).get(VIEW_URL_PARAM));
-}
-
-function parseUrlView(value: string | null): ViewKey | null {
-  const normalizedValue = value?.trim().toLocaleLowerCase("en");
-  switch (normalizedValue) {
-    case "browse":
-    case "explore":
-      return "explore";
-    case "map":
-      return "map";
-    case "details":
-      return "details";
-    case "state":
-      return "state";
-    case "region":
-      return "region";
-    case "similar":
-      return "similar";
-    case "intersections":
-    case "table":
-      return "table";
-    case "settings":
-      return "settings";
-    default:
-      return null;
-  }
-}
-
-function urlViewValue(view: ViewKey): string {
-  return view === "table" ? "intersections" : view;
-}
-
-function updateViewUrl(view: ViewKey): void {
-  const url = new URL(window.location.href);
-  if (view === "map") {
-    if (!url.searchParams.has(VIEW_URL_PARAM)) {
-      return;
-    }
-    url.searchParams.delete(VIEW_URL_PARAM);
-    window.history.replaceState(window.history.state, "", url.toString());
-    return;
-  }
-
-  const urlValue = urlViewValue(view);
-  if (url.searchParams.get(VIEW_URL_PARAM) === urlValue) {
-    return;
-  }
-  url.searchParams.set(VIEW_URL_PARAM, urlValue);
-  window.history.replaceState(window.history.state, "", url.toString());
-}
-
 function parseUrlCoordinate(value: string | null): number | null {
   const trimmed = value?.trim();
   if (!trimmed) {
@@ -1331,7 +1288,7 @@ function renderTables(): void {
 }
 
 function renderActiveAnalysisView(): void {
-  switch (activeView) {
+  switch (appRouter.activeView) {
     case "state":
       stateRegionView.renderState();
       return;
@@ -1409,14 +1366,16 @@ function severityRankTelemetryMetadata(rank: SeverityRank | null): TelemetryMeta
 function selectClusterOnMap(cluster: IntersectionCluster, telemetrySource = "cluster selection", zoomLevel: number | null = null): void {
   const telemetry = createInteractionTelemetry("select cluster from list", telemetrySource, cluster.id, clusterLocationText(cluster));
   activeInteractionTelemetry = telemetry;
-  const openDetailsOnMobile = mobileLayout.matches;
+  const openDetailsOnMobile = appRouter.isMobileLayout;
   measureInteractionStep(telemetry, "ensure severity visible", cluster.id, () => ensureClusterSeverityVisible(cluster), () => ({
     severity: clusterSeverity(cluster),
     fatalCount: cluster.fatalCount,
     seriousCount: cluster.seriousCount
   }));
   if (!openDetailsOnMobile) {
-    measureInteractionStep(telemetry, "set view to map", activeView, () => setView("map"), () => ({ activeView }));
+    measureInteractionStep(telemetry, "set view to map", appRouter.activeView, () => appRouter.setView("map"), () => ({
+      activeView: appRouter.activeView
+    }));
   }
   const frameStep = startInteractionStep(telemetry, "wait for selection animation frame", cluster.id);
   window.requestAnimationFrame(() => {
@@ -1428,7 +1387,9 @@ function selectClusterOnMap(cluster: IntersectionCluster, telemetrySource = "clu
           accidentCount: cluster.accidentCount
         }));
         if (openDetailsOnMobile) {
-          measureInteractionStep(telemetry, "mobile set view details", cluster.id, () => setView("details"), () => ({ activeView }));
+          measureInteractionStep(telemetry, "mobile set view details", cluster.id, () => appRouter.setView("details"), () => ({
+            activeView: appRouter.activeView
+          }));
         }
       });
     } finally {
@@ -1460,108 +1421,11 @@ function clusterSeverity(cluster: IntersectionCluster): SeverityFilterKey {
 
 function scheduleMapRefresh(): void {
   window.requestAnimationFrame(() => {
-    if (mobileLayout.matches && activeView !== "map") {
+    if (!appRouter.shouldRefreshMap()) {
       return;
     }
     map.refresh();
   });
-}
-
-function setView(view: ViewKey): void {
-  if (view === "details" && !selectedIntersectionController.hasSelection) {
-    setStatus(tr("details.selectFirst"), 100);
-    view = "map";
-  }
-  if (view === "similar" && !selectedIntersectionController.canCompareSimilar) {
-    setStatus(selectedIntersectionController.hasSelection ? tr("similar.selectComparable") : tr("details.selectFirst"), 100);
-    view = "map";
-  }
-
-  activeView = view;
-  elements.app.dataset.activeView = view;
-  updateViewUrl(view);
-
-  const tabs = [
-    { key: "explore", tab: elements.exploreTab },
-    { key: "map", tab: elements.mapTab },
-    { key: "details", tab: elements.detailsTab },
-    { key: "similar", tab: elements.similarTab },
-    { key: "state", tab: elements.stateTab },
-    { key: "state", tab: elements.mobileStateTab },
-    { key: "region", tab: elements.regionTab },
-    { key: "region", tab: elements.mobileRegionTab },
-    { key: "table", tab: elements.tableTab },
-    { key: "table", tab: elements.mobileTableTab },
-    { key: "settings", tab: elements.settingsTab },
-    { key: "settings", tab: elements.mobileSettingsTab }
-  ] as const;
-
-  for (const entry of tabs) {
-    const active = entry.key === view;
-    entry.tab.classList.toggle("active", active);
-    if (entry.tab.getAttribute("role") === "tab") {
-      entry.tab.setAttribute("aria-selected", String(active));
-    } else {
-      entry.tab.toggleAttribute("aria-current", active);
-    }
-  }
-  elements.moreTab.classList.toggle("active", isSecondaryView(view));
-
-  elements.mapView.classList.toggle("active", view === "map" || view === "details");
-  elements.stateView.classList.toggle("active", view === "state");
-  elements.regionView.classList.toggle("active", view === "region");
-  elements.similarView.classList.toggle("active", view === "similar");
-  elements.tableView.classList.toggle("active", view === "table");
-  elements.settingsView.classList.toggle("active", view === "settings");
-
-  selectedIntersectionController.updateContextTabs();
-  renderActiveAnalysisView();
-  selectedIntersectionController.updateStreetViewPanel();
-  setMobileMoreMenuOpen(false);
-  scheduleMapRefresh();
-}
-
-function isMobilePaneView(view: ViewKey): boolean {
-  return view === "explore" || view === "details";
-}
-
-function isSecondaryView(view: ViewKey): boolean {
-  return view === "state" || view === "region" || view === "table" || view === "settings";
-}
-
-function toggleMobileMoreMenu(event: MouseEvent): void {
-  event.stopPropagation();
-  setMobileMoreMenuOpen(elements.mobileMoreMenu.hidden);
-}
-
-function setMobileMoreMenuOpen(isOpen: boolean): void {
-  elements.mobileMoreMenu.hidden = !isOpen;
-  elements.moreTab.setAttribute("aria-expanded", String(isOpen));
-}
-
-function closeMobileMoreMenuOnOutsideClick(event: MouseEvent): void {
-  const target = event.target;
-  if (!(target instanceof Node)) {
-    return;
-  }
-  if (elements.mobileMoreMenu.contains(target) || elements.moreTab.contains(target)) {
-    return;
-  }
-  setMobileMoreMenuOpen(false);
-}
-
-function closeMobileMoreMenuOnEscape(event: KeyboardEvent): void {
-  if (event.key === "Escape") {
-    setMobileMoreMenuOpen(false);
-  }
-}
-
-function initialView(): ViewKey {
-  const urlView = readViewFromUrl();
-  if (urlView) {
-    return urlView;
-  }
-  return mobileLayout.matches ? "explore" : "map";
 }
 
 async function resetApp(): Promise<void> {
@@ -1874,8 +1738,8 @@ function scheduleInteractionTelemetryLog(telemetry: InteractionTelemetry): void 
   const paintStep = startInteractionStep(telemetry, "wait for browser paint", telemetry.clusterId);
   window.requestAnimationFrame(() => {
     window.requestAnimationFrame(() => {
-      finishInteractionStep(paintStep, { activeView });
-      logInteractionTelemetry(telemetry, { activeView });
+      finishInteractionStep(paintStep, { activeView: appRouter.activeView });
+      logInteractionTelemetry(telemetry, { activeView: appRouter.activeView });
       if (activeInteractionTelemetry === telemetry) {
         activeInteractionTelemetry = null;
       }
