@@ -522,6 +522,15 @@ select {
   overflow: auto;
 }
 
+#tableView.active {
+  grid-template-rows: auto minmax(220px, 1fr);
+  gap: 14px;
+  align-content: start;
+  align-items: start;
+  min-height: 0;
+  overflow: auto;
+}
+
 .settings-view.active {
   grid-template-columns: minmax(0, 520px) minmax(0, 620px);
   gap: 14px;
@@ -1634,12 +1643,159 @@ button.map-service-link {
   --road-user-color: #53636d;
 }
 
+.intersection-feature-summary {
+  display: grid;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+}
+
+.intersection-feature-header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.intersection-feature-header h2 {
+  margin: 0;
+  color: #172126;
+  font-size: 1rem;
+}
+
+.intersection-feature-header span {
+  color: #53636d;
+  font-size: 0.84rem;
+}
+
+.intersection-feature-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  width: 100%;
+  min-width: 0;
+}
+
+.intersection-feature-table {
+  display: grid;
+  min-width: 0;
+  overflow-x: auto;
+  border: 1px solid #e1e5df;
+  border-radius: 7px;
+}
+
+.intersection-feature-row {
+  display: grid;
+  grid-template-columns:
+    minmax(150px, 1.15fr)
+    repeat(4, minmax(132px, 1fr))
+    minmax(90px, 0.65fr);
+  min-width: 850px;
+  border-bottom: 1px solid #e5e9e4;
+  background: #ffffff;
+}
+
+.intersection-feature-row:last-child {
+  border-bottom: 0;
+}
+
+.intersection-feature-row > div {
+  min-width: 0;
+  padding: 10px 12px;
+  align-content: center;
+}
+
+.intersection-feature-row-header {
+  background: #f4f6f2;
+  color: #38454b;
+  font-size: 0.76rem;
+  font-weight: 700;
+  line-height: 1.15;
+}
+
+.intersection-feature-group {
+  display: grid;
+  gap: 2px;
+}
+
+.intersection-feature-group strong {
+  min-width: 0;
+  color: #172126;
+  font-size: 0.92rem;
+  line-height: 1.15;
+}
+
+.intersection-feature-group span {
+  color: #53636d;
+  font-size: 0.78rem;
+  line-height: 1.15;
+  white-space: nowrap;
+}
+
+.intersection-feature-metric {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.intersection-feature-metric strong,
+.intersection-feature-number {
+  color: #38454b;
+  font-size: 0.88rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.intersection-feature-meter {
+  display: block;
+  width: 100%;
+  height: 8px;
+  overflow: hidden;
+  border-radius: 99px;
+  background: #e7ebe5;
+}
+
+.intersection-feature-meter-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+}
+
+.intersection-feature-meter-total {
+  background: #166b6d;
+}
+
+.intersection-feature-meter-severity {
+  background: #8b3f7a;
+}
+
+.intersection-feature-meter-fatal {
+  background: #b9392b;
+}
+
+.intersection-feature-meter-serious {
+  background: #bf8f2f;
+}
+
+.intersection-feature-total {
+  color: #172126;
+  font-weight: 700;
+}
+
 .table-shell {
   min-height: 0;
   overflow: auto;
   border: 1px solid #d7ddd7;
   border-radius: 8px;
   background: #ffffff;
+}
+
+.compact-table-shell {
+  width: 100%;
+  max-height: min(44dvh, 520px);
 }
 
 .state-rank-chart-panel {
@@ -2098,12 +2254,22 @@ table {
   font-size: 0.9rem;
 }
 
+.cluster-table {
+  min-width: 860px;
+  font-size: 0.82rem;
+}
+
 th,
 td {
   padding: 10px 12px;
   border-bottom: 1px solid #e5e9e4;
   text-align: left;
   vertical-align: top;
+}
+
+.cluster-table th,
+.cluster-table td {
+  padding: 6px 8px;
 }
 
 th {
@@ -2114,6 +2280,10 @@ th {
   color: #38454b;
   font-size: 0.78rem;
   text-transform: uppercase;
+}
+
+.cluster-table th {
+  font-size: 0.7rem;
 }
 
 .sort-button {
@@ -2130,6 +2300,10 @@ th {
   font-weight: 600;
   text-align: left;
   text-transform: inherit;
+}
+
+.cluster-table .sort-button {
+  min-height: 20px;
 }
 
 .sort-button.active {
@@ -2158,6 +2332,12 @@ th {
   font-weight: 700;
   line-height: 1;
   white-space: nowrap;
+}
+
+.cluster-table .osm-feature-pill {
+  min-height: 20px;
+  padding: 0 6px;
+  font-size: 0.72rem;
 }
 
 .osm-feature-yes {
@@ -2455,9 +2635,14 @@ tbody tr:focus {
     overflow-y: auto;
   }
 
-  #tableView.active,
   .settings-view.active {
     grid-template-rows: minmax(0, 1fr);
+    overflow: auto;
+  }
+
+  #tableView.active {
+    grid-template-rows: auto minmax(220px, auto);
+    gap: 12px;
     overflow: auto;
   }
 
@@ -2470,6 +2655,14 @@ tbody tr:focus {
 
   #tableView.active .table-shell {
     min-height: 0;
+  }
+
+  #tableView.active .compact-table-shell {
+    max-height: none;
+  }
+
+  .intersection-feature-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .state-rank-chart-panel {

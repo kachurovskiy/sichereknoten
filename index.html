@@ -235,8 +235,15 @@
         </section>
 
         <section id="tableView" class="view">
-          <div class="table-shell">
-            <table>
+          <section class="intersection-feature-summary" aria-label="Area population comparison" data-i18n-aria-label="aria.intersectionFeatureSummary">
+            <div class="intersection-feature-header">
+              <h2 data-i18n="intersectionFeature.areaPopulation">Area population</h2>
+              <span data-i18n="intersectionFeature.caption">Severity bars scale to the highest population group; rates are normalized per intersection</span>
+            </div>
+            <div id="intersectionFeatureSummary" class="intersection-feature-grid"></div>
+          </section>
+          <div class="table-shell compact-table-shell">
+            <table class="cluster-table">
               <thead>
                 <tr>
                   <th aria-sort="none"><button class="sort-button" type="button" data-cluster-sort="state"><span data-i18n="table.state">Bundesland</span><span class="sort-indicator" aria-hidden="true"></span></button></th>

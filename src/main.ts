@@ -36,6 +36,14 @@ import {
 } from "./types";
 
 const TABLE_ROWS_PER_STATE = 10;
+const INTERSECTION_FEATURE_MIN_POPULATION = 1;
+const INTERSECTION_FEATURE_POPULATION_BUCKETS = [
+  { id: "under10k", maxExclusive: 10_000, labelKey: "intersectionFeature.populationUnder10k" },
+  { id: "10k50k", maxExclusive: 50_000, labelKey: "intersectionFeature.population10k50k" },
+  { id: "50k100k", maxExclusive: 100_000, labelKey: "intersectionFeature.population50k100k" },
+  { id: "100k500k", maxExclusive: 500_000, labelKey: "intersectionFeature.population100k500k" },
+  { id: "500kPlus", maxExclusive: Number.POSITIVE_INFINITY, labelKey: "intersectionFeature.population500kPlus" }
+] as const;
 const STATE_BROWSE_MIN_SEVERITY_PERCENT = 0.1;
 const STATE_BROWSE_MAX_INTERSECTIONS = 100;
 const POPULATION_RATE_DENOMINATOR = 100_000;
@@ -43,6 +51,7 @@ const INTERSECTION_URL_COORDINATE_DECIMALS = 5;
 const INTERSECTION_URL_MATCH_MAX_DISTANCE_METERS = 75;
 const INTERSECTION_URL_ZOOM_MIN = 0;
 const INTERSECTION_URL_ZOOM_MAX = 19;
+const VIEW_URL_PARAM = "view";
 
 declare const __SICHERE_KNOTEN_APP_VERSION__: string | undefined;
 declare const __SICHERE_KNOTEN_ANALYSIS_CACHE_VERSION__: string | undefined;
@@ -347,6 +356,22 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "severityCorrelation.sizeLegend": "Bubble size: population",
     "severityCorrelation.trend": "Trend line",
     "severityCorrelation.correlation": "Correlation r = {value}",
+    "aria.intersectionFeatureSummary": "Area population comparison",
+    "intersectionFeature.caption": "Severity bars scale to the highest population group; rates are normalized per intersection",
+    "intersectionFeature.empty": "Run an analysis to compare area population groups.",
+    "intersectionFeature.areaPopulation": "Area population",
+    "intersectionFeature.group": "Group",
+    "intersectionFeature.intersections": "Intersections",
+    "intersectionFeature.total": "Total accidents",
+    "intersectionFeature.severity": "Severity %",
+    "intersectionFeature.totalPerIntersection": "Accidents per intersection",
+    "intersectionFeature.fatalPer100": "Fatal accidents per 100 intersections",
+    "intersectionFeature.seriousPer100": "Serious accidents per 100 intersections",
+    "intersectionFeature.populationUnder10k": "<10k",
+    "intersectionFeature.population10k50k": "10k-50k",
+    "intersectionFeature.population50k100k": "50k-100k",
+    "intersectionFeature.population100k500k": "100k-500k",
+    "intersectionFeature.population500kPlus": "500k+",
     "severity.fatal": "Fatal",
     "severity.serious": "Serious",
     "severity.light": "Light",
@@ -714,6 +739,22 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "severityCorrelation.sizeLegend": "Punktgroesse: Einwohner",
     "severityCorrelation.trend": "Trendlinie",
     "severityCorrelation.correlation": "Korrelation r = {value}",
+    "aria.intersectionFeatureSummary": "Vergleich nach Einwohnerklasse",
+    "intersectionFeature.caption": "Schweregrad-Balken skalieren zur hoechsten Einwohnerklasse; Raten je Kreuzung",
+    "intersectionFeature.empty": "Fuehre eine Analyse aus, um Einwohnerklassen zu vergleichen.",
+    "intersectionFeature.areaPopulation": "Einwohnerklasse",
+    "intersectionFeature.group": "Gruppe",
+    "intersectionFeature.intersections": "Kreuzungen",
+    "intersectionFeature.total": "Unfälle gesamt",
+    "intersectionFeature.severity": "Schweregrad %",
+    "intersectionFeature.totalPerIntersection": "Unfaelle je Kreuzung",
+    "intersectionFeature.fatalPer100": "Toedliche Unfaelle je 100 Kreuzungen",
+    "intersectionFeature.seriousPer100": "Schwere Unfaelle je 100 Kreuzungen",
+    "intersectionFeature.populationUnder10k": "<10k",
+    "intersectionFeature.population10k50k": "10k-50k",
+    "intersectionFeature.population50k100k": "50k-100k",
+    "intersectionFeature.population100k500k": "100k-500k",
+    "intersectionFeature.population500kPlus": "500k+",
     "severity.fatal": "Tödlich",
     "severity.serious": "Schwer",
     "severity.light": "Leicht",
@@ -1105,6 +1146,28 @@ interface SeverityCorrelationChartConfig {
   pointClass: string;
 }
 
+interface IntersectionFeatureRow extends SeverityPercentSource {
+  id: string;
+  label: string;
+  clusterCount: number;
+  accidentCount: number;
+  fatalCount: number;
+  seriousCount: number;
+  weightedSeverityPercent: number;
+  sortOrder: number;
+}
+
+interface IntersectionFeatureAccumulator {
+  id: string;
+  label: string;
+  clusterCount: number;
+  accidentCount: number;
+  fatalCount: number;
+  seriousCount: number;
+  weightedSeverityPercent: number;
+  sortOrder: number;
+}
+
 interface ScatterRegression {
   slope: number;
   intercept: number;
@@ -1298,6 +1361,7 @@ const elements = {
   regionPopulationRates: byId<HTMLDivElement>("regionPopulationRates"),
   regionPopulationScatter: byId<HTMLDivElement>("regionPopulationScatter"),
   regionSeverityCorrelationScatter: byId<HTMLDivElement>("regionSeverityCorrelationScatter"),
+  intersectionFeatureSummary: byId<HTMLDivElement>("intersectionFeatureSummary"),
   clusterTableBody: byId<HTMLTableSectionElement>("clusterTableBody"),
   exploreTab: byId<HTMLButtonElement>("exploreTab"),
   mapTab: byId<HTMLButtonElement>("mapTab"),
@@ -2339,6 +2403,57 @@ function readIntersectionSelectionFromUrl(): IntersectionUrlSelection | null {
   return { lat, lon, zoomLevel };
 }
 
+function readViewFromUrl(): ViewKey | null {
+  return parseUrlView(new URLSearchParams(window.location.search).get(VIEW_URL_PARAM));
+}
+
+function parseUrlView(value: string | null): ViewKey | null {
+  const normalizedValue = value?.trim().toLocaleLowerCase("en");
+  switch (normalizedValue) {
+    case "browse":
+    case "explore":
+      return "explore";
+    case "map":
+      return "map";
+    case "details":
+      return "details";
+    case "state":
+      return "state";
+    case "region":
+      return "region";
+    case "intersections":
+    case "table":
+      return "table";
+    case "settings":
+      return "settings";
+    default:
+      return null;
+  }
+}
+
+function urlViewValue(view: ViewKey): string {
+  return view === "table" ? "intersections" : view;
+}
+
+function updateViewUrl(view: ViewKey): void {
+  const url = new URL(window.location.href);
+  if (view === "map") {
+    if (!url.searchParams.has(VIEW_URL_PARAM)) {
+      return;
+    }
+    url.searchParams.delete(VIEW_URL_PARAM);
+    window.history.replaceState(window.history.state, "", url.toString());
+    return;
+  }
+
+  const urlValue = urlViewValue(view);
+  if (url.searchParams.get(VIEW_URL_PARAM) === urlValue) {
+    return;
+  }
+  url.searchParams.set(VIEW_URL_PARAM, urlValue);
+  window.history.replaceState(window.history.state, "", url.toString());
+}
+
 function parseUrlCoordinate(value: string | null): number | null {
   const trimmed = value?.trim();
   if (!trimmed) {
@@ -2604,6 +2719,7 @@ function renderTables(): void {
   renderRegionPopulationScatter();
   renderStateSeverityCorrelationScatter();
   renderRegionSeverityCorrelationScatter();
+  renderIntersectionFeatureSummary();
   elements.clusterTableBody.innerHTML = "";
   if (!result) {
     return;
@@ -2690,6 +2806,172 @@ function renderRegionSeverityCorrelationScatter(): void {
     (summary) => severityByRegion.get(summary.key) ?? null
   );
   renderSeverityCorrelationComparison(elements.regionSeverityCorrelationScatter, rows);
+}
+
+function renderIntersectionFeatureSummary(): void {
+  const clusters = result?.clusters ?? [];
+  if (!result || clusters.length === 0) {
+    elements.intersectionFeatureSummary.innerHTML = `<p class="population-rate-empty">${escapeHtml(tr("intersectionFeature.empty"))}</p>`;
+    return;
+  }
+
+  const rows = populationIntersectionFeatureRows(clusters);
+  if (rows.length === 0) {
+    elements.intersectionFeatureSummary.innerHTML = `<p class="population-rate-empty">${escapeHtml(tr("intersectionFeature.empty"))}</p>`;
+    return;
+  }
+
+  elements.intersectionFeatureSummary.innerHTML = renderIntersectionFeatureSection(rows);
+}
+
+function populationIntersectionFeatureRows(clusters: IntersectionCluster[]): IntersectionFeatureRow[] {
+  const accumulators = new Map<string, IntersectionFeatureAccumulator>();
+  INTERSECTION_FEATURE_POPULATION_BUCKETS.forEach((bucket, index) => {
+    accumulators.set(bucket.id, createIntersectionFeatureAccumulator(bucket.id, tr(bucket.labelKey), index));
+  });
+
+  for (const cluster of clusters) {
+    const bucket = intersectionFeaturePopulationBucket(cluster);
+    if (!bucket) {
+      continue;
+    }
+    addClusterToIntersectionFeatureAccumulator(accumulators.get(bucket.id), cluster);
+  }
+
+  return finalizeIntersectionFeatureRows(Array.from(accumulators.values()));
+}
+
+function intersectionFeaturePopulationBucket(cluster: IntersectionCluster): (typeof INTERSECTION_FEATURE_POPULATION_BUCKETS)[number] | null {
+  const population = cluster.municipalityPopulation ?? cluster.administrativeRegionPopulation;
+  if (typeof population !== "number" || population < INTERSECTION_FEATURE_MIN_POPULATION) {
+    return null;
+  }
+  return INTERSECTION_FEATURE_POPULATION_BUCKETS.find((bucket) => population < bucket.maxExclusive) ?? null;
+}
+
+function createIntersectionFeatureAccumulator(
+  id: string,
+  label: string,
+  sortOrder: number
+): IntersectionFeatureAccumulator {
+  return {
+    id,
+    label,
+    clusterCount: 0,
+    accidentCount: 0,
+    fatalCount: 0,
+    seriousCount: 0,
+    weightedSeverityPercent: 0,
+    sortOrder
+  };
+}
+
+function addClusterToIntersectionFeatureAccumulator(
+  accumulator: IntersectionFeatureAccumulator | undefined,
+  cluster: IntersectionCluster
+): void {
+  if (!accumulator) {
+    return;
+  }
+  accumulator.clusterCount += 1;
+  accumulator.accidentCount += cluster.accidentCount;
+  accumulator.fatalCount += cluster.fatalCount;
+  accumulator.seriousCount += cluster.seriousCount;
+  accumulator.weightedSeverityPercent += cluster.severityPercent * cluster.accidentCount;
+}
+
+function finalizeIntersectionFeatureRows(accumulators: IntersectionFeatureAccumulator[]): IntersectionFeatureRow[] {
+  return accumulators
+    .filter((row) => row.clusterCount > 0)
+    .map((row) => ({
+      ...row,
+      severityPercent: row.accidentCount > 0 ? row.weightedSeverityPercent / row.accidentCount : 0
+    }))
+    .sort((a, b) => a.sortOrder - b.sortOrder);
+}
+
+function renderIntersectionFeatureSection(rows: IntersectionFeatureRow[]): string {
+  const maxSeverityPercent = Math.max(0.1, ...rows.map(intersectionFeatureSeverityPercent));
+  const maxTotalPerIntersection = Math.max(1, ...rows.map(intersectionFeatureTotalPerIntersection));
+  const maxFatalPer100 = Math.max(1, ...rows.map(intersectionFeatureFatalPer100));
+  const maxSeriousPer100 = Math.max(1, ...rows.map(intersectionFeatureSeriousPer100));
+  return `
+    <div class="intersection-feature-table" role="table">
+      <div class="intersection-feature-row intersection-feature-row-header" role="row">
+        <div role="columnheader">${escapeHtml(tr("intersectionFeature.group"))}</div>
+        <div role="columnheader">${escapeHtml(tr("intersectionFeature.severity"))}</div>
+        <div role="columnheader">${escapeHtml(tr("intersectionFeature.fatalPer100"))}</div>
+        <div role="columnheader">${escapeHtml(tr("intersectionFeature.seriousPer100"))}</div>
+        <div role="columnheader">${escapeHtml(tr("intersectionFeature.totalPerIntersection"))}</div>
+        <div role="columnheader">${escapeHtml(tr("intersectionFeature.total"))}</div>
+      </div>
+      ${rows.map((row) => renderIntersectionFeatureRow(row, maxSeverityPercent, maxTotalPerIntersection, maxFatalPer100, maxSeriousPer100)).join("")}
+    </div>
+  `;
+}
+
+function renderIntersectionFeatureRow(
+  row: IntersectionFeatureRow,
+  maxSeverityPercent: number,
+  maxTotalPerIntersection: number,
+  maxFatalPer100: number,
+  maxSeriousPer100: number
+): string {
+  const severityPercent = intersectionFeatureSeverityPercent(row);
+  const severityLabel = formatIntersectionFeatureSeverityPercent(row);
+  const fatalPer100 = intersectionFeatureFatalPer100(row);
+  const seriousPer100 = intersectionFeatureSeriousPer100(row);
+  const totalPerIntersection = intersectionFeatureTotalPerIntersection(row);
+  const title = `${row.label}: ${tr("intersectionFeature.severity")} ${severityLabel}, ${tr(
+    "intersectionFeature.fatalPer100"
+  )} ${formatRate(fatalPer100)}, ${tr("intersectionFeature.seriousPer100")} ${formatRate(seriousPer100)}, ${tr(
+    "intersectionFeature.totalPerIntersection"
+  )} ${formatRate(totalPerIntersection)}`;
+  return `
+    <div class="intersection-feature-row" role="row" title="${escapeHtml(title)}">
+      <div class="intersection-feature-group" role="cell">
+        <strong>${escapeHtml(row.label)}</strong>
+        <span>${formatInteger(row.clusterCount)} ${escapeHtml(tr("intersectionFeature.intersections").toLowerCase())}</span>
+      </div>
+      <div role="cell">${renderIntersectionFeatureMetric(severityLabel, severityPercent, maxSeverityPercent, "severity")}</div>
+      <div role="cell">${renderIntersectionFeatureMetric(formatRate(fatalPer100), fatalPer100, maxFatalPer100, "fatal")}</div>
+      <div role="cell">${renderIntersectionFeatureMetric(formatRate(seriousPer100), seriousPer100, maxSeriousPer100, "serious")}</div>
+      <div role="cell">${renderIntersectionFeatureMetric(formatRate(totalPerIntersection), totalPerIntersection, maxTotalPerIntersection, "total")}</div>
+      <div class="intersection-feature-number intersection-feature-total" role="cell">${formatInteger(row.accidentCount)}</div>
+    </div>
+  `;
+}
+
+function intersectionFeatureSeverityPercent(row: IntersectionFeatureRow): number {
+  return row.severityPercent * 100;
+}
+
+function formatIntersectionFeatureSeverityPercent(row: IntersectionFeatureRow): string {
+  return `${formatRate(intersectionFeatureSeverityPercent(row))}%`;
+}
+
+function renderIntersectionFeatureMetric(label: string, value: number, maxValue: number, kind: string): string {
+  const width = maxValue <= 0 ? 0 : clampNumber((value / maxValue) * 100, 0, 100);
+  return `
+    <span class="intersection-feature-metric">
+      <span class="intersection-feature-meter" aria-hidden="true">
+        <span class="intersection-feature-meter-fill intersection-feature-meter-${kind}" style="width: ${round(width, 1)}%"></span>
+      </span>
+      <strong>${escapeHtml(label)}</strong>
+    </span>
+  `;
+}
+
+function intersectionFeatureFatalPer100(row: IntersectionFeatureRow): number {
+  return row.clusterCount > 0 ? (row.fatalCount / row.clusterCount) * 100 : 0;
+}
+
+function intersectionFeatureSeriousPer100(row: IntersectionFeatureRow): number {
+  return row.clusterCount > 0 ? (row.seriousCount / row.clusterCount) * 100 : 0;
+}
+
+function intersectionFeatureTotalPerIntersection(row: IntersectionFeatureRow): number {
+  return row.clusterCount > 0 ? row.accidentCount / row.clusterCount : 0;
 }
 
 function renderPopulationScatterComparison(container: HTMLElement, summaries: PopulationAccidentSummary[], showStateLabel: boolean): void {
@@ -5482,6 +5764,7 @@ function setView(view: ViewKey): void {
 
   activeView = view;
   elements.app.dataset.activeView = view;
+  updateViewUrl(view);
 
   const tabs = [
     { key: "explore", tab: elements.exploreTab },
@@ -5561,6 +5844,10 @@ function closeMobileMoreMenuOnEscape(event: KeyboardEvent): void {
 }
 
 function initialView(): ViewKey {
+  const urlView = readViewFromUrl();
+  if (urlView) {
+    return urlView;
+  }
   return mobileLayout.matches ? "explore" : "map";
 }
 
