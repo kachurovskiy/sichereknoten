@@ -3,19 +3,12 @@ import { AnalysisOptionsForm, analysisOptionsEqual, cloneAnalysisOptions } from 
 import { analyzeDangerousIntersectionsInBackground, type AnalysisExecutionPlan } from "./analysisRunner";
 import { BrowseIndexStore, regionOptionLabel, STATE_BROWSE_MAX_INTERSECTIONS, type BrowseIndex } from "./browseIndex";
 import { DataRepository, type AnalysisCacheContext, type DataRepositoryTelemetry } from "./dataRepository";
-import {
-  clusterLocationText,
-  clusterStreetNamesForDisplay,
-  compareClusterCoreMetric
-} from "./clusterDisplay";
-import { accidentKey, accidentRecordRows, accidentSeverityLabel, accidentTimeLabel } from "./accidentRecordDisplay";
+import { clusterLocationText, compareClusterCoreMetric } from "./clusterDisplay";
+import { accidentKey } from "./accidentRecordDisplay";
 import {
   accidentMatchesAnalysisOptions,
   analysisOptionsIndexKey,
-  clusteredAccidentMembership,
-  ClusterAccidentRecordMatcher,
-  type ClusterAccidentRecordsSnapshot,
-  type CrossingAccident
+  clusteredAccidentMembership
 } from "./clusterAccidentRecords";
 import {
   configureNumberLocale,
@@ -24,7 +17,6 @@ import {
   formatSeverityPercent,
   severityPercentValue
 } from "./formatting";
-import { createFactsheetPdf, factsheetFileName, type CreateFactsheetPdfOptions } from "./factsheet";
 import { distanceMeters } from "./geo";
 import { escapeHtml } from "./html";
 import { applyStaticTranslations, configureI18n, detectLocale, tr, trf, type AppLocale } from "./i18n";
@@ -33,6 +25,7 @@ import { round } from "./math";
 import { MapCanvas, type MapIncidentViewportRequest } from "./mapCanvas";
 import { RequestGate, type RequestToken } from "./requestGate";
 import { roadUserFocusKey } from "./roadUsers";
+import { SelectedIntersectionController } from "./selectedIntersectionController";
 import {
   SeverityRankIndexStore,
   type SeverityRank,
@@ -62,25 +55,13 @@ import {
   AccidentRecord,
   AnalysisOptions,
   AnalysisResult,
-  ClusterYearStat,
   IntersectionCluster
 } from "./types";
 import { TRANSLATIONS } from "./translations";
-import {
-  googleStreetViewEmbedUrl,
-  mapUrlsForCluster,
-  pressSearchUrlForAccident,
-  pressSearchUrlForCluster,
-  responsibleAuthoritySearchUrlForCluster
-} from "./urlBuilders";
 import { ExploreView } from "./views/exploreView";
-import {
-  roadUserSummaryItems,
-  SelectedIntersectionPanelView,
-  type SelectedIntersectionPanelViewModel
-} from "./views/selectedIntersectionPanelView";
-import { SelectedPreviewMapView, type SelectedPreviewMapIncidentPoint } from "./views/selectedPreviewMapView";
-import { SimilarView, type RoadClassSignature } from "./views/similarView";
+import { SelectedIntersectionPanelView } from "./views/selectedIntersectionPanelView";
+import { SelectedPreviewMapView } from "./views/selectedPreviewMapView";
+import { SimilarView } from "./views/similarView";
 import { StateRegionView } from "./views/stateRegionView";
 import { TableView } from "./views/tableView";
 
@@ -95,7 +76,6 @@ declare const __SICHERE_KNOTEN_ANALYSIS_CACHE_VERSION__: string | undefined;
 
 type SeverityFilterKey = "fatal" | "serious" | "other";
 type ViewKey = "explore" | "map" | "details" | "state" | "region" | "similar" | "table" | "settings";
-type SelectionReason = "auto" | "program" | "user";
 type LoadingStatusKind = "normal" | "problem" | "idle";
 
 interface LatLon {
@@ -117,7 +97,6 @@ const APP_CACHE_VERSION =
   typeof __SICHERE_KNOTEN_APP_VERSION__ === "string" ? __SICHERE_KNOTEN_APP_VERSION__ : "dev-cluster-streets";
 const ANALYSIS_CACHE_VERSION =
   typeof __SICHERE_KNOTEN_ANALYSIS_CACHE_VERSION__ === "string" ? __SICHERE_KNOTEN_ANALYSIS_CACHE_VERSION__ : APP_CACHE_VERSION;
-const STREET_VIEW_OPEN_STORAGE_KEY = "sichere-knoten:street-view-open";
 const LOADING_FACT_STORAGE_KEY = "sichere-knoten:loading-fact-index";
 const ACTIVE_LOCALE: AppLocale = detectLocale();
 configureI18n(ACTIVE_LOCALE, TRANSLATIONS);
@@ -141,13 +120,6 @@ interface UnclusteredIncidentMapCache {
   clusteredAccidentIndexes: Set<number>;
 }
 
-interface SelectedIntersectionViewModel {
-  cluster: IntersectionCluster;
-  roadClassSignature: RoadClassSignature | null;
-  panel: SelectedIntersectionPanelViewModel;
-  incidentPoints: SelectedPreviewMapIncidentPoint[];
-}
-
 interface CommittedAnalysisState {
   result: AnalysisResult;
   options: AnalysisOptions;
@@ -157,14 +129,11 @@ interface CommittedAnalysisState {
 let accidents: AccidentRecord[] = [];
 let result: AnalysisResult | null = null;
 let committedAnalysis: CommittedAnalysisState | null = null;
-let selectedCluster: IntersectionCluster | null = null;
-let selectedRoadClassSignature: RoadClassSignature | null = null;
 let activeDataVersion: string | null = null;
 let userLocation: { lat: number; lon: number; accuracyMeters: number | null } | null = null;
 let unclusteredIncidentMapCache: UnclusteredIncidentMapCache | null = null;
 let renderedMapClusters: IntersectionCluster[] | null | undefined;
 let postRenderCacheWriteQueue: Promise<void> = Promise.resolve();
-let isStreetViewOpen = readStoredStreetViewOpen();
 let activeView: ViewKey = "map";
 let loadingStatusKind: LoadingStatusKind = "normal";
 let activeInteractionTelemetry: InteractionTelemetry | null = null;
@@ -260,7 +229,6 @@ const elements = {
 
 const dataRepository = new DataRepository();
 const requestGate = new RequestGate();
-const clusterAccidentRecordMatcher = new ClusterAccidentRecordMatcher(measureActiveInteractionStep);
 const severityRankIndexes = new SeverityRankIndexStore();
 const browseIndexes = new BrowseIndexStore();
 const analysisOptionsForm = new AnalysisOptionsForm(
@@ -289,20 +257,69 @@ const selectedIntersectionPanelView = new SelectedIntersectionPanelView({
   container: elements.selectionDetails,
   formatSeverityPercentWithContext
 });
+let selectedIntersectionController: SelectedIntersectionController;
+let similarView: SimilarView;
+let exploreView: ExploreView;
 const selectedPreviewMapView = new SelectedPreviewMapView({
   container: elements.selectedPreviewMap,
   canvas: elements.selectedPreviewCanvas,
-  getSelectedClusterId: () => selectedCluster?.id ?? null,
+  getSelectedClusterId: () => selectedIntersectionController.selectedClusterId,
   clusterRadiusMeters: () => committedAnalysis?.options.clusterRadiusMeters ?? 50
 });
 const map = new MapCanvas(
   elements.mapCanvas,
-  handleClusterSelection,
-  openUnclusteredIncidentDialog,
+  (cluster, reason) => selectedIntersectionController.handleMapSelection(cluster, reason),
+  (accident) => selectedIntersectionController.openUnclusteredIncidentDialog(accident),
   handleMapIncidentViewportRequest,
   setMapIncidentLegendVisible,
   handleMapZoomChange
 );
+selectedIntersectionController = new SelectedIntersectionController({
+  elements: {
+    mapColumn: elements.mapColumn,
+    mapView: elements.mapView,
+    selectedAside: elements.selectedAside,
+    selectedPermalinkBtn: elements.selectedPermalinkBtn,
+    selectionDetails: elements.selectionDetails,
+    detailsTab: elements.detailsTab,
+    similarTab: elements.similarTab,
+    incidentDialog: elements.incidentDialog,
+    incidentDialogBody: elements.incidentDialogBody,
+    streetViewPanel: elements.streetViewPanel,
+    streetViewToggle: elements.streetViewToggle,
+    streetViewToggleText: elements.streetViewToggleText,
+    streetViewBody: elements.streetViewBody,
+    streetViewFrame: elements.streetViewFrame,
+    streetViewEmpty: elements.streetViewEmpty
+  },
+  panelView: selectedIntersectionPanelView,
+  previewMapView: selectedPreviewMapView,
+  map,
+  requestGate,
+  getAnalysisResult: () => result,
+  getAnalysisOptions: () => committedAnalysis?.options ?? analysisOptionsForm.readOptions(),
+  getCachedAccidentsForState: (stateCode) => dataRepository.cachedAccidentsForStateOrAll(stateCode) ?? (accidents.length > 0 ? accidents : null),
+  hasAccidentStateShard: (stateCode) => dataRepository.hasStateShard(stateCode),
+  loadAccidentsForState: (stateCode) => loadAccidentsForState(stateCode),
+  latestBundledFileDate: () => dataRepository.latestBundledFileDate(),
+  formatSeverityPercentWithContext,
+  roadClassSignatureForStreetNames: (streetNames) => similarView.roadClassSignatureForStreetNames(streetNames),
+  renderVisibleSimilarView: () => similarView.render(),
+  renderBrowseLists: () => {
+    exploreView.render();
+    return {
+      stateHotspotCount: elements.stateHotspotList.children.length,
+      nearbyCount: elements.nearbyList.children.length
+    };
+  },
+  getActiveView: () => activeView,
+  isMobileLayout: () => mobileLayout.matches,
+  setView: (view) => setView(view),
+  setStatus,
+  updateIntersectionSelectionUrl,
+  scheduleMapRefresh,
+  measureStep: measureActiveInteractionStep
+});
 const tableView = new TableView({
   body: elements.clusterTableBody,
   featureSummary: elements.intersectionFeatureSummary,
@@ -310,11 +327,11 @@ const tableView = new TableView({
   getStateFilterValue: () => elements.stateFilter.value,
   selectCluster: (cluster) => selectClusterOnMap(cluster)
 });
-const similarView = new SimilarView({
+similarView = new SimilarView({
   container: elements.similarIntersections,
   getResult: () => result,
-  getSelectedCluster: () => selectedCluster,
-  getSelectedRoadClassSignature: () => selectedRoadClassSignature,
+  getSelectedCluster: () => selectedIntersectionController.selectedCluster,
+  getSelectedRoadClassSignature: () => selectedIntersectionController.selectedRoadClassSignature,
   getActiveView: () => activeView,
   selectCluster: (cluster) => selectClusterOnMap(cluster),
   renderIntersectionFeatureSection: (rows) => tableView.renderIntersectionFeatureSection(rows)
@@ -331,13 +348,13 @@ const stateRegionView = new StateRegionView({
   getResult: () => result,
   getRegionSummaries: () => browseIndexForCurrentResult()?.regionSummaries ?? []
 });
-const exploreView = new ExploreView({
+exploreView = new ExploreView({
   nearbyList: elements.nearbyList,
   stateHotspotList: elements.stateHotspotList,
   maxIntersections: STATE_BROWSE_MAX_INTERSECTIONS,
   getResult: () => result,
   getUserLocation: () => userLocation,
-  getSelectedCluster: () => selectedCluster,
+  getSelectedCluster: () => selectedIntersectionController.selectedCluster,
   getBrowseStateValue: () => elements.browseState.value,
   getBrowseRegionValue: () => elements.browseRegion.value,
   browseIndexForCurrentResult,
@@ -375,9 +392,7 @@ function wireApplicationCommands(): void {
   elements.resetAppBtn.addEventListener("click", () => void resetApp());
   elements.analyzeBtn.addEventListener("click", () => runAnalysis());
   elements.exportBtn.addEventListener("click", exportClusters);
-  elements.selectedPermalinkBtn.addEventListener("click", () => void copySelectedIntersectionPermalink());
-  elements.selectionDetails.addEventListener("click", handleSelectionDetailsClick);
-  elements.incidentDialog.addEventListener("click", handleIncidentDialogClick);
+  selectedIntersectionController.bindEvents();
 }
 
 function wireAnalysisControlEvents(): void {
@@ -390,7 +405,6 @@ function wireMapControlEvents(): void {
   });
   elements.locateMeBtn.addEventListener("click", () => locateUser({ selectNearest: false }));
   elements.findNearbyBtn.addEventListener("click", () => locateUser({ selectNearest: true }));
-  elements.streetViewToggle.addEventListener("click", toggleStreetViewPanel);
   elements.browseState.addEventListener("change", () => {
     updateBrowseRegionOptions();
     exploreView.renderStateHotspotList();
@@ -544,23 +558,6 @@ function rankChartTooltip(chart: HTMLElement): HTMLElement | null {
   return chart.querySelector<HTMLElement>(".state-rank-chart-tooltip");
 }
 
-function handleSelectionDetailsClick(event: MouseEvent): void {
-  if (!(event.target instanceof Element)) {
-    return;
-  }
-
-  const factsheetButton = event.target.closest<HTMLButtonElement>("[data-selected-action='factsheet']");
-  if (factsheetButton) {
-    void downloadSelectedFactsheet();
-    return;
-  }
-
-  const similarButton = event.target.closest<HTMLButtonElement>("[data-selected-action='similar']");
-  if (similarButton) {
-    setView("similar");
-  }
-}
-
 function markAnalysisSettingsDirty(): void {
   if (!dataRepository.hasAnyAccidents() && !committedAnalysis) {
     return;
@@ -625,8 +622,7 @@ function repositoryTelemetry(telemetry: InitializationTelemetry | null): DataRep
 function clearCommittedAnalysisState(): void {
   result = null;
   committedAnalysis = null;
-  selectedCluster = null;
-  selectedRoadClassSignature = null;
+  selectedIntersectionController.resetSelectionState();
   clearAnalysisDerivedState();
   analysisOptionsForm.setDirty(false);
 }
@@ -638,14 +634,13 @@ function commitAnalysisState(options: AnalysisOptions, analysisResult: AnalysisR
     options: cloneAnalysisOptions(options),
     dataVersion: activeDataVersion
   };
-  selectedCluster = null;
-  selectedRoadClassSignature = null;
+  selectedIntersectionController.resetSelectionState();
   clearAnalysisDerivedState();
   analysisOptionsForm.setDirty(false);
 }
 
 function clearAnalysisDerivedState(): void {
-  clusterAccidentRecordMatcher.clearCaches();
+  selectedIntersectionController.clearAccidentRecordCaches();
   severityRankIndexes.clear();
   browseIndexes.clear();
   invalidateRenderedAnalysisViews();
@@ -989,49 +984,7 @@ function renderMapResults(): void {
     elements.mapEmpty.hidden = false;
     elements.mapIncidentLegend.hidden = true;
     updateMapLegendVisibility();
-    renderSelection(null);
-  }
-}
-
-function handleClusterSelection(cluster: IntersectionCluster | null, reason: SelectionReason): void {
-  const previousClusterId = selectedCluster?.id ?? null;
-  measureActiveInteractionStep("store selected cluster", cluster?.id ?? null, () => {
-    selectedCluster = cluster;
-    selectedRoadClassSignature = null;
-  });
-  if (cluster) {
-    updateIntersectionSelectionUrl(cluster);
-  }
-  if (previousClusterId !== (cluster?.id ?? null)) {
-    requestGate.cancel("selectedAccidentRecords");
-    requestGate.cancel("factsheet");
-  }
-  measureActiveInteractionStep(
-    "render selected intersection panel",
-    cluster?.id ?? null,
-    () => renderSelection(cluster),
-    () => ({
-      selected: Boolean(cluster),
-      accidentCount: cluster?.accidentCount ?? 0
-    })
-  );
-  measureActiveInteractionStep(
-    "rerender browse lists after selection",
-    cluster?.id ?? null,
-    () => exploreView.render(),
-    () => ({
-      stateHotspotCount: elements.stateHotspotList.children.length,
-      nearbyCount: elements.nearbyList.children.length
-    })
-  );
-
-  if (!cluster) {
-    return;
-  }
-
-  if (reason === "user" && mobileLayout.matches) {
-    measureActiveInteractionStep("mobile map focus", cluster.id, () => map.focus(cluster));
-    measureActiveInteractionStep("mobile set view details", cluster.id, () => setView("details"), () => ({ activeView }));
+    selectedIntersectionController.clearSelection();
   }
 }
 
@@ -1186,6 +1139,7 @@ function updateMapLegendVisibility(): void {
 }
 
 function handleMapZoomChange(): void {
+  const selectedCluster = selectedIntersectionController.selectedCluster;
   if (selectedCluster) {
     updateIntersectionSelectionUrl(selectedCluster);
   }
@@ -1226,7 +1180,7 @@ function ensureUnclusteredIncidentStatesLoaded(stateCodes: string[]): void {
   }
 
   for (const stateCode of stateCodes) {
-    if (cache.loadedStateCodes.has(stateCode) || cache.loadingStateCodes.has(stateCode) || !hasAccidentStateShard(stateCode)) {
+    if (cache.loadedStateCodes.has(stateCode) || cache.loadingStateCodes.has(stateCode) || !dataRepository.hasStateShard(stateCode)) {
       continue;
     }
     cache.loadingStateCodes.add(stateCode);
@@ -1504,168 +1458,6 @@ function clusterSeverity(cluster: IntersectionCluster): SeverityFilterKey {
   return "other";
 }
 
-function renderSelection(cluster: IntersectionCluster | null): void {
-  if (!cluster) {
-    renderEmptySelection();
-    return;
-  }
-
-  const viewModel = buildSelectedIntersectionViewModel(cluster);
-  applySelectedIntersectionViewModel(viewModel);
-  if (viewModel.panel.accidentRecordsLoading) {
-    queueSelectedAccidentRecordsLoad(cluster);
-  }
-}
-
-function renderEmptySelection(): void {
-  elements.selectedAside.hidden = true;
-  elements.mapView.classList.remove("has-selection");
-  selectedIntersectionPanelView.renderEmpty();
-  selectedPreviewMapView.clear();
-  map.setSelectedIncidentPoints([]);
-  updateContextTabs();
-  if (activeView === "details" || activeView === "similar") {
-    setView("map");
-  } else {
-    updateStreetViewPanel();
-  }
-}
-
-function buildSelectedIntersectionViewModel(cluster: IntersectionCluster): SelectedIntersectionViewModel {
-  const urls = measureActiveInteractionStep(
-    "build selected external URLs",
-    cluster.id,
-    () => ({
-      ...mapUrlsForCluster(cluster),
-      authoritySearchUrl: responsibleAuthoritySearchUrlForCluster(cluster)
-    }),
-    () => ({ urlCount: 4 })
-  );
-  const accidentRecordSnapshot = measureActiveInteractionStep(
-    "find selected accident records",
-    cluster.id,
-    () => clusterAccidentRecordsSnapshot(cluster),
-    (snapshot) => ({
-      recordCount: snapshot.records.length,
-      clusterAccidentCount: cluster.accidentCount
-    })
-  );
-  const accidentRecords = accidentRecordSnapshot.records;
-  const streetNames = measureActiveInteractionStep(
-    "derive selected street names",
-    cluster.id,
-    () => clusterStreetNamesForDisplay(cluster, accidentRecords),
-    (names) => ({ streetCount: names.length })
-  );
-  const roadClassSignature = measureActiveInteractionStep(
-    "derive selected road class signature",
-    cluster.id,
-    () => similarView.roadClassSignatureForStreetNames(streetNames),
-    (signature) => ({ comparable: signature !== null, roadClass: signature?.label ?? null })
-  );
-  const pressSearchUrl = measureActiveInteractionStep("build press search URL", cluster.id, () =>
-    pressSearchUrlForCluster(cluster, streetNames)
-  );
-  const trendSeries = measureActiveInteractionStep(
-    "derive selected trend series",
-    cluster.id,
-    () => clusterTrendSeries(cluster, result?.years.length ? result.years : cluster.years),
-    (series) => ({ yearCount: series.length })
-  );
-
-  return {
-    cluster,
-    roadClassSignature,
-    panel: {
-      cluster,
-      urls,
-      streetNames,
-      canCompareSimilar: roadClassSignature !== null,
-      pressSearchUrl,
-      trendSeries,
-      accidentRecords,
-      accidentRecordsLoading: accidentRecordSnapshot.loading
-    },
-    incidentPoints: accidentRecords.map(({ accident }, index) => ({
-      lat: accident.lat,
-      lon: accident.lon,
-      label: String(index + 1)
-    }))
-  };
-}
-
-function applySelectedIntersectionViewModel(viewModel: SelectedIntersectionViewModel): void {
-  const { cluster } = viewModel;
-  selectedRoadClassSignature = viewModel.roadClassSignature;
-  elements.selectedAside.hidden = false;
-  elements.mapView.classList.add("has-selection");
-  measureActiveInteractionStep(
-    "update selected incident points",
-    cluster.id,
-    () => map.setSelectedIncidentPoints(viewModel.incidentPoints),
-    () => ({ pointCount: viewModel.incidentPoints.length })
-  );
-  measureActiveInteractionStep(
-    "render selected preview map",
-    cluster.id,
-    () => selectedPreviewMapView.render({ cluster, incidentPoints: viewModel.incidentPoints }),
-    () => ({ pointCount: viewModel.incidentPoints.length })
-  );
-
-  measureActiveInteractionStep("render selected panel", cluster.id, () => selectedIntersectionPanelView.render(viewModel.panel));
-  measureActiveInteractionStep("update details tabs", cluster.id, updateContextTabs);
-  if (activeView === "similar") {
-    if (!viewModel.roadClassSignature) {
-      measureActiveInteractionStep("fallback from unavailable comparison", cluster.id, () => setView("map"));
-    } else {
-      measureActiveInteractionStep("render visible comparison", cluster.id, () => similarView.render());
-    }
-  }
-  measureActiveInteractionStep("update street view panel", cluster.id, updateStreetViewPanel, () => ({
-    streetViewOpen: isStreetViewOpen
-  }));
-}
-
-function toggleStreetViewPanel(): void {
-  isStreetViewOpen = !isStreetViewOpen;
-  writeStoredStreetViewOpen(isStreetViewOpen);
-  updateStreetViewPanel();
-}
-
-function updateStreetViewPanel(): void {
-  const cluster = selectedCluster;
-  const hasSelection = cluster !== null;
-  const isExpanded = hasSelection && isStreetViewOpen;
-
-  elements.streetViewPanel.hidden = !hasSelection;
-  elements.mapColumn.classList.toggle("street-view-open", isExpanded);
-  elements.streetViewToggle.setAttribute("aria-expanded", String(isExpanded));
-  elements.streetViewToggleText.textContent = isExpanded ? tr("action.hide") : tr("action.show");
-  elements.streetViewBody.hidden = !isExpanded;
-
-  if (!hasSelection || !isExpanded) {
-    clearStreetViewFrame();
-    scheduleMapRefresh();
-    return;
-  }
-
-  const streetViewUrl = googleStreetViewEmbedUrl(cluster);
-  if (elements.streetViewFrame.dataset.src !== streetViewUrl) {
-    elements.streetViewFrame.src = streetViewUrl;
-    elements.streetViewFrame.dataset.src = streetViewUrl;
-  }
-  elements.streetViewFrame.title = trf("streetView.near", { lat: cluster.lat.toFixed(5), lon: cluster.lon.toFixed(5) });
-  elements.streetViewFrame.hidden = false;
-  elements.streetViewEmpty.hidden = true;
-  scheduleMapRefresh();
-}
-
-function clearStreetViewFrame(): void {
-  elements.streetViewFrame.hidden = true;
-  elements.streetViewFrame.removeAttribute("src");
-  delete elements.streetViewFrame.dataset.src;
-}
-
 function scheduleMapRefresh(): void {
   window.requestAnimationFrame(() => {
     if (mobileLayout.matches && activeView !== "map") {
@@ -1675,98 +1467,13 @@ function scheduleMapRefresh(): void {
   });
 }
 
-function openUnclusteredIncidentDialog(accident: AccidentRecord): void {
-  elements.incidentDialogBody.innerHTML = selectedIntersectionPanelView.renderIncidentDialogHtml(accident);
-  if (typeof elements.incidentDialog.showModal === "function") {
-    elements.incidentDialog.showModal();
-  } else {
-    elements.incidentDialog.setAttribute("open", "");
-  }
-}
-
-function closeUnclusteredIncidentDialog(): void {
-  if (elements.incidentDialog.open) {
-    elements.incidentDialog.close();
-  }
-}
-
-function handleIncidentDialogClick(event: MouseEvent): void {
-  if (event.target === elements.incidentDialog) {
-    closeUnclusteredIncidentDialog();
-    return;
-  }
-
-  const target = event.target;
-  if (target instanceof Element && target.closest("[data-incident-dialog-close]")) {
-    closeUnclusteredIncidentDialog();
-  }
-}
-
-function clusterAccidentRecordsSnapshot(cluster: IntersectionCluster): ClusterAccidentRecordsSnapshot {
-  const sourceRecords = cachedAccidentRecordsForCluster(cluster);
-  return clusterAccidentRecordMatcher.snapshot(
-    cluster,
-    sourceRecords,
-    hasAccidentStateShard(cluster.stateCode),
-    currentAccidentRecordMatchingOptions()
-  );
-}
-
-function cachedAccidentRecordsForCluster(cluster: IntersectionCluster): AccidentRecord[] | null {
-  return dataRepository.cachedAccidentsForStateOrAll(cluster.stateCode) ?? (accidents.length > 0 ? accidents : null);
-}
-
-function hasAccidentStateShard(stateCode: string): boolean {
-  return dataRepository.hasStateShard(stateCode);
-}
-
-function queueSelectedAccidentRecordsLoad(cluster: IntersectionCluster): void {
-  const requestToken = requestGate.start("selectedAccidentRecords", cluster.id);
-  void loadAccidentsForState(cluster.stateCode)
-    .then(() => {
-      if (selectedCluster?.id !== cluster.id || !requestGate.isCurrent(requestToken)) {
-        return;
-      }
-      renderSelection(cluster);
-    })
-    .catch((error) => {
-      if (selectedCluster?.id === cluster.id && requestGate.isCurrent(requestToken)) {
-        console.warn("[Safe Intersections] Could not load selected accident records.", error);
-      }
-    });
-}
-
-async function clusterAccidentRecordsReady(cluster: IntersectionCluster): Promise<CrossingAccident[]> {
-  const sourceRecords = cachedAccidentRecordsForCluster(cluster) ?? (await loadAccidentsForState(cluster.stateCode));
-  return clusterAccidentRecordMatcher.records(cluster, sourceRecords, currentAccidentRecordMatchingOptions());
-}
-
-function currentAccidentRecordMatchingOptions(): AnalysisOptions {
-  return committedAnalysis?.options ?? analysisOptionsForm.readOptions();
-}
-
-function clusterTrendSeries(cluster: IntersectionCluster, years: number[]): ClusterYearStat[] {
-  const byYear = new Map(cluster.yearlyStats.map((stats) => [stats.year, stats]));
-
-  return years.map((year) => {
-    const existing = byYear.get(year);
-    if (existing) {
-      return existing;
-    }
-    return {
-      year,
-      accidentCount: 0
-    };
-  });
-}
-
 function setView(view: ViewKey): void {
-  if (view === "details" && !selectedCluster) {
+  if (view === "details" && !selectedIntersectionController.hasSelection) {
     setStatus(tr("details.selectFirst"), 100);
     view = "map";
   }
-  if (view === "similar" && !hasComparableSelectedIntersection()) {
-    setStatus(selectedCluster ? tr("similar.selectComparable") : tr("details.selectFirst"), 100);
+  if (view === "similar" && !selectedIntersectionController.canCompareSimilar) {
+    setStatus(selectedIntersectionController.hasSelection ? tr("similar.selectComparable") : tr("details.selectFirst"), 100);
     view = "map";
   }
 
@@ -1807,23 +1514,11 @@ function setView(view: ViewKey): void {
   elements.tableView.classList.toggle("active", view === "table");
   elements.settingsView.classList.toggle("active", view === "settings");
 
-  updateContextTabs();
+  selectedIntersectionController.updateContextTabs();
   renderActiveAnalysisView();
-  updateStreetViewPanel();
+  selectedIntersectionController.updateStreetViewPanel();
   setMobileMoreMenuOpen(false);
   scheduleMapRefresh();
-}
-
-function updateContextTabs(): void {
-  const hasSelection = selectedCluster !== null;
-  const canCompareSimilar = hasComparableSelectedIntersection();
-  elements.detailsTab.disabled = !hasSelection;
-  elements.similarTab.hidden = !canCompareSimilar;
-  elements.similarTab.disabled = !canCompareSimilar;
-}
-
-function hasComparableSelectedIntersection(): boolean {
-  return selectedCluster !== null && selectedRoadClassSignature !== null;
 }
 
 function isMobilePaneView(view: ViewKey): boolean {
@@ -1941,122 +1636,6 @@ function osmBooleanCsvValue(value: boolean | null | undefined): string {
   return "unknown";
 }
 
-async function downloadSelectedFactsheet(): Promise<void> {
-  const cluster = selectedCluster;
-  if (!cluster) {
-    setStatus(tr("details.selectFirst"), 100, "idle");
-    return;
-  }
-  const requestToken = requestGate.start("factsheet", cluster.id);
-
-  const factsheetButtons = selectedFactsheetButtons();
-  factsheetButtons.forEach((button) => {
-    button.disabled = true;
-  });
-  setStatus(tr("status.factsheetCreating"), 100);
-  try {
-    const records = await clusterAccidentRecordsReady(cluster);
-    if (selectedCluster?.id !== cluster.id || !requestGate.isCurrent(requestToken)) {
-      return;
-    }
-    const blob = await createFactsheetPdf(createSelectedFactsheetOptions(cluster, records));
-    if (selectedCluster?.id !== cluster.id || !requestGate.isCurrent(requestToken)) {
-      return;
-    }
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = factsheetFileName(cluster);
-    link.click();
-    window.setTimeout(() => URL.revokeObjectURL(url), 0);
-    setStatus(tr("status.factsheetDownloaded"), 100);
-  } catch (error) {
-    if (requestGate.isCurrent(requestToken)) {
-      setStatus(trf("status.factsheetFailed", { error: errorMessage(error) }), 100, "problem");
-    }
-  } finally {
-    if (requestGate.isCurrent(requestToken)) {
-      factsheetButtons.forEach((button) => {
-        button.disabled = false;
-      });
-    }
-  }
-}
-
-async function copySelectedIntersectionPermalink(): Promise<void> {
-  const cluster = selectedCluster;
-  if (!cluster) {
-    setStatus(tr("details.selectFirst"), 100, "idle");
-    return;
-  }
-
-  updateIntersectionSelectionUrl(cluster);
-  const permalink = window.location.href;
-  elements.selectedPermalinkBtn.disabled = true;
-  try {
-    await writeClipboardText(permalink);
-    setStatus(tr("status.permalinkCopied"), 100, "idle");
-  } catch (error) {
-    setStatus(trf("status.permalinkCopyFailed", { error: errorMessage(error) }), 100, "problem");
-  } finally {
-    elements.selectedPermalinkBtn.disabled = false;
-  }
-}
-
-async function writeClipboardText(value: string): Promise<void> {
-  if (navigator.clipboard?.writeText && window.isSecureContext) {
-    await navigator.clipboard.writeText(value);
-    return;
-  }
-
-  const textArea = document.createElement("textarea");
-  textArea.value = value;
-  textArea.readOnly = true;
-  textArea.style.position = "fixed";
-  textArea.style.left = "-9999px";
-  textArea.style.top = "0";
-  document.body.append(textArea);
-  textArea.select();
-  try {
-    if (!document.execCommand("copy")) {
-      throw new Error("copy command failed");
-    }
-  } finally {
-    textArea.remove();
-  }
-}
-
-function selectedFactsheetButtons(): HTMLButtonElement[] {
-  return selectedIntersectionPanelView.factsheetButtons();
-}
-
-function createSelectedFactsheetOptions(cluster: IntersectionCluster, records: CrossingAccident[]): CreateFactsheetPdfOptions {
-  const selectedYears = result?.years.length ? result.years : cluster.years;
-  const streetOrder = clusterStreetNamesForDisplay(cluster, records);
-  return {
-    cluster,
-    records,
-    selectedYears,
-    trendSeries: clusterTrendSeries(cluster, selectedYears),
-    trendPeriodYears: committedAnalysis?.options.severityPercent.trendYears ?? cluster.accidentTrend.years,
-    clusterRadiusMeters: committedAnalysis?.options.clusterRadiusMeters ?? Number(elements.clusterRadiusOut.value),
-    latestBundledFileDate: dataRepository.latestBundledFileDate(),
-    severityPercentText: formatSeverityPercentWithContext(cluster),
-    mapUrls: mapUrlsForCluster(cluster),
-    roadUserItems: roadUserSummaryItems(records).map((item) => ({
-      key: item.definition.key,
-      label: item.label,
-      count: item.count,
-      share: item.share
-    })),
-    accidentDetails: records.map(({ accident, distanceMeters }) => ({
-      heading: `${accidentSeverityLabel(accident)} - ${accidentTimeLabel(accident)}`,
-      rows: accidentRecordRows(accident, distanceMeters, streetOrder).map((row): [string, string] => [row.label, row.value]),
-      pressUrl: pressSearchUrlForAccident(accident)
-    }))
-  };
-}
-
 function showNextLoadingFact(): void {
   const factIndex = nextLoadingFactIndex();
   const fact = LOADING_FACTS[factIndex] ?? LOADING_FACTS[0] ?? null;
@@ -2156,7 +1735,7 @@ async function loadAccidentData(
   );
   if (accidents !== records) {
     accidents = records;
-    clusterAccidentRecordMatcher.clearCaches();
+    selectedIntersectionController.clearAccidentRecordCaches();
     populateFilters();
   }
   return accidents;
@@ -2175,7 +1754,7 @@ async function loadAccidentsForAnalysis(
   );
   if (options.stateCode === "all" && accidents !== records) {
     accidents = records;
-    clusterAccidentRecordMatcher.clearCaches();
+    selectedIntersectionController.clearAccidentRecordCaches();
     populateFilters();
   }
   return records;
@@ -2308,22 +1887,6 @@ function analysisTelemetryDetail(options: AnalysisOptions): string {
   const years = Array.from(options.years).sort((a, b) => a - b).join(",") || "all";
   const roadUsers = roadUserFocusKey(options.roadUserFocus) || "all";
   return `state=${options.stateCode}; years=${years}; roadUsers=${roadUsers}; radius=${options.clusterRadiusMeters}m; minAccidents=${options.minAccidents}`;
-}
-
-function readStoredStreetViewOpen(): boolean {
-  try {
-    return window.localStorage.getItem(STREET_VIEW_OPEN_STORAGE_KEY) === "true";
-  } catch {
-    return false;
-  }
-}
-
-function writeStoredStreetViewOpen(value: boolean): void {
-  try {
-    window.localStorage.setItem(STREET_VIEW_OPEN_STORAGE_KEY, String(value));
-  } catch {
-    // Storage can be blocked in private or embedded contexts; the toggle still works for this session.
-  }
 }
 
 function yieldToBrowser(): Promise<void> {
