@@ -10,7 +10,7 @@ Build-time source inputs live under `data`:
 - `data/AuszugGV2QAktuell.xlsx`: Destatis municipality directory extract used to generate `src/municipalities.ts`.
 - `data/germany-260721.osm.pbf`: local OpenStreetMap PBF used at build time to derive nearest street names for accident records. The PBF is ignored by Git.
 
-`scripts/build-docs.mjs` discovers CSV source files in `data/csv` and writes compressed normalized accident chunks into `docs/assets`. Existing chunk scripts are reused when the generated data version still matches and all referenced chunk files exist.
+`scripts/build-docs.mjs` discovers CSV source files in `data/csv` and writes compressed normalized accident state shards into `docs/assets`. Existing shard files are reused when the generated data version still matches and all referenced shard files exist.
 `scripts/generate-municipalities.mjs` reads `data/AuszugGV2QAktuell.xlsx` and writes the compact lookup source used at runtime.
 Raw SHP/DBF Unfallatlas downloads are intentionally excluded from the repository: the DBF files are very large, are not loaded by the current app, and would duplicate the same accident records already represented by the CSV inputs.
 
@@ -36,26 +36,26 @@ tsc --noEmit && node scripts/build-docs.mjs
 2. Builds `src/main.ts` into `docs/assets/app.js` with esbuild as a classic IIFE script for GitHub Pages and the local docs server.
 3. Creates or reuses offline data assets:
    - `docs/assets/data-manifest.js`
-   - `docs/assets/accidents-1.js`, `accidents-2.js`, etc.
+   - `docs/assets/accidents-state-01-*.bin.gz`, `accidents-state-02-*.bin.gz`, etc.
    - `docs/assets/analysis-default-*.bin.gz`.
 
-Each accident data script contains up to 100,000 normalized accident records, compressed with gzip, encoded as base64, and split into 256 KB string chunks. Splitting the bundle across generated scripts keeps each file below GitHub's 100 MB single-file limit and avoids CSV parsing at startup. Regular builds keep existing `accidents-*.js` files when the current manifest version matches the source CSV bytes and generated street lookup version; the slow normalization pass only runs when data changed or chunk files are missing.
+Each accident state shard is a custom binary `AccidentRecord[]` payload compressed with gzip. The binary layout keeps repeated source names, street names, and administrative codes/names in a per-shard string dictionary, stores small integers as varints, stores WGS84 coordinates as Float64 values, and stores LINREF coordinates at centimeter precision. Regular builds keep existing `accidents-state-*.bin.gz` files when the current manifest version matches the source CSV bytes, generated street lookup version, and binary codec source files; the slow normalization pass only runs when data or the generated format changes, or shard files are missing.
 
 The default all-Germany analysis is precomputed at build time. Hosted pages load it as a custom gzip-compressed binary asset with `fetch()` to avoid parsing a very large JavaScript data assignment or JSON payload in Chrome.
 
-When the local PBF exists, `scripts/build-streets.mjs` streams it during build and creates a compact OSM lookup bundle used while normalizing accident records. The bundle uses one global street-name dictionary and per-CSV-row integer street indexes instead of repeating street names for every accident. Rows near multiple named streets store a short integer list so intersection incidents can keep more than one nearby street name. The same lookup stores a small per-row bitmask for nearby OSM road-control tags: `junction=roundabout`/`highway=mini_roundabout` for roundabouts and `highway=traffic_signals`/`crossing=traffic_signals` for traffic lights. A local rebuild cache is written to `data/generated/street-lookup.json` and ignored by Git. The runtime app does not ship or load this lookup because normalized accident chunks already contain the street names and OSM road-control flags needed by the UI.
+When the local PBF exists, `scripts/build-streets.mjs` streams it during build and creates a compact OSM lookup bundle used while normalizing accident records. The bundle uses one global street-name dictionary and per-CSV-row integer street indexes instead of repeating street names for every accident. Rows near multiple named streets store a short integer list so intersection incidents can keep more than one nearby street name. The same lookup stores a small per-row bitmask for nearby OSM road-control tags: `junction=roundabout`/`highway=mini_roundabout` for roundabouts and `highway=traffic_signals`/`crossing=traffic_signals` for traffic lights. A local rebuild cache is written to `data/generated/street-lookup.json` and ignored by Git. The runtime app does not ship or load this lookup because normalized accident shards already contain the street names and OSM road-control flags needed by the UI.
 
-The build script also computes a SHA-256 based data version from the raw CSV file paths and bytes, plus the generated street lookup version when present. `docs/assets/data-manifest.js` exposes that version as `globalThis.__SICHERE_KNOTEN_DATA__.version`. It separately computes an app build fingerprint from the source files and injects it into `app.js` for analysis-cache invalidation.
+The build script also computes a SHA-256 based data version from the raw CSV file paths and bytes, the generated street lookup version when present, and the source files that define the binary data format. `docs/assets/data-manifest.js` exposes that version as `globalThis.__SICHERE_KNOTEN_DATA__.version`. It separately computes an app build fingerprint from the source files and injects it into `app.js` for analysis-cache invalidation.
 
-`docs/index.html` loads the manifest before `app.js`; the app then lazy-loads accident chunk scripts only after a parsed-cache miss or after a user chooses an analysis setting that cannot use the bundled default analysis. Local development uses `scripts/serve-docs.mjs`, a plain HTTP server for `docs/` on `http://127.0.0.1:5173/`; rerunning it stops the previous server process first. Direct `file://` use is not supported for the bundled default analysis because browsers block `fetch()` access to local gzip assets.
+`docs/index.html` loads the manifest before `app.js`; the app then lazy-loads accident state shard files only after a parsed-cache miss or after a user chooses an analysis setting that cannot use the bundled default analysis. Local development uses `scripts/serve-docs.mjs`, a plain HTTP server for `docs/` on `http://127.0.0.1:5173/`; rerunning it stops the previous server process first. Direct `file://` use is not supported because browsers block `fetch()` access to local gzip assets.
 
 ## Runtime Loading
 
 On startup, `src/main.ts` calls `loadBundledData()`.
 
-The app first ensures `docs/assets/data-manifest.js` has populated `globalThis.__SICHERE_KNOTEN_DATA__`, then attempts to load the default analysis from `analysis-default-*.bin.gz` when the current controls match the bundled defaults. When a non-default analysis needs accident records, `readBundledAccidents()` starts loading the listed `accidents-*.js` chunk scripts in parallel, then decodes them in manifest order. Each chunk's base64 strings are decoded, decompressed with `fflate.gunzipSync`, parsed as normalized compact records, and expanded into `AccidentRecord` objects.
+The app first ensures `docs/assets/data-manifest.js` has populated `globalThis.__SICHERE_KNOTEN_DATA__`, then attempts to load the default analysis from `analysis-default-*.bin.gz` when the current controls match the bundled defaults. When a non-default analysis needs accident records, `readBundledAccidents()` starts fetching the listed `accidents-state-*.bin.gz` files in parallel, then decodes them in manifest order. Each shard is decompressed with `fflate.gunzipSync` and decoded by `src/accidentRecordsBinary.ts` into `AccidentRecord` objects.
 
-There is no runtime CSV fallback. If the generated manifest or accident chunks are missing, run `npm run build`.
+There is no runtime CSV fallback. If the generated manifest or accident state shards are missing, run `npm run build`.
 
 ## Browser Caches
 
@@ -75,7 +75,7 @@ The cache metadata stores:
 - accident record count
 - creation timestamp
 
-On startup, `loadBundledData()` checks IndexedDB before loading the accident chunk scripts. If the cached version matches the current data manifest version, the app loads parsed records from IndexedDB and skips normalized chunk loading. If the version does not match, or if the cache is unavailable/corrupt, the app loads the bundled normalized records and writes a new cache after the first render.
+On startup, `loadBundledData()` checks IndexedDB before loading accident state shard files. If the cached version matches the current data manifest version, the app loads parsed records from IndexedDB and skips normalized shard loading. If the version does not match, or if the cache is unavailable/corrupt, the app loads the bundled normalized records and writes a new cache after the first render.
 
 After analysis succeeds for bundled data, the app also stores the resulting `AnalysisResult` in the `analysis` object store. That cache key includes:
 
@@ -145,7 +145,7 @@ The default cluster radius is 60 meters.
 
 ## Map Rendering
 
-The map draws visible grayscale OpenStreetMap raster tiles from `https://tile.openstreetmap.org/{z}/{x}/{y}.png` behind the cluster points while showing OpenStreetMap attribution in the map corner. Direct `file://` use cannot send the browser `Referer` header required by the OSM tile usage policy, so tiles may be partial or blocked in that mode; use `npm run dev`, `npm run serve:docs`, or GitHub Pages for complete tiles. Tiles are requested only for the current viewport and retained in a small in-memory browser cache; the app does not prefetch offline tile packs.
+The map draws visible grayscale OpenStreetMap raster tiles from `https://tile.openstreetmap.org/{z}/{x}/{y}.png` behind the cluster points while showing OpenStreetMap attribution in the map corner. Use `npm run dev`, `npm run serve:docs`, or GitHub Pages so browsers can fetch data assets and send the `Referer` header expected by the OSM tile usage policy. Tiles are requested only for the current viewport and retained in a small in-memory browser cache; the app does not prefetch offline tile packs.
 
 Accident clusters are drawn as map-projected points. All visible clusters are rendered; the map renderer does not drop low-metric clusters as a display optimization. Marker color, size, transparency, draw order, and click tie-breaking use Fatal % as the core metric, with accident count used only as a secondary tie-break and volume cue. This keeps city-level hotspots readable while separating severe locations from merely large intersections. Higher Fatal % clusters are drawn later so stronger points remain visible when dots overlap. For responsiveness, projected cluster coordinates are cached and pan/zoom redraws are throttled to animation frames.
 
@@ -228,7 +228,7 @@ This regenerates:
 - `docs/index.html`
 - `docs/assets/app.js`
 - `docs/assets/app.css`
-- `docs/assets/accidents-*.js` only when data changed or generated chunk files are missing
+- `docs/assets/accidents-state-*.bin.gz` only when data changed, the binary format changed, or generated shard files are missing
 - the data version in `docs/assets/data-manifest.js`
 
 Do not edit generated files in `docs/assets` by hand. Change source code under `src/` or raw data under `data/csv`, then rebuild. Existing browser caches are invalidated automatically when the generated data version changes.

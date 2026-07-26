@@ -74,7 +74,7 @@ async function writeDataBundle(files, streetLookup, analysisCacheVersion) {
   if (reusableAccidentShardFiles) {
     await removeGeneratedAccidentDataFiles(new Set(reusableAccidentShardFiles.map((file) => file.fileName)));
     console.log(
-      `Reused ${reusableAccidentShardFiles.length.toLocaleString("en-US")} normalized accident state shard scripts for data version ${dataVersion}.`
+      `Reused ${reusableAccidentShardFiles.length.toLocaleString("en-US")} normalized accident state shard files for data version ${dataVersion}.`
     );
   }
   await removeGeneratedDefaultAnalysisFiles(new Set([defaultAnalysis.fileName]));
@@ -84,11 +84,6 @@ async function writeDataBundle(files, streetLookup, analysisCacheVersion) {
 }
 
 async function writeAccidentShards(dataVersion, files, streetLookup) {
-  const legacyChunkFiles = await reusableAccidentChunks(dataVersion);
-  if (legacyChunkFiles) {
-    return writeAccidentShardsFromLegacyChunks(dataVersion, legacyChunkFiles);
-  }
-
   const parseAccidentCsvFiles = await loadCsvParser();
   globalThis.__SICHERE_KNOTEN_STREETS__ = streetLookup;
   let recordIndex = 0;
@@ -100,7 +95,7 @@ async function writeAccidentShards(dataVersion, files, streetLookup) {
       accident.recordIndex = recordIndex;
       recordIndex += 1;
       const stateRecords = recordsByState.get(accident.stateCode) ?? [];
-      stateRecords.push(compactAccidentRecord(accident));
+      stateRecords.push(accident);
       recordsByState.set(accident.stateCode, stateRecords);
     }
   }
@@ -113,7 +108,7 @@ async function writeDataManifest(dataVersion, fileMetadata, accidentShardFiles, 
     path.join(assetsDir, "data-manifest.js"),
     `globalThis.__SICHERE_KNOTEN_DATA__={version:${JSON.stringify(dataVersion)},files:${JSON.stringify(
       fileMetadata
-    )},accidentShardFiles:${JSON.stringify(accidentShardFiles)},accidentShards:[],defaultAnalysisFile:${JSON.stringify(
+    )},accidentShardFiles:${JSON.stringify(accidentShardFiles)},defaultAnalysisFile:${JSON.stringify(
       defaultAnalysis.fileName
     )},defaultAnalysisMetadata:${JSON.stringify(defaultAnalysis.metadata)}};\n`
   );
@@ -150,29 +145,6 @@ function isGeneratedAsset(fileName) {
   );
 }
 
-async function reusableAccidentChunks(dataVersion) {
-  const manifest = await readExistingDataManifest();
-  if (!manifest || manifest.version !== dataVersion || !Array.isArray(manifest.accidentChunkFiles)) {
-    return null;
-  }
-  if (manifest.accidentChunkFiles.length === 0) {
-    return null;
-  }
-
-  const chunkFiles = [];
-  for (const fileName of manifest.accidentChunkFiles) {
-    if (typeof fileName !== "string" || !/^accidents-\d+\.js$/.test(fileName)) {
-      return null;
-    }
-    if (!(await fileExists(path.join(assetsDir, fileName)))) {
-      return null;
-    }
-    chunkFiles.push(fileName);
-  }
-
-  return chunkFiles;
-}
-
 async function reusableAccidentShards(dataVersion) {
   const manifest = await readExistingDataManifest();
   if (!manifest || manifest.version !== dataVersion || !Array.isArray(manifest.accidentShardFiles)) {
@@ -184,21 +156,19 @@ async function reusableAccidentShards(dataVersion) {
 
   const shardFiles = [];
   for (const entry of manifest.accidentShardFiles) {
-    if (!entry || typeof entry.stateCode !== "string" || typeof entry.fileName !== "string" || !/^accidents-state-[\w-]+\.js$/.test(entry.fileName)) {
+    if (!entry || typeof entry.stateCode !== "string" || typeof entry.fileName !== "string" || !/^accidents-state-[\w-]+\.bin\.gz$/.test(entry.fileName)) {
       return null;
     }
     const expectedFileName = accidentShardFileName(entry.stateCode, dataVersion);
-    const existingFilePath = path.join(assetsDir, entry.fileName);
-    if (!(await fileExists(existingFilePath))) {
+    if (entry.fileName !== expectedFileName) {
       return null;
     }
-    if (entry.fileName !== expectedFileName) {
-      const shard = await loadAccidentShard(entry.fileName);
-      await writeAccidentShardScript(dataVersion, expectedFileName, { ...shard, id: expectedFileName.replace(/\.js$/i, "") });
+    if (!(await fileExists(path.join(assetsDir, entry.fileName)))) {
+      return null;
     }
     shardFiles.push({
       stateCode: entry.stateCode,
-      fileName: expectedFileName,
+      fileName: entry.fileName,
       recordCount: Number(entry.recordCount) || 0
     });
   }
@@ -270,28 +240,11 @@ async function readExistingDataManifest() {
   }
 }
 
-async function writeAccidentShardsFromLegacyChunks(dataVersion, accidentChunkFiles) {
-  const recordsByState = new Map();
-  let recordCount = 0;
-  for (const fileName of accidentChunkFiles) {
-    const chunk = await loadLegacyAccidentChunk(fileName);
-    const compactRecords = JSON.parse(gunzipSync(Buffer.from(chunk.chunks.join(""), "base64")).toString("utf8"));
-    for (const record of compactRecords) {
-      const accident = accidentFromCompactRecord(record, recordCount);
-      recordCount += 1;
-      const stateRecords = recordsByState.get(accident.stateCode) ?? [];
-      stateRecords.push(compactAccidentRecord(accident));
-      recordsByState.set(accident.stateCode, stateRecords);
-    }
-  }
-  console.log(`Loaded ${recordCount.toLocaleString("en-US")} legacy normalized accident records for state sharding.`);
-  return writeAccidentShardFiles(dataVersion, recordsByState);
-}
-
 async function writeAccidentShardFiles(dataVersion, recordsByState) {
+  const { encodeAccidentRecordsBinary } = await loadAccidentRecordsBinaryModule();
   const shardFiles = [];
   for (const [stateCode, records] of Array.from(recordsByState.entries()).sort((a, b) => a[0].localeCompare(b[0]))) {
-    shardFiles.push(await writeAccidentShard(dataVersion, stateCode, records));
+    shardFiles.push(await writeAccidentShard(dataVersion, stateCode, records, encodeAccidentRecordsBinary));
   }
 
   await removeGeneratedAccidentDataFiles(new Set(shardFiles.map((file) => file.fileName)));
@@ -299,12 +252,13 @@ async function writeAccidentShardFiles(dataVersion, recordsByState) {
 }
 
 async function loadNormalizedAccidentsFromShards(accidentShardFiles) {
+  const { decodeAccidentRecordsBinary } = await loadAccidentRecordsBinaryModule();
   const accidents = [];
   for (const entry of accidentShardFiles) {
-    const shard = await loadAccidentShard(entry.fileName);
-    const compactRecords = JSON.parse(gunzipSync(Buffer.from(shard.chunks.join(""), "base64")).toString("utf8"));
-    for (const record of compactRecords) {
-      accidents.push(accidentFromCompactRecord(record, accidents.length));
+    const compressed = await readFile(path.join(assetsDir, entry.fileName));
+    const records = decodeAccidentRecordsBinary(gunzipSync(compressed));
+    for (const record of records) {
+      accidents.push(record);
     }
   }
   accidents.sort((a, b) => (a.recordIndex ?? 0) - (b.recordIndex ?? 0));
@@ -312,33 +266,17 @@ async function loadNormalizedAccidentsFromShards(accidentShardFiles) {
   return accidents;
 }
 
-async function loadLegacyAccidentChunk(fileName) {
-  const script = await readFile(path.join(assetsDir, fileName), "utf8");
-  const sandbox = { globalThis: {} };
-  runInNewContext(script, sandbox, { timeout: 1000 });
-  const chunk = sandbox.globalThis.__SICHERE_KNOTEN_DATA__?.accidentChunks?.[0];
-  if (!chunk?.chunks) {
-    throw new Error(`Could not load normalized accident chunk ${fileName}.`);
-  }
-  return chunk;
-}
-
-async function loadAccidentShard(fileName) {
-  const script = await readFile(path.join(assetsDir, fileName), "utf8");
-  const sandbox = { globalThis: {} };
-  runInNewContext(script, sandbox, { timeout: 1000 });
-  const shard = sandbox.globalThis.__SICHERE_KNOTEN_DATA__?.accidentShards?.[0];
-  if (!shard?.chunks) {
-    throw new Error(`Could not load normalized accident shard ${fileName}.`);
-  }
-  return shard;
-}
-
 async function removeGeneratedAccidentDataFiles(keep = new Set()) {
   const entries = await readdir(assetsDir);
   await Promise.all(
     entries
-      .filter((entry) => (/^accidents-\d+\.js$/.test(entry) || /^accidents-state-[\w-]+\.js$/.test(entry)) && !keep.has(entry))
+      .filter(
+        (entry) =>
+          (/^accidents-\d+\.js$/.test(entry) ||
+            /^accidents-state-[\w-]+\.js$/.test(entry) ||
+            /^accidents-state-[\w-]+\.bin\.gz$/.test(entry)) &&
+          !keep.has(entry)
+      )
       .map((entry) => rm(path.join(assetsDir, entry), { force: true }))
   );
 }
@@ -417,8 +355,16 @@ async function loadAnalysisModule() {
 }
 
 async function loadDefaultAnalysisBinaryModule() {
+  return loadBundledTsModule("src/defaultAnalysisBinary.ts");
+}
+
+async function loadAccidentRecordsBinaryModule() {
+  return loadBundledTsModule("src/accidentRecordsBinary.ts");
+}
+
+async function loadBundledTsModule(relativePath) {
   const result = await build({
-    entryPoints: [path.join(root, "src/defaultAnalysisBinary.ts")],
+    entryPoints: [path.join(root, relativePath)],
     bundle: true,
     write: false,
     format: "esm",
@@ -485,124 +431,28 @@ function numericInputDefault(html, id) {
   return number;
 }
 
-async function writeAccidentShard(dataVersion, stateCode, records) {
-  const bytes = Buffer.from(JSON.stringify(records));
+async function writeAccidentShard(dataVersion, stateCode, records, encodeAccidentRecordsBinary) {
+  const bytes = encodeAccidentRecordsBinary(records);
   const compressed = gzipSync(bytes, { level: 9 });
-  const scriptFileName = accidentShardFileName(stateCode, dataVersion);
-  const shard = {
-    id: scriptFileName.replace(/\.js$/i, ""),
-    stateCode,
-    encoding: "gzip-base64-json-compact-v2",
-    recordCount: records.length,
-    size: bytes.byteLength,
-    compressedSize: compressed.byteLength,
-    chunks: chunkString(compressed.toString("base64"), 256 * 1024)
-  };
-  await writeAccidentShardScript(dataVersion, scriptFileName, shard);
-  console.log(`Wrote ${scriptFileName} with ${records.length.toLocaleString("en-US")} normalized accident records.`);
+  const fileName = accidentShardFileName(stateCode, dataVersion);
+  await writeFile(path.join(assetsDir, fileName), compressed);
+  console.log(
+    `Wrote ${fileName} with ${records.length.toLocaleString("en-US")} normalized accident records (${compressed.byteLength.toLocaleString(
+      "en-US"
+    )} compressed bytes).`
+  );
   return {
     stateCode,
-    fileName: scriptFileName,
+    fileName,
     recordCount: records.length
   };
-}
-
-async function writeAccidentShardScript(dataVersion, scriptFileName, shard) {
-  const script = `globalThis.__SICHERE_KNOTEN_DATA__=globalThis.__SICHERE_KNOTEN_DATA__||{version:${JSON.stringify(dataVersion)},files:[],accidentShards:[]};globalThis.__SICHERE_KNOTEN_DATA__.accidentShards=globalThis.__SICHERE_KNOTEN_DATA__.accidentShards||[];globalThis.__SICHERE_KNOTEN_DATA__.accidentShards.push(${JSON.stringify(shard)});\n`;
-  await writeFile(path.join(assetsDir, scriptFileName), script);
 }
 
 function accidentShardFileName(stateCode, dataVersion) {
   const normalizedStateCode = String(stateCode || "unknown")
     .toLowerCase()
     .replace(/[^\w-]+/g, "-");
-  return `accidents-state-${normalizedStateCode}-${dataVersion}.js`;
-}
-
-function compactAccidentRecord(accident) {
-  return [
-    accident.id,
-    accident.serialNumber,
-    accident.source,
-    accident.streetNames,
-    accident.stateCode,
-    accident.administrativeRegionCode,
-    accident.districtCode,
-    accident.municipalityCode,
-    accident.administrativeRegionName,
-    accident.districtName,
-    accident.municipalityName,
-    accident.year,
-    accident.month,
-    accident.day,
-    accident.hour,
-    accident.weekday,
-    accident.category,
-    accident.accidentKind,
-    accident.accidentType,
-    accident.lightCondition,
-    accident.roadSurface,
-    accident.plausibilityLevel,
-    accident.linRefX,
-    accident.linRefY,
-    accident.lon,
-    accident.lat,
-    accident.involvesBike,
-    accident.involvesPedestrian,
-    accident.involvesMotorcycle,
-    accident.involvesCar,
-    accident.involvesTruck,
-    accident.involvesOther,
-    accident.recordIndex ?? null,
-    accident.osmRoundabout ?? null,
-    accident.osmTrafficSignal ?? null
-  ];
-}
-
-function accidentFromCompactRecord(record, recordIndex) {
-  const streetNames = record[3];
-  const stateCode = record[4];
-  const normalizedRecordIndex = typeof record[32] === "number" ? record[32] : recordIndex;
-  return {
-    id: record[0],
-    recordIndex: normalizedRecordIndex,
-    serialNumber: record[1],
-    source: record[2],
-    sourceType: "csv",
-    streetName: streetNames[0] ?? null,
-    streetNames,
-    osmRoundabout: record[33] ?? null,
-    osmTrafficSignal: record[34] ?? null,
-    stateCode,
-    stateName: stateNameFromCode(stateCode),
-    administrativeRegionCode: record[5],
-    districtCode: record[6],
-    municipalityCode: record[7],
-    administrativeRegionName: record[8],
-    districtName: record[9],
-    municipalityName: record[10],
-    year: record[11],
-    month: record[12],
-    day: record[13],
-    hour: record[14],
-    weekday: record[15],
-    category: record[16],
-    accidentKind: record[17],
-    accidentType: record[18],
-    lightCondition: record[19],
-    roadSurface: record[20],
-    plausibilityLevel: record[21],
-    linRefX: record[22],
-    linRefY: record[23],
-    lon: record[24],
-    lat: record[25],
-    involvesBike: record[26],
-    involvesPedestrian: record[27],
-    involvesMotorcycle: record[28],
-    involvesCar: record[29],
-    involvesTruck: record[30],
-    involvesOther: record[31]
-  };
+  return `accidents-state-${normalizedStateCode}-${dataVersion}.bin.gz`;
 }
 
 function compactAnalysisResult(result) {
@@ -630,42 +480,19 @@ function serializeAnalysisOptionsForBundle(options) {
   };
 }
 
-function stateNameFromCode(code) {
-  const names = {
-    "01": "Schleswig-Holstein",
-    "02": "Hamburg",
-    "03": "Niedersachsen",
-    "04": "Bremen",
-    "05": "Nordrhein-Westfalen",
-    "06": "Hessen",
-    "07": "Rheinland-Pfalz",
-    "08": "Baden-Wuerttemberg",
-    "09": "Bayern",
-    "10": "Saarland",
-    "11": "Berlin",
-    "12": "Brandenburg",
-    "13": "Mecklenburg-Vorpommern",
-    "14": "Sachsen",
-    "15": "Sachsen-Anhalt",
-    "16": "Thueringen"
-  };
-  return names[code] ?? `Bundesland ${code}`;
-}
-
 async function hashFiles(files, streetLookup) {
   const hash = createHash("sha256");
   for (const file of files) {
-    const bytes = await readFile(file.sourcePath);
-    hash.update(file.publicPath);
-    hash.update("\0");
-    hash.update(bytes);
-    hash.update("\0");
+    await hashSourceContent(hash, file.publicPath, file.sourcePath);
   }
   if (streetLookup) {
     hash.update("streets");
     hash.update("\0");
     hash.update(streetLookup.version);
     hash.update("\0");
+  }
+  for (const file of dataVersionSourceFiles()) {
+    await hashSourceFile(hash, file);
   }
   return hash.digest("hex").slice(0, 16);
 }
@@ -682,11 +509,7 @@ async function hashAppSources() {
   const hash = createHash("sha256");
 
   for (const file of files) {
-    const bytes = await readFile(file);
-    hash.update(path.relative(root, file).replace(/\\/g, "/"));
-    hash.update("\0");
-    hash.update(bytes);
-    hash.update("\0");
+    await hashSourceFile(hash, file);
   }
 
   return hash.digest("hex").slice(0, 16);
@@ -698,6 +521,8 @@ async function hashAnalysisSources() {
     path.join(root, "src/analysisRunner.ts"),
     path.join(root, "src/analysisWorker.ts"),
     path.join(root, "src/analysisWorkerProtocol.ts"),
+    path.join(root, "src/accidentRecordsBinary.ts"),
+    path.join(root, "src/binaryCodec.ts"),
     path.join(root, "src/cache.ts"),
     path.join(root, "src/defaultAnalysisBinary.ts"),
     path.join(root, "src/geo.ts"),
@@ -708,14 +533,30 @@ async function hashAnalysisSources() {
   const hash = createHash("sha256");
 
   for (const file of files) {
-    const bytes = await readFile(file);
-    hash.update(path.relative(root, file).replace(/\\/g, "/"));
-    hash.update("\0");
-    hash.update(bytes);
-    hash.update("\0");
+    await hashSourceFile(hash, file);
   }
 
   return hash.digest("hex").slice(0, 16);
+}
+
+function dataVersionSourceFiles() {
+  return [
+    path.join(root, "src/accidentRecordsBinary.ts"),
+    path.join(root, "src/binaryCodec.ts"),
+    path.join(root, "src/states.ts")
+  ].sort();
+}
+
+async function hashSourceFile(hash, file) {
+  await hashSourceContent(hash, path.relative(root, file).replace(/\\/g, "/"), file);
+}
+
+async function hashSourceContent(hash, label, file) {
+  const bytes = await readFile(file);
+  hash.update(label);
+  hash.update("\0");
+  hash.update(bytes);
+  hash.update("\0");
 }
 
 async function sourceFiles(dir) {
@@ -768,14 +609,6 @@ function compareCsvFileNames(a, b) {
 function csvFileYear(name) {
   const match = /20\d{2}/.exec(name);
   return match ? Number(match[0]) : Number.MAX_SAFE_INTEGER;
-}
-
-function chunkString(value, size) {
-  const chunks = [];
-  for (let index = 0; index < value.length; index += size) {
-    chunks.push(value.slice(index, index + size));
-  }
-  return chunks;
 }
 
 await buildDocs();

@@ -1,8 +1,8 @@
 import { gunzipSync } from "fflate";
+import { decodeAccidentRecordsBinary } from "./accidentRecordsBinary";
 import { readAnalysisCache, resetAppStorage, writeAnalysisCache } from "./cache";
 import { decodeDefaultAnalysisBinary } from "./defaultAnalysisBinary";
 import { roadUserFocusKey } from "./roadUsers";
-import { stateNameFor } from "./states";
 import {
   AccidentRecord,
   AnalysisOptions,
@@ -31,29 +31,19 @@ export interface EmbeddedDataFile {
   modifiedTime?: string;
 }
 
-interface EmbeddedAccidentChunk {
-  id: string;
-  encoding: "gzip-base64-json-compact-v1";
-  recordCount: number;
-  size: number;
-  compressedSize: number;
-  chunks: string[];
-}
-
 interface EmbeddedAccidentShardFile {
   stateCode: string;
   fileName: string;
   recordCount: number;
 }
 
-interface EmbeddedAccidentShard {
+interface LoadedAccidentShard {
   id: string;
   stateCode: string;
-  encoding: "gzip-base64-json-compact-v1" | "gzip-base64-json-compact-v2";
   recordCount: number;
   size: number;
   compressedSize: number;
-  chunks: string[];
+  compressedBytes: Uint8Array;
 }
 
 interface SerializedAnalysisOptions {
@@ -83,50 +73,9 @@ interface EmbeddedDataBundle {
   version?: string;
   files: EmbeddedDataFile[];
   accidentShardFiles?: EmbeddedAccidentShardFile[];
-  accidentShards?: EmbeddedAccidentShard[];
-  accidentChunkFiles?: string[];
-  accidentChunks?: EmbeddedAccidentChunk[];
   defaultAnalysisFile?: string;
   defaultAnalysisMetadata?: EmbeddedDefaultAnalysisMetadata;
 }
-
-type CompactAccidentRecord = [
-  string,
-  string | null,
-  string,
-  string[],
-  string,
-  string | null,
-  string | null,
-  string | null,
-  string | null,
-  string | null,
-  string | null,
-  number,
-  number | null,
-  number | null,
-  number | null,
-  number | null,
-  number | null,
-  number | null,
-  number | null,
-  number | null,
-  number | null,
-  number | null,
-  number | null,
-  number | null,
-  number,
-  number,
-  boolean | null,
-  boolean | null,
-  boolean | null,
-  boolean | null,
-  boolean | null,
-  boolean | null,
-  number | null | undefined,
-  boolean | null | undefined,
-  boolean | null | undefined
-];
 
 declare global {
   var __SICHERE_KNOTEN_DATA__: EmbeddedDataBundle | undefined;
@@ -173,11 +122,7 @@ export class DataRepository {
 
   hasStateShard(stateCode: string): boolean {
     const bundle = globalThis.__SICHERE_KNOTEN_DATA__;
-    return Boolean(
-      bundle?.accidentShardFiles?.some((entry) => entry.stateCode === stateCode) ||
-        bundle?.accidentChunkFiles?.length ||
-        bundle?.accidentChunks?.length
-    );
+    return Boolean(bundle?.accidentShardFiles?.some((entry) => entry.stateCode === stateCode));
   }
 
   async ensureManifest(telemetry: DataRepositoryTelemetry | null): Promise<EmbeddedDataBundle> {
@@ -378,34 +323,18 @@ export class DataRepository {
   ): Promise<AccidentRecord[]> {
     const bundle = await this.ensureManifest(telemetry);
     const shardFiles = bundle.accidentShardFiles ?? [];
-    if (shardFiles.length > 0) {
-      const shardLoadPromises = shardFiles.map((entry) => this.ensureBundledAccidentShard(entry.fileName, telemetry));
-      const loadedAccidents: AccidentRecord[] = [];
-      for (let index = 0; index < shardFiles.length; index += 1) {
-        const shard = await shardLoadPromises[index];
-        const records = await this.readBundledAccidentRecords(shard, telemetry, shardFiles.length);
-        this.accidentStateRecords.set(shard.stateCode, records);
-        appendItems(loadedAccidents, records);
-        onProgress?.({ current: index + 1, total: shardFiles.length });
-      }
-
-      return loadedAccidents;
+    if (shardFiles.length === 0) {
+      throw new Error("Bundled normalized accident data is missing. Run npm run build so docs/assets contains accidents-state-*.bin.gz.");
     }
 
-    const chunkFiles = bundle.accidentChunkFiles ?? [];
-    const preloadedChunks = bundle.accidentChunks ?? [];
-    const totalChunks = chunkFiles.length || preloadedChunks.length;
-    if (totalChunks === 0) {
-      throw new Error("Bundled normalized accident data is missing. Run npm run build so docs/assets contains accidents-*.js.");
-    }
-
-    const chunkLoadPromises = chunkFiles.length > 0 ? chunkFiles.map((fileName) => this.ensureBundledAccidentChunk(fileName, telemetry)) : [];
+    const shardLoadPromises = shardFiles.map((entry) => this.ensureBundledAccidentShard(entry, telemetry));
     const loadedAccidents: AccidentRecord[] = [];
-    for (let index = 0; index < totalChunks; index += 1) {
-      const chunk = chunkLoadPromises.length > 0 ? await chunkLoadPromises[index] : preloadedChunks[index];
-      const records = await this.readBundledAccidentRecords(chunk, telemetry, totalChunks);
+    for (let index = 0; index < shardFiles.length; index += 1) {
+      const shard = await shardLoadPromises[index];
+      const records = await this.readBundledAccidentShardRecords(shard, telemetry, shardFiles.length);
+      this.accidentStateRecords.set(shard.stateCode, records);
       appendItems(loadedAccidents, records);
-      onProgress?.({ current: index + 1, total: totalChunks });
+      onProgress?.({ current: index + 1, total: shardFiles.length });
     }
 
     return loadedAccidents;
@@ -415,39 +344,39 @@ export class DataRepository {
     const bundle = await this.ensureManifest(telemetry);
     const shardInfo = bundle.accidentShardFiles?.find((entry) => entry.stateCode === stateCode);
     if (shardInfo) {
-      const shard = await this.ensureBundledAccidentShard(shardInfo.fileName, telemetry);
-      return this.readBundledAccidentRecords(shard, telemetry, 1);
+      const shard = await this.ensureBundledAccidentShard(shardInfo, telemetry);
+      return this.readBundledAccidentShardRecords(shard, telemetry, 1);
     }
 
     const allRecords = await this.loadAllAccidents(telemetry);
     return allRecords.filter((accident) => accident.stateCode === stateCode);
   }
 
-  private async readBundledAccidentRecords(
-    bundlePart: EmbeddedAccidentChunk | EmbeddedAccidentShard,
+  private async readBundledAccidentShardRecords(
+    shard: LoadedAccidentShard,
     telemetry: DataRepositoryTelemetry | null,
-    totalParts: number
+    totalShards: number
   ): Promise<AccidentRecord[]> {
-    const isShard = "stateCode" in bundlePart;
     return this.measure(
       telemetry,
-      isShard ? "read normalized accident state shard" : "read normalized accident chunk",
-      bundlePart.id,
+      "read normalized accident state shard",
+      shard.id,
       async () => {
-        const compressed = this.decodeBase64Chunks(bundlePart.chunks);
-        const bytes = gunzipSync(compressed);
-        const text = new TextDecoder().decode(bytes);
-        const parsed = (JSON.parse(text) as CompactAccidentRecord[]).map(accidentFromCompactRecord);
+        const bytes = gunzipSync(shard.compressedBytes);
+        shard.size = bytes.byteLength;
+        const parsed = decodeAccidentRecordsBinary(bytes);
+        if (shard.recordCount > 0 && parsed.length !== shard.recordCount) {
+          throw new Error(`Bundled accident state shard ${shard.id} decoded ${parsed.length} records; expected ${shard.recordCount}.`);
+        }
         await yieldToBrowser();
         return parsed;
       },
       (parsed) => ({
         accidentCount: parsed.length,
-        stateCode: isShard ? bundlePart.stateCode : null,
-        bytes: bundlePart.size,
-        compressedBytes: bundlePart.compressedSize,
-        shardCount: isShard ? totalParts : null,
-        chunkCount: isShard ? null : totalParts
+        stateCode: shard.stateCode,
+        bytes: shard.size,
+        compressedBytes: shard.compressedSize,
+        shardCount: totalShards
       })
     );
   }
@@ -484,62 +413,34 @@ export class DataRepository {
     return loaded.bytes;
   }
 
-  private async ensureBundledAccidentShard(fileName: string, telemetry: DataRepositoryTelemetry | null): Promise<EmbeddedAccidentShard> {
-    const existingShard = this.findBundledAccidentShard(fileName);
-    if (existingShard) {
-      return existingShard;
+  private async ensureBundledAccidentShard(
+    entry: EmbeddedAccidentShardFile,
+    telemetry: DataRepositoryTelemetry | null
+  ): Promise<LoadedAccidentShard> {
+    if (!entry.fileName.toLowerCase().endsWith(".bin.gz")) {
+      throw new Error(`Bundled accident state shard ${entry.fileName} uses an unsupported file format.`);
     }
-
-    await this.measure(
+    const loaded = await this.measure(
       telemetry,
-      "load normalized accident state shard script",
-      fileName,
-      () => this.loadOfflineBundleScript(fileName),
-      (url) => ({
+      "load normalized accident state shard file",
+      entry.fileName,
+      () => this.fetchOfflineBundleAsset(entry.fileName),
+      ({ bytes, url }) => ({
         url,
+        compressedBytes: bytes.byteLength,
+        stateCode: entry.stateCode,
+        recordCount: entry.recordCount,
         automatic: true
       })
     );
-
-    const loadedShard = this.findBundledAccidentShard(fileName);
-    if (!loadedShard) {
-      throw new Error(`Bundled accident state shard ${fileName} did not register itself.`);
-    }
-    return loadedShard;
-  }
-
-  private async ensureBundledAccidentChunk(fileName: string, telemetry: DataRepositoryTelemetry | null): Promise<EmbeddedAccidentChunk> {
-    const existingChunk = this.findBundledAccidentChunk(fileName);
-    if (existingChunk) {
-      return existingChunk;
-    }
-
-    await this.measure(
-      telemetry,
-      "load normalized accident chunk script",
-      fileName,
-      () => this.loadOfflineBundleScript(fileName),
-      (url) => ({
-        url,
-        automatic: true
-      })
-    );
-
-    const loadedChunk = this.findBundledAccidentChunk(fileName);
-    if (!loadedChunk) {
-      throw new Error(`Bundled accident chunk ${fileName} did not register itself.`);
-    }
-    return loadedChunk;
-  }
-
-  private findBundledAccidentShard(fileName: string): EmbeddedAccidentShard | null {
-    const shardId = fileName.replace(/\.js$/i, "");
-    return globalThis.__SICHERE_KNOTEN_DATA__?.accidentShards?.find((shard) => shard.id === shardId || `${shard.id}.js` === fileName) ?? null;
-  }
-
-  private findBundledAccidentChunk(fileName: string): EmbeddedAccidentChunk | null {
-    const chunkId = fileName.replace(/\.js$/i, "");
-    return globalThis.__SICHERE_KNOTEN_DATA__?.accidentChunks?.find((chunk) => chunk.id === chunkId || `${chunk.id}.js` === fileName) ?? null;
+    return {
+      id: entry.fileName.replace(/\.bin\.gz$/i, ""),
+      stateCode: entry.stateCode,
+      recordCount: entry.recordCount,
+      size: 0,
+      compressedSize: loaded.bytes.byteLength,
+      compressedBytes: loaded.bytes
+    };
   }
 
   private defaultAnalysisMetadataMatches(
@@ -638,27 +539,6 @@ export class DataRepository {
     return records;
   }
 
-  private decodeBase64Chunks(chunks: string[]): Uint8Array {
-    const decodedChunks = chunks.map((chunk) => {
-      const binary = atob(chunk);
-      const bytes = new Uint8Array(binary.length);
-      for (let index = 0; index < binary.length; index += 1) {
-        bytes[index] = binary.charCodeAt(index);
-      }
-      return bytes;
-    });
-    const length = decodedChunks.reduce((total, chunk) => total + chunk.byteLength, 0);
-    const output = new Uint8Array(length);
-    let offset = 0;
-
-    for (const chunk of decodedChunks) {
-      output.set(chunk, offset);
-      offset += chunk.byteLength;
-    }
-
-    return output;
-  }
-
   private measure<T>(
     telemetry: DataRepositoryTelemetry | null,
     name: string,
@@ -668,55 +548,6 @@ export class DataRepository {
   ): Promise<T> {
     return telemetry ? telemetry.measure(name, detail, work, metadata) : work();
   }
-}
-
-function accidentFromCompactRecord(record: CompactAccidentRecord): AccidentRecord {
-  const streetNames = record[3];
-  const stateCode = record[4];
-  const administrativeRegionCode = record[5];
-  const districtCode = record[6];
-  const municipalityCode = record[7];
-  const recordIndex = typeof record[32] === "number" ? record[32] : undefined;
-  return {
-    id: record[0],
-    recordIndex,
-    serialNumber: record[1],
-    source: record[2],
-    sourceType: "csv",
-    streetName: streetNames[0] ?? null,
-    streetNames,
-    osmRoundabout: record[33] ?? null,
-    osmTrafficSignal: record[34] ?? null,
-    stateCode,
-    stateName: stateNameFor(stateCode),
-    administrativeRegionCode,
-    administrativeRegionName: record[8],
-    districtCode,
-    districtName: record[9],
-    municipalityCode,
-    municipalityName: record[10],
-    year: record[11],
-    month: record[12],
-    day: record[13],
-    hour: record[14],
-    weekday: record[15],
-    category: record[16],
-    accidentKind: record[17],
-    accidentType: record[18],
-    lightCondition: record[19],
-    roadSurface: record[20],
-    plausibilityLevel: record[21],
-    linRefX: record[22],
-    linRefY: record[23],
-    lon: record[24],
-    lat: record[25],
-    involvesBike: record[26],
-    involvesPedestrian: record[27],
-    involvesMotorcycle: record[28],
-    involvesCar: record[29],
-    involvesTruck: record[30],
-    involvesOther: record[31]
-  };
 }
 
 function serializeAnalysisOptionsForBundle(options: AnalysisOptions): SerializedAnalysisOptions {

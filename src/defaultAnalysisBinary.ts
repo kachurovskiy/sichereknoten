@@ -1,3 +1,4 @@
+import { BinaryReader, BinaryWriter, zigZagDecode, zigZagEncode } from "./binaryCodec";
 import { stateNameFor } from "./states";
 import type {
   AccidentTrendDirection,
@@ -23,7 +24,7 @@ const DEFAULT_ANALYSIS_TREND_DIRECTION_IDS = new Map<AccidentTrendDirection, num
 export function encodeDefaultAnalysisBinary(result: AnalysisResult): Uint8Array {
   const strings = defaultAnalysisStringDictionary(result);
   const stringIds = new Map(strings.map((value, index) => [value, index]));
-  const writer = new BinaryWriter();
+  const writer = new BinaryWriter("default analysis binary");
   writer.writeAscii(DEFAULT_ANALYSIS_BINARY_MAGIC);
   writer.writeVarUint(result.filteredAccidentCount);
   writeVarUintArray(writer, result.years);
@@ -42,7 +43,7 @@ export function encodeDefaultAnalysisBinary(result: AnalysisResult): Uint8Array 
 }
 
 export function decodeDefaultAnalysisBinary(bytes: Uint8Array): AnalysisResult {
-  const reader = new BinaryReader(bytes);
+  const reader = new BinaryReader(bytes, "default analysis binary");
   reader.expectAscii(DEFAULT_ANALYSIS_BINARY_MAGIC);
   const filteredAccidentCount = reader.readVarUint();
   const years = readVarUintArray(reader);
@@ -475,151 +476,4 @@ function clusterIdNumber(value: string): number {
     throw new Error(`Invalid cluster id for default analysis binary: ${value}`);
   }
   return Number(match[1]);
-}
-
-function zigZagEncode(value: number): number {
-  return value >= 0 ? value * 2 : -value * 2 - 1;
-}
-
-function zigZagDecode(value: number): number {
-  return value % 2 === 0 ? value / 2 : -(value + 1) / 2;
-}
-
-class BinaryWriter {
-  private readonly chunks: Uint8Array[] = [];
-  private buffer = new Uint8Array(1024 * 1024);
-  private offset = 0;
-
-  writeAscii(value: string): void {
-    for (let index = 0; index < value.length; index += 1) {
-      this.writeByte(value.charCodeAt(index));
-    }
-  }
-
-  writeByte(value: number): void {
-    this.ensure(1);
-    this.buffer[this.offset] = value & 0xff;
-    this.offset += 1;
-  }
-
-  writeVarUint(value: number): void {
-    let remaining = Math.trunc(value);
-    if (!Number.isFinite(remaining) || remaining < 0) {
-      throw new Error(`Invalid unsigned integer for default analysis binary: ${value}`);
-    }
-    while (remaining >= 0x80) {
-      this.writeByte((remaining % 0x80) | 0x80);
-      remaining = Math.floor(remaining / 0x80);
-    }
-    this.writeByte(remaining);
-  }
-
-  writeSignedVarInt(value: number): void {
-    this.writeVarUint(zigZagEncode(Math.trunc(value)));
-  }
-
-  writeBytes(bytes: Uint8Array): void {
-    this.writeVarUint(bytes.byteLength);
-    this.ensure(bytes.byteLength);
-    this.buffer.set(bytes, this.offset);
-    this.offset += bytes.byteLength;
-  }
-
-  finish(): Uint8Array {
-    this.flush();
-    const length = this.chunks.reduce((total, chunk) => total + chunk.byteLength, 0);
-    const output = new Uint8Array(length);
-    let offset = 0;
-    for (const chunk of this.chunks) {
-      output.set(chunk, offset);
-      offset += chunk.byteLength;
-    }
-    return output;
-  }
-
-  private ensure(length: number): void {
-    if (this.offset + length <= this.buffer.byteLength) {
-      return;
-    }
-    this.flush();
-    if (length > this.buffer.byteLength) {
-      this.buffer = new Uint8Array(length);
-    }
-  }
-
-  private flush(): void {
-    if (this.offset > 0) {
-      this.chunks.push(this.buffer.slice(0, this.offset));
-    }
-    this.buffer = new Uint8Array(1024 * 1024);
-    this.offset = 0;
-  }
-}
-
-class BinaryReader {
-  private offset = 0;
-
-  constructor(private readonly bytes: Uint8Array) {}
-
-  readByte(): number {
-    if (this.offset >= this.bytes.byteLength) {
-      throw new Error("Unexpected end of default analysis binary.");
-    }
-    const value = this.bytes[this.offset];
-    this.offset += 1;
-    return value;
-  }
-
-  readVarUint(): number {
-    let value = 0;
-    let multiplier = 1;
-
-    for (;;) {
-      const byte = this.readByte();
-      value += (byte & 0x7f) * multiplier;
-      if (byte < 0x80) {
-        if (!Number.isSafeInteger(value)) {
-          throw new Error("Default analysis binary integer exceeds safe range.");
-        }
-        return value;
-      }
-      multiplier *= 0x80;
-      if (multiplier > Number.MAX_SAFE_INTEGER / 0x80) {
-        throw new Error("Default analysis binary varint is too large.");
-      }
-    }
-  }
-
-  readSignedVarInt(): number {
-    return zigZagDecode(this.readVarUint());
-  }
-
-  readBytes(): Uint8Array {
-    const length = this.readVarUint();
-    this.ensure(length);
-    const start = this.offset;
-    this.offset += length;
-    return this.bytes.subarray(start, this.offset);
-  }
-
-  expectAscii(value: string): void {
-    for (let index = 0; index < value.length; index += 1) {
-      const byte = this.readByte();
-      if (byte !== value.charCodeAt(index)) {
-        throw new Error("Default analysis binary has an invalid header.");
-      }
-    }
-  }
-
-  expectDone(): void {
-    if (this.offset !== this.bytes.byteLength) {
-      throw new Error("Default analysis binary has trailing bytes.");
-    }
-  }
-
-  private ensure(length: number): void {
-    if (this.offset + length > this.bytes.byteLength) {
-      throw new Error("Unexpected end of default analysis binary.");
-    }
-  }
 }
