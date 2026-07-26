@@ -3,13 +3,16 @@ import { mkdir, open, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { inflateSync } from "node:zlib";
 
-const STREET_LOOKUP_SCHEMA_VERSION = 5;
+const STREET_LOOKUP_SCHEMA_VERSION = 6;
 const NODE_CAPTURE_RADIUS_METERS = 55;
 const STREET_MATCH_RADIUS_METERS = 30;
+const ROAD_CONTROL_MATCH_RADIUS_METERS = 55;
 const MAX_STREET_NAMES_PER_ACCIDENT = 4;
 const NODE_COORD_SHARD_COUNT = 256;
 const GRID_CELL_METERS = 60;
 const COORD_PACK_BASE = 10_000_000;
+const OSM_ROUNDABOUT_MASK = 1;
+const OSM_TRAFFIC_SIGNAL_MASK = 2;
 const textDecoder = new TextDecoder("utf-8");
 const csvDecoder = new TextDecoder("windows-1252");
 const degreesToRadians = Math.PI / 180;
@@ -41,7 +44,7 @@ export async function buildStreetLookupBundle({ root, sourceDataDir, csvFiles })
     return {
       version: signature,
       names: [],
-      files: source.files.map((file) => ({ name: file.name, indexes: file.indexes }))
+      files: source.files.map((file) => ({ name: file.name, indexes: file.indexes, osmRoadControlMasks: file.osmRoadControlMasks }))
     };
   }
 
@@ -115,6 +118,7 @@ async function readAccidentSource(csvFiles) {
     const lines = text.split(/\r?\n/);
     const headers = parseDelimitedLine(lines.shift() ?? "");
     const indexes = [];
+    const osmRoadControlMasks = [];
     let rowIndex = 0;
 
     for (const line of lines) {
@@ -123,6 +127,7 @@ async function readAccidentSource(csvFiles) {
       }
       rowIndex += 1;
       indexes.push(0);
+      osmRoadControlMasks.push(0);
       const values = parseDelimitedLine(line);
       const lon = parseNumber(readCsvField(headers, values, "XGCSWGS84"));
       const lat = parseNumber(readCsvField(headers, values, "YGCSWGS84"));
@@ -137,11 +142,12 @@ async function readAccidentSource(csvFiles) {
         lat,
         x: point.x,
         y: point.y,
-        streetMatches: null
+        streetMatches: null,
+        osmRoadControlMask: 0
       });
     }
 
-    files.push({ name: path.basename(file.publicPath), indexes });
+    files.push({ name: path.basename(file.publicPath), indexes, osmRoadControlMasks });
   }
 
   return { files, accidents };
@@ -402,6 +408,7 @@ function processDenseNodes(buffer, blockContext, accidentGrid, nodeCoords) {
   const ids = [];
   const lats = [];
   const lons = [];
+  const keysVals = [];
 
   while (state.pos < buffer.length) {
     const tag = readVarint(buffer, state);
@@ -413,8 +420,8 @@ function processDenseNodes(buffer, blockContext, accidentGrid, nodeCoords) {
       readPackedValues(buffer, state, wire, true, lats);
     } else if (field === 9) {
       readPackedValues(buffer, state, wire, true, lons);
-    } else if (field >= 10 && ids.length > 0 && lats.length > 0 && lons.length > 0) {
-      state.pos = buffer.length;
+    } else if (field === 10) {
+      readPackedValues(buffer, state, wire, false, keysVals);
     } else if (wire === 3 || wire === 6) {
       return;
     } else {
@@ -425,6 +432,7 @@ function processDenseNodes(buffer, blockContext, accidentGrid, nodeCoords) {
   let id = 0;
   let rawLat = 0;
   let rawLon = 0;
+  let keysValsIndex = 0;
   const count = Math.min(ids.length, lats.length, lons.length);
   for (let index = 0; index < count; index += 1) {
     id += ids[index];
@@ -432,8 +440,14 @@ function processDenseNodes(buffer, blockContext, accidentGrid, nodeCoords) {
     rawLon += lons[index];
     const lat = (blockContext.latOffset + blockContext.granularity * rawLat) * 1e-9;
     const lon = (blockContext.lonOffset + blockContext.granularity * rawLon) * 1e-9;
-    if (isNearAccident(accidentGrid, lon, lat)) {
+    const roadControlMask = roadControlMaskForDenseNode(keysVals, keysValsIndex, blockContext.strings);
+    keysValsIndex = skipDenseNodeTags(keysVals, keysValsIndex);
+    const point = projectLonLat(lon, lat);
+    if (isPointNearAccident(accidentGrid, point)) {
       setNodeCoord(nodeCoords, id, packCoord(lat, lon));
+    }
+    if (roadControlMask) {
+      matchPointRoadControlToAccidents(point, roadControlMask, accidentGrid);
     }
   }
 }
@@ -459,8 +473,8 @@ function processWay(buffer, strings, accidents, accidentGrid, nodeCoords) {
     }
   }
 
-  const streetName = streetNameForWay(keys, vals, strings);
-  if (!streetName || refs.length < 2) {
+  const metadata = osmMetadataForWay(keys, vals, strings);
+  if ((!metadata.streetName && !metadata.roadControlMask) || refs.length < 2) {
     return;
   }
 
@@ -471,15 +485,21 @@ function processWay(buffer, strings, accidents, accidentGrid, nodeCoords) {
     const packed = getNodeCoord(nodeCoords, nodeId);
     const currentPoint = packed === undefined ? null : projectPackedCoord(packed);
     if (previousPoint && currentPoint) {
-      matchSegmentToAccidents(previousPoint, currentPoint, streetName, accidents, accidentGrid);
+      if (metadata.streetName) {
+        matchSegmentToAccidents(previousPoint, currentPoint, metadata.streetName, accidents, accidentGrid);
+      }
+      if (metadata.roadControlMask) {
+        matchSegmentRoadControlToAccidents(previousPoint, currentPoint, metadata.roadControlMask, accidentGrid);
+      }
     }
     previousNodeId = nodeId;
     previousPoint = currentPoint;
   }
 }
 
-function streetNameForWay(keys, vals, strings) {
+function osmMetadataForWay(keys, vals, strings) {
   let highway = "";
+  let junction = "";
   let name = "";
   let officialName = "";
   let ref = "";
@@ -489,6 +509,8 @@ function streetNameForWay(keys, vals, strings) {
     const value = strings[vals[index]];
     if (key === "highway") {
       highway = value;
+    } else if (key === "junction") {
+      junction = value;
     } else if (key === "name") {
       name = value;
     } else if (key === "official_name") {
@@ -498,10 +520,12 @@ function streetNameForWay(keys, vals, strings) {
     }
   }
 
+  const hasUsableHighway = Boolean(highway && highway !== "construction" && highway !== "proposed");
+  const roadControlMask = hasUsableHighway && junction === "roundabout" ? OSM_ROUNDABOUT_MASK : 0;
   if (!highway || highway === "construction" || highway === "proposed") {
-    return null;
+    return { streetName: null, roadControlMask };
   }
-  return cleanStreetName(name || officialName || ref);
+  return { streetName: cleanStreetName(name || officialName || ref), roadControlMask };
 }
 
 function cleanStreetName(value) {
@@ -510,7 +534,10 @@ function cleanStreetName(value) {
 }
 
 function isNearAccident(accidentGrid, lon, lat) {
-  const point = projectLonLat(lon, lat);
+  return isPointNearAccident(accidentGrid, projectLonLat(lon, lat));
+}
+
+function isPointNearAccident(accidentGrid, point) {
   const nearby = accidentIndexesInBounds(
     accidentGrid,
     point.x - NODE_CAPTURE_RADIUS_METERS,
@@ -525,6 +552,43 @@ function isNearAccident(accidentGrid, lon, lat) {
     }
   }
   return false;
+}
+
+function roadControlMaskForDenseNode(keysVals, startIndex, strings) {
+  let mask = 0;
+  let index = startIndex;
+  while (index < keysVals.length) {
+    const keyIndex = keysVals[index];
+    index += 1;
+    if (keyIndex === 0) {
+      break;
+    }
+    const valueIndex = keysVals[index];
+    index += 1;
+    const key = strings[keyIndex];
+    const value = strings[valueIndex];
+    if (key === "highway" && value === "traffic_signals") {
+      mask |= OSM_TRAFFIC_SIGNAL_MASK;
+    } else if (key === "crossing" && value === "traffic_signals") {
+      mask |= OSM_TRAFFIC_SIGNAL_MASK;
+    } else if (key === "highway" && value === "mini_roundabout") {
+      mask |= OSM_ROUNDABOUT_MASK;
+    }
+  }
+  return mask;
+}
+
+function skipDenseNodeTags(keysVals, startIndex) {
+  let index = startIndex;
+  while (index < keysVals.length) {
+    const keyIndex = keysVals[index];
+    index += 1;
+    if (keyIndex === 0) {
+      break;
+    }
+    index += 1;
+  }
+  return index;
 }
 
 function matchSegmentToAccidents(a, b, streetName, accidents, accidentGrid) {
@@ -545,6 +609,39 @@ function matchSegmentToAccidents(a, b, streetName, accidents, accidentGrid) {
       if (previousDistance === undefined || distance < previousDistance) {
         accident.streetMatches.set(streetName, distance);
       }
+    }
+  }
+}
+
+function matchPointRoadControlToAccidents(point, mask, accidentGrid) {
+  const nearby = accidentIndexesInBounds(
+    accidentGrid,
+    point.x - ROAD_CONTROL_MATCH_RADIUS_METERS,
+    point.y - ROAD_CONTROL_MATCH_RADIUS_METERS,
+    point.x + ROAD_CONTROL_MATCH_RADIUS_METERS,
+    point.y + ROAD_CONTROL_MATCH_RADIUS_METERS
+  );
+
+  for (const accidentIndex of nearby) {
+    const accident = accidentGrid.accidents[accidentIndex];
+    if (squaredDistance(point.x, point.y, accident.x, accident.y) <= ROAD_CONTROL_MATCH_RADIUS_METERS ** 2) {
+      accident.osmRoadControlMask |= mask;
+    }
+  }
+}
+
+function matchSegmentRoadControlToAccidents(a, b, mask, accidentGrid) {
+  const minX = Math.min(a.x, b.x) - ROAD_CONTROL_MATCH_RADIUS_METERS;
+  const minY = Math.min(a.y, b.y) - ROAD_CONTROL_MATCH_RADIUS_METERS;
+  const maxX = Math.max(a.x, b.x) + ROAD_CONTROL_MATCH_RADIUS_METERS;
+  const maxY = Math.max(a.y, b.y) + ROAD_CONTROL_MATCH_RADIUS_METERS;
+  const nearby = accidentIndexesInBounds(accidentGrid, minX, minY, maxX, maxY);
+
+  for (const accidentIndex of nearby) {
+    const accident = accidentGrid.accidents[accidentIndex];
+    const distance = pointSegmentDistance(accident.x, accident.y, a.x, a.y, b.x, b.y);
+    if (distance <= ROAD_CONTROL_MATCH_RADIUS_METERS) {
+      accident.osmRoadControlMask |= mask;
     }
   }
 }
@@ -578,17 +675,17 @@ function finalizeStreetLookup(version, source) {
     const streetIndexes = streetNamesForAccident(accident)
       .map((name) => indexesByName.get(name) ?? 0)
       .filter((index) => index > 0);
-    if (streetIndexes.length === 0) {
-      continue;
+    if (streetIndexes.length > 0) {
+      source.files[accident.fileIndex].indexes[accident.rowIndex - 1] =
+        streetIndexes.length === 1 ? streetIndexes[0] : streetIndexes;
     }
-    source.files[accident.fileIndex].indexes[accident.rowIndex - 1] =
-      streetIndexes.length === 1 ? streetIndexes[0] : streetIndexes;
+    source.files[accident.fileIndex].osmRoadControlMasks[accident.rowIndex - 1] = accident.osmRoadControlMask;
   }
 
   return {
     version,
     names,
-    files: source.files.map((file) => ({ name: file.name, indexes: file.indexes }))
+    files: source.files.map((file) => ({ name: file.name, indexes: file.indexes, osmRoadControlMasks: file.osmRoadControlMasks }))
   };
 }
 

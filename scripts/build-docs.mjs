@@ -540,7 +540,9 @@ function compactAccidentRecord(accident) {
     accident.involvesCar,
     accident.involvesTruck,
     accident.involvesOther,
-    accident.recordIndex ?? null
+    accident.recordIndex ?? null,
+    accident.osmRoundabout ?? null,
+    accident.osmTrafficSignal ?? null
   ];
 }
 
@@ -556,6 +558,8 @@ function accidentFromCompactRecord(record, recordIndex) {
     sourceType: "csv",
     streetName: streetNames[0] ?? null,
     streetNames,
+    osmRoundabout: record[33] ?? null,
+    osmTrafficSignal: record[34] ?? null,
     stateCode,
     stateName: stateNameFromCode(stateCode),
     administrativeRegionCode: record[5],

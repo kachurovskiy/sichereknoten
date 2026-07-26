@@ -14,6 +14,8 @@ export interface AccidentRecord {
   sourceType: "csv" | "dbf";
   streetName: string | null;
   streetNames: string[];
+  osmRoundabout: boolean | null;
+  osmTrafficSignal: boolean | null;
   stateCode: string;
   stateName: string;
   administrativeRegionCode: string | null;
@@ -103,6 +105,10 @@ export interface IntersectionCluster {
   lightCount: number;
   vulnerableCount: number;
   streetNames: string[];
+  osmRoundabout: boolean | null;
+  osmTrafficSignal: boolean | null;
+  osmRoundaboutCount: number;
+  osmTrafficSignalCount: number;
   severityPercent: number;
   years: number[];
   yearlyStats: ClusterYearStat[];

@@ -47,7 +47,15 @@ const INTERSECTION_URL_ZOOM_MAX = 19;
 declare const __SICHERE_KNOTEN_APP_VERSION__: string | undefined;
 declare const __SICHERE_KNOTEN_ANALYSIS_CACHE_VERSION__: string | undefined;
 
-type ClusterSortKey = "state" | "location" | "accidents" | "fatal" | "serious" | "severityPercent";
+type ClusterSortKey =
+  | "state"
+  | "location"
+  | "accidents"
+  | "fatal"
+  | "serious"
+  | "roundabout"
+  | "trafficSignal"
+  | "severityPercent";
 type SortDirection = "asc" | "desc";
 type SeverityFilterKey = "fatal" | "serious" | "other";
 type ViewKey = "explore" | "map" | "details" | "state" | "region" | "table" | "settings";
@@ -370,6 +378,11 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "details.population": "Population",
     "details.street": "Street",
     "details.streets": "Streets",
+    "details.roundabout": "Roundabout",
+    "details.trafficSignal": "Traffic light",
+    "details.yes": "Yes",
+    "details.no": "No",
+    "details.unknown": "Unknown",
     "details.coordinates": "Coordinates",
     "details.years": "Years",
     "details.accidents": "Accidents",
@@ -389,6 +402,8 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "table.clusters": "Clusters",
     "table.topCluster": "Top cluster",
     "table.location": "Location",
+    "table.roundabout": "Roundabout",
+    "table.trafficSignal": "Traffic light",
     "table.sorted": "{label} sorted {direction}",
     "table.sort.asc": "ascending",
     "table.sort.desc": "descending",
@@ -730,6 +745,11 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "details.population": "Einwohner",
     "details.street": "Straße",
     "details.streets": "Straßen",
+    "details.roundabout": "Kreisverkehr",
+    "details.trafficSignal": "Ampel",
+    "details.yes": "Ja",
+    "details.no": "Nein",
+    "details.unknown": "Unbekannt",
     "details.coordinates": "Koordinaten",
     "details.years": "Jahre",
     "details.accidents": "Unfälle",
@@ -749,6 +769,8 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
     "table.clusters": "Cluster",
     "table.topCluster": "Größter Cluster",
     "table.location": "Ort",
+    "table.roundabout": "Kreisverkehr",
+    "table.trafficSignal": "Ampel",
     "table.sorted": "{label} sortiert {direction}",
     "table.sort.asc": "aufsteigend",
     "table.sort.desc": "absteigend",
@@ -2597,6 +2619,8 @@ function renderTables(): void {
       <td>${formatInteger(cluster.accidentCount)}</td>
       <td>${formatInteger(cluster.fatalCount)}</td>
       <td>${formatInteger(cluster.seriousCount)}</td>
+      <td>${renderOsmBooleanBadge(cluster.osmRoundabout)}</td>
+      <td>${renderOsmBooleanBadge(cluster.osmTrafficSignal)}</td>
       <td>${formatSeverityPercent(cluster)}</td>
     `;
     row.addEventListener("click", () => {
@@ -3605,9 +3629,23 @@ function clusterSortValue(cluster: IntersectionCluster, key: ClusterSortKey): nu
       return cluster.fatalCount;
     case "serious":
       return cluster.seriousCount;
+    case "roundabout":
+      return osmBooleanSortValue(cluster.osmRoundabout);
+    case "trafficSignal":
+      return osmBooleanSortValue(cluster.osmTrafficSignal);
     case "severityPercent":
       return cluster.severityPercent;
   }
+}
+
+function osmBooleanSortValue(value: boolean | null | undefined): number | null {
+  if (value === true) {
+    return 1;
+  }
+  if (value === false) {
+    return 0;
+  }
+  return null;
 }
 
 function compareClusterCoreMetric(a: IntersectionCluster, b: IntersectionCluster): number {
@@ -4352,6 +4390,7 @@ function renderSelectedPanelHtml(viewModel: SelectedIntersectionViewModel): stri
       <dl>
         <div><dt>${escapeHtml(tr("details.region"))}</dt><dd>${escapeHtml(clusterAreaText(cluster))}</dd></div>
         ${renderClusterStreetDetailRow(streetNames)}
+        ${renderClusterOsmFeatureDetailRows(cluster)}
         ${renderClusterPopulationDetailRow(cluster)}
         <div><dt>${escapeHtml(tr("details.coordinates"))}</dt><dd>${cluster.lat.toFixed(5)}, ${cluster.lon.toFixed(5)}</dd></div>
         <div><dt>${escapeHtml(tr("details.years"))}</dt><dd>${escapeHtml(formatYearSelection(cluster.years))}</dd></div>
@@ -4397,6 +4436,31 @@ function renderClusterStreetDetailRow(streetNames: string[]): string {
     return "";
   }
   return `<div><dt>${escapeHtml(clusterStreetLabel(streetNames))}</dt><dd>${escapeHtml(formatClusterStreetNames(streetNames))}</dd></div>`;
+}
+
+function renderClusterOsmFeatureDetailRows(cluster: IntersectionCluster): string {
+  return [
+    [tr("details.roundabout"), formatOsmBoolean(cluster.osmRoundabout)],
+    [tr("details.trafficSignal"), formatOsmBoolean(cluster.osmTrafficSignal)]
+  ]
+    .map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`)
+    .join("");
+}
+
+function formatOsmBoolean(value: boolean | null | undefined): string {
+  if (value === true) {
+    return tr("details.yes");
+  }
+  if (value === false) {
+    return tr("details.no");
+  }
+  return tr("details.unknown");
+}
+
+function renderOsmBooleanBadge(value: boolean | null | undefined): string {
+  const label = formatOsmBoolean(value);
+  const state = value === true ? "yes" : value === false ? "no" : "unknown";
+  return `<span class="osm-feature-pill osm-feature-${state}">${escapeHtml(label)}</span>`;
 }
 
 function clusterStreetNamesForDisplay(cluster: IntersectionCluster, records: CrossingAccident[] = []): string[] {
@@ -5519,6 +5583,8 @@ function exportClusters(): void {
     "accidents",
     "fatal",
     "serious",
+    "osm_roundabout",
+    "osm_traffic_signal",
     "severity_percent"
   ];
   const rows = result.clusters.map((cluster) =>
@@ -5534,6 +5600,8 @@ function exportClusters(): void {
       cluster.accidentCount,
       cluster.fatalCount,
       cluster.seriousCount,
+      osmBooleanCsvValue(cluster.osmRoundabout),
+      osmBooleanCsvValue(cluster.osmTrafficSignal),
       severityPercentValue(cluster)
     ]
       .map(csvCell)
@@ -5547,6 +5615,16 @@ function exportClusters(): void {
   link.download = "high-severity-intersections.csv";
   link.click();
   URL.revokeObjectURL(url);
+}
+
+function osmBooleanCsvValue(value: boolean | null | undefined): string {
+  if (value === true) {
+    return "yes";
+  }
+  if (value === false) {
+    return "no";
+  }
+  return "unknown";
 }
 
 async function downloadSelectedFactsheet(): Promise<void> {
@@ -5721,6 +5799,10 @@ async function drawFactsheetOverview(layout: FactsheetLayout, cluster: Intersect
   if (streetNames.length > 0) {
     drawFactsheetRows(layout, [[clusterStreetLabel(streetNames), formatClusterStreetNames(streetNames)]]);
   }
+  drawFactsheetRows(layout, [
+    [tr("details.roundabout"), formatOsmBoolean(cluster.osmRoundabout)],
+    [tr("details.trafficSignal"), formatOsmBoolean(cluster.osmTrafficSignal)]
+  ]);
 
   drawFactsheetSectionHeading(layout, tr("factsheet.map"));
   const mapHeight = 470;

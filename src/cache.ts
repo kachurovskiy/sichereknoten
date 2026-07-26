@@ -37,7 +37,7 @@ const CHUNK_STORE = "chunks";
 const ANALYSIS_STORE = "analysis";
 const META_KEY = "active";
 const DEFAULT_ACCIDENT_CHUNK_SIZE = 25000;
-const PARSED_DATA_SCHEMA_VERSION = 9;
+const PARSED_DATA_SCHEMA_VERSION = 10;
 
 type IndexedDbFactoryWithDatabases = IDBFactory & {
   databases?: () => Promise<Array<{ name?: string | null }>>;

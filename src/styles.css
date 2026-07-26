@@ -2148,6 +2148,33 @@ th {
   color: #166b6d;
 }
 
+.osm-feature-pill {
+  display: inline-flex;
+  min-height: 24px;
+  align-items: center;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.osm-feature-yes {
+  background: #dff0ee;
+  color: #0f4f52;
+}
+
+.osm-feature-no {
+  background: #eef2ef;
+  color: #53636d;
+}
+
+.osm-feature-unknown {
+  background: #f3e5cc;
+  color: #7c4d12;
+}
+
 tbody tr {
   cursor: pointer;
 }

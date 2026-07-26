@@ -1,7 +1,7 @@
 import { AccidentRecord } from "../types";
 import { administrativeRegionNameFor, districtNameFor, municipalityNameFor } from "../municipalities";
 import { normalizeStateCode, stateNameFor } from "../states";
-import { streetNamesForAccident } from "../streetLookup";
+import { osmRoadMetadataForAccident, streetNamesForAccident } from "../streetLookup";
 
 export function parseNumber(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) {
@@ -60,6 +60,7 @@ export function accidentFromRecord(
   const weekday = parseInteger(readField(fields, "UWOCHENTAG"));
   const day = validDateDay(year, month, explicitDay, weekday) ? explicitDay : dayFromSourceId(id, year, month, weekday);
   const streetNames = recordStreetNames(fields, source, index);
+  const osmRoadMetadata = osmRoadMetadataForAccident(source, index);
 
   return {
     id,
@@ -68,6 +69,8 @@ export function accidentFromRecord(
     sourceType,
     streetName: streetNames[0] ?? null,
     streetNames,
+    osmRoundabout: osmRoadMetadata.roundabout,
+    osmTrafficSignal: osmRoadMetadata.trafficSignal,
     stateCode,
     stateName: stateNameFor(stateCode),
     administrativeRegionCode,

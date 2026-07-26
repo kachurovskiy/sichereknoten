@@ -3,6 +3,7 @@ type StreetLookupIndexEntry = number | number[];
 interface StreetLookupFile {
   name: string;
   indexes: StreetLookupIndexEntry[];
+  osmRoadControlMasks?: number[];
 }
 
 interface StreetLookupBundle {
@@ -11,12 +12,20 @@ interface StreetLookupBundle {
   files: StreetLookupFile[];
 }
 
+interface OsmRoadMetadata {
+  roundabout: boolean | null;
+  trafficSignal: boolean | null;
+}
+
 declare global {
   var __SICHERE_KNOTEN_STREETS__: StreetLookupBundle | undefined;
 }
 
 const streetLookupFiles = new Map<string, StreetLookupFile>();
 let activeStreetLookupBundle: StreetLookupBundle | null = null;
+
+const OSM_ROUNDABOUT_MASK = 1;
+const OSM_TRAFFIC_SIGNAL_MASK = 2;
 
 export function streetNamesForAccident(source: string, rowIndex: number): string[] {
   const bundle = globalThis.__SICHERE_KNOTEN_STREETS__;
@@ -33,6 +42,31 @@ export function streetNamesForAccident(source: string, rowIndex: number): string
 
 export function streetNameForAccident(source: string, rowIndex: number): string | null {
   return streetNamesForAccident(source, rowIndex)[0] ?? null;
+}
+
+export function osmRoadMetadataForAccident(source: string, rowIndex: number): OsmRoadMetadata {
+  const bundle = globalThis.__SICHERE_KNOTEN_STREETS__;
+  if (!bundle) {
+    return unknownOsmRoadMetadata();
+  }
+
+  const file = streetLookupFile(bundle, source);
+  if (!file?.osmRoadControlMasks) {
+    return unknownOsmRoadMetadata();
+  }
+
+  const mask = file.osmRoadControlMasks[rowIndex - 1] ?? 0;
+  return {
+    roundabout: Boolean(mask & OSM_ROUNDABOUT_MASK),
+    trafficSignal: Boolean(mask & OSM_TRAFFIC_SIGNAL_MASK)
+  };
+}
+
+function unknownOsmRoadMetadata(): OsmRoadMetadata {
+  return {
+    roundabout: null,
+    trafficSignal: null
+  };
 }
 
 function streetNameForIndex(bundle: StreetLookupBundle, streetIndex: number): string | null {

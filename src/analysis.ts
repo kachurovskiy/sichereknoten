@@ -34,6 +34,9 @@ interface ClusterAccumulator {
   seriousCount: number;
   lightCount: number;
   vulnerableCount: number;
+  osmMetadataKnownCount: number;
+  osmRoundaboutCount: number;
+  osmTrafficSignalCount: number;
   accidentIndexes: number[];
   accidentKeys: string[];
   streetNameCounts: Map<string, number>;
@@ -161,6 +164,9 @@ function buildClusters(accidents: AccidentRecord[], radiusMeters: number): Clust
         seriousCount: 0,
         lightCount: 0,
         vulnerableCount: 0,
+        osmMetadataKnownCount: 0,
+        osmRoundaboutCount: 0,
+        osmTrafficSignalCount: 0,
         accidentIndexes: [],
         accidentKeys: [],
         streetNameCounts: new Map(),
@@ -237,6 +243,20 @@ function addAccidentToCluster(cluster: ClusterAccumulator, accident: AccidentRec
   if (accident.involvesBike || accident.involvesPedestrian || accident.involvesMotorcycle) {
     cluster.vulnerableCount += 1;
   }
+
+  if (hasOsmRoadMetadata(accident)) {
+    cluster.osmMetadataKnownCount += 1;
+    if (accident.osmRoundabout) {
+      cluster.osmRoundaboutCount += 1;
+    }
+    if (accident.osmTrafficSignal) {
+      cluster.osmTrafficSignalCount += 1;
+    }
+  }
+}
+
+function hasOsmRoadMetadata(accident: AccidentRecord): boolean {
+  return accident.osmRoundabout !== null || accident.osmTrafficSignal !== null;
 }
 
 function addAccidentToYearStats(cluster: ClusterAccumulator, accident: AccidentRecord): void {
@@ -336,6 +356,10 @@ function finalizeCluster(
     lightCount: cluster.lightCount,
     vulnerableCount: cluster.vulnerableCount,
     streetNames: clusterStreetNames(cluster.streetNameCounts),
+    osmRoundabout: cluster.osmMetadataKnownCount > 0 ? cluster.osmRoundaboutCount > 0 : null,
+    osmTrafficSignal: cluster.osmMetadataKnownCount > 0 ? cluster.osmTrafficSignalCount > 0 : null,
+    osmRoundaboutCount: cluster.osmRoundaboutCount,
+    osmTrafficSignalCount: cluster.osmTrafficSignalCount,
     severityPercent: severityPercent(cluster, accidentTrend, severityPercentOptions),
     years: Array.from(cluster.yearSet).sort((a, b) => a - b),
     yearlyStats,

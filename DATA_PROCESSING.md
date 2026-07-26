@@ -40,7 +40,7 @@ tsc --noEmit && node scripts/build-docs.mjs
 
 Each accident data script contains up to 100,000 normalized accident records, compressed with gzip, encoded as base64, and split into 256 KB string chunks. Splitting the bundle across generated scripts keeps each file below GitHub's 100 MB single-file limit and avoids CSV parsing at startup. Regular builds keep existing `accidents-*.js` files when the current manifest version matches the source CSV bytes and generated street lookup version; the slow normalization pass only runs when data changed or chunk files are missing.
 
-When the local PBF exists, `scripts/build-streets.mjs` streams it during build and creates a compact street lookup bundle used while normalizing accident records. The bundle uses one global street-name dictionary and per-CSV-row integer street indexes instead of repeating street names for every accident. Rows near multiple named streets store a short integer list so intersection incidents can keep more than one nearby street name. A local rebuild cache is written to `data/generated/street-lookup.json` and ignored by Git. The runtime app does not ship or load this lookup because normalized accident chunks already contain the street names needed by the UI.
+When the local PBF exists, `scripts/build-streets.mjs` streams it during build and creates a compact OSM lookup bundle used while normalizing accident records. The bundle uses one global street-name dictionary and per-CSV-row integer street indexes instead of repeating street names for every accident. Rows near multiple named streets store a short integer list so intersection incidents can keep more than one nearby street name. The same lookup stores a small per-row bitmask for nearby OSM road-control tags: `junction=roundabout`/`highway=mini_roundabout` for roundabouts and `highway=traffic_signals`/`crossing=traffic_signals` for traffic lights. A local rebuild cache is written to `data/generated/street-lookup.json` and ignored by Git. The runtime app does not ship or load this lookup because normalized accident chunks already contain the street names and OSM road-control flags needed by the UI.
 
 The build script also computes a SHA-256 based data version from the raw CSV file paths and bytes, plus the generated street lookup version when present. `docs/assets/data-manifest.js` exposes that version as `globalThis.__SICHERE_KNOTEN_DATA__.version`. It separately computes an app build fingerprint from the source files and injects it into `app.js` for analysis-cache invalidation.
 
@@ -113,6 +113,7 @@ Mapped accident fields:
 - `XGCSWGS84`, `YGCSWGS84`: longitude and latitude.
 - `streetName`: primary nearest named OSM highway resolved from the generated build-time street lookup when available.
 - `streetNames`: all nearby named OSM highways retained for the accident, usually one street and up to a few streets at intersections.
+- `osmRoundabout`, `osmTrafficSignal`: nullable booleans derived from the build-time OSM lookup. `null` means the normalized bundle was built without this OSM metadata.
 
 Injury outcomes from `UKATEGORIE`:
 

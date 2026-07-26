@@ -120,7 +120,9 @@ type CompactAccidentRecord = [
   boolean | null,
   boolean | null,
   boolean | null,
-  number | null | undefined
+  number | null | undefined,
+  boolean | null | undefined,
+  boolean | null | undefined
 ];
 
 declare global {
@@ -659,6 +661,8 @@ function accidentFromCompactRecord(record: CompactAccidentRecord): AccidentRecor
     sourceType: "csv",
     streetName: streetNames[0] ?? null,
     streetNames,
+    osmRoundabout: record[33] ?? null,
+    osmTrafficSignal: record[34] ?? null,
     stateCode,
     stateName: STATE_NAMES[stateCode] ?? `Bundesland ${stateCode || "unknown"}`,
     administrativeRegionCode,
