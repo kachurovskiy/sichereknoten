@@ -4490,11 +4490,22 @@ function uniqueStreetNames(values: Array<string | null | undefined>): string[] {
 }
 
 function clusterStreetLabel(streetNames: string[]): string {
-  return streetNames.length === 1 ? tr("details.street") : tr("details.streets");
+  return displayStreetNames(streetNames).length === 1 ? tr("details.street") : tr("details.streets");
 }
 
 function formatClusterStreetNames(streetNames: string[]): string {
-  return streetNames.join(STREET_NAME_SEPARATOR);
+  return displayStreetNames(streetNames).join(STREET_NAME_SEPARATOR);
+}
+
+function displayStreetNames(streetNames: string[]): string[] {
+  return uniqueStreetNames(streetNames.map(formatStreetNameForDisplay));
+}
+
+function formatStreetNameForDisplay(streetName: string): string {
+  return streetName.replace(/\b(A|B|L|K|S|St)\s+(\d+[a-z]?)\b/gi, (_match, prefix: string, routeNumber: string) => {
+    const normalizedPrefix = prefix.length === 2 ? "St" : prefix.toUpperCase();
+    return `${normalizedPrefix}${routeNumber}`;
+  });
 }
 
 function formatAccidentStreetNames(accident: AccidentRecord, streetOrder: string[] = []): string | null {
@@ -4600,7 +4611,9 @@ function responsibleAuthoritySearchUrlForCluster(cluster: IntersectionCluster): 
 }
 
 function pressSearchUrlForCluster(cluster: IntersectionCluster, streetNames: string[]): string {
-  const queryParts = ["Unfall", ...streetNames, pressSearchPlaceName(cluster)].filter((part): part is string => Boolean(part));
+  const queryParts = ["Unfall", ...displayStreetNames(streetNames), pressSearchPlaceName(cluster)].filter((part): part is string =>
+    Boolean(part)
+  );
   return googleSearchUrl(queryParts);
 }
 
