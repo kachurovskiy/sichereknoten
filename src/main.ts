@@ -3,7 +3,36 @@ import { serializeAnalysisOptions } from "./analysisOptions";
 import { analyzeDangerousIntersectionsInBackground, type AnalysisExecutionPlan } from "./analysisRunner";
 import { DataRepository, type AnalysisCacheContext, type DataRepositoryTelemetry } from "./dataRepository";
 import { normalizeTrendYears } from "./defaults";
-import { GeoGridIndex } from "./geo";
+import {
+  cleanAreaNameForDisplay,
+  clusterAreaText,
+  clusterLocationText,
+  clusterStreetLabel,
+  clusterStreetNamesForDisplay,
+  compareClusterCoreMetric,
+  displayStreetNames,
+  formatAccidentStreetNames,
+  formatClusterStreetNames,
+  formatOsmBoolean,
+  isCityTitleSuffix,
+  normalizedAreaNameKey
+} from "./clusterDisplay";
+import {
+  configureNumberLocale,
+  formatCompactPopulation,
+  formatDate,
+  formatDistance,
+  formatInteger,
+  formatNumber,
+  formatSeverityPercent,
+  formatSharePercent,
+  formatSignedPercent,
+  severityPercentValue
+} from "./formatting";
+import { distanceMeters, GeoGridIndex } from "./geo";
+import { escapeHtml } from "./html";
+import { applyStaticTranslations, configureI18n, detectLocale, tr, trf, type AppLocale } from "./i18n";
+import { clampNumber, linePath, round, uniqueNumbers } from "./math";
 import { MapCanvas, type MapIncidentViewportRequest } from "./mapCanvas";
 import { RequestGate, type RequestToken } from "./requestGate";
 import { accidentMatchesRoadUserFocus, ROAD_USER_DEFINITIONS, RoadUserDefinition, roadUserFocusKey } from "./roadUsers";
@@ -33,28 +62,15 @@ import {
   ClusterYearStat,
   SeverityPercentOptions,
   IntersectionCluster,
-  PopulationAccidentSummary,
   RoadUserKey
 } from "./types";
+import { ExploreView } from "./views/exploreView";
+import { SimilarView, type RoadClassSignature } from "./views/similarView";
+import { StateRegionView, type RegionSummary, type RegionSummaryAccumulator } from "./views/stateRegionView";
+import { TableView } from "./views/tableView";
 
-const TABLE_ROWS_PER_STATE = 10;
-const INTERSECTION_FEATURE_MIN_POPULATION = 1;
-const INTERSECTION_FEATURE_POPULATION_BUCKETS = [
-  { id: "under10k", maxExclusive: 10_000, labelKey: "intersectionFeature.populationUnder10k" },
-  { id: "10k50k", maxExclusive: 50_000, labelKey: "intersectionFeature.population10k50k" },
-  { id: "50k100k", maxExclusive: 100_000, labelKey: "intersectionFeature.population50k100k" },
-  { id: "100k500k", maxExclusive: 500_000, labelKey: "intersectionFeature.population100k500k" },
-  { id: "500kPlus", maxExclusive: Number.POSITIVE_INFINITY, labelKey: "intersectionFeature.population500kPlus" }
-] as const;
-const SIMILAR_INTERSECTION_PREVIEW_LIMIT = 8;
-const SIMILAR_INTERSECTION_FEATURE_GROUPS = [
-  { id: "plain", labelKey: "similar.group.plain", sortOrder: 0 },
-  { id: "roundabout", labelKey: "similar.group.roundabout", sortOrder: 1 },
-  { id: "trafficSignal", labelKey: "similar.group.trafficSignal", sortOrder: 2 }
-] as const;
 const STATE_BROWSE_MIN_SEVERITY_PERCENT = 0.1;
 const STATE_BROWSE_MAX_INTERSECTIONS = 100;
-const POPULATION_RATE_DENOMINATOR = 100_000;
 const INTERSECTION_URL_COORDINATE_DECIMALS = 5;
 const INTERSECTION_URL_MATCH_MAX_DISTANCE_METERS = 75;
 const INTERSECTION_URL_ZOOM_MIN = 0;
@@ -64,22 +80,9 @@ const VIEW_URL_PARAM = "view";
 declare const __SICHERE_KNOTEN_APP_VERSION__: string | undefined;
 declare const __SICHERE_KNOTEN_ANALYSIS_CACHE_VERSION__: string | undefined;
 
-type ClusterSortKey =
-  | "state"
-  | "location"
-  | "accidents"
-  | "fatal"
-  | "serious"
-  | "roundabout"
-  | "trafficSignal"
-  | "severityPercent";
-type SortDirection = "asc" | "desc";
 type SeverityFilterKey = "fatal" | "serious" | "other";
 type ViewKey = "explore" | "map" | "details" | "state" | "region" | "similar" | "table" | "settings";
-type SimilarIntersectionFeatureGroupKey = (typeof SIMILAR_INTERSECTION_FEATURE_GROUPS)[number]["id"];
 type SelectionReason = "auto" | "program" | "user";
-type HotspotMetricPlacement = "header" | "stats";
-type AppLocale = "en" | "de";
 type LoadingStatusKind = "normal" | "problem" | "idle";
 
 interface LatLon {
@@ -144,32 +147,12 @@ const FACTSHEET_BOTTOM_MARGIN = 96;
 const FACTSHEET_CONTENT_WIDTH = FACTSHEET_PAGE_WIDTH - FACTSHEET_MARGIN * 2;
 const FACTSHEET_INCIDENT_LINK_TOP_GAP = 18;
 const FACTSHEET_TITLE_STREET_LIMIT = 3;
-const STREET_NAME_SEPARATOR = " × ";
+const STREET_NAME_SEPARATOR = " \u00d7 ";
 const OSM_TILE_URL_TEMPLATE = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
 const OSM_TILE_SIZE = 256;
 const SELECTED_PREVIEW_MAP_FALLBACK_WIDTH = 640;
 const SELECTED_PREVIEW_MAP_FALLBACK_HEIGHT = 360;
 const SELECTED_PREVIEW_MAP_MAX_DPR = 2;
-const STATE_RANK_CHART_MAX_RANK = 1000;
-const STATE_RANK_CHART_SAMPLE_RANKS = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000];
-const STATE_RANK_CHART_COLORS = [
-  "#166b6d",
-  "#b9392b",
-  "#425b70",
-  "#8b3f7a",
-  "#7c4d12",
-  "#0b5d87",
-  "#6b7f2a",
-  "#a84f1d",
-  "#5b5f97",
-  "#2f7d55",
-  "#9b2f4a",
-  "#6a6f73",
-  "#bf8f2f",
-  "#1f6f8b",
-  "#8a5a44",
-  "#4f7c85"
-];
 const PROJECT_REPOSITORY_URL = "https://github.com/kachurovskiy/sichereknoten";
 const PROJECT_REPOSITORY_LABEL = "kachurovskiy/sichereknoten";
 const APP_CACHE_VERSION =
@@ -1092,7 +1075,8 @@ const TRANSLATIONS: Record<AppLocale, Record<string, string>> = {
   }
 };
 const ACTIVE_LOCALE: AppLocale = detectLocale();
-const NUMBER_LOCALE = ACTIVE_LOCALE === "de" ? "de-DE" : "en-US";
+configureI18n(ACTIVE_LOCALE, TRANSLATIONS);
+configureNumberLocale(ACTIVE_LOCALE);
 const ACCIDENT_CATEGORY_LABELS: Record<number, string> = {
   1: "accident.category.killed",
   2: "accident.category.seriouslyInjured",
@@ -1134,137 +1118,6 @@ const PLAUSIBILITY_LEVEL_LABELS: Record<number, string> = {
   2: "accident.plausibility.bicycle"
 };
 const factsheetTileCache = new Map<string, Promise<HTMLImageElement | null>>();
-
-interface ClusterTableSort {
-  key: ClusterSortKey;
-  direction: SortDirection;
-}
-
-interface SeverityPercentSource {
-  severityPercent: number;
-}
-
-interface RegionSummary extends SeverityPercentSource {
-  key: string;
-  stateCode: string;
-  stateName: string;
-  regionName: string;
-  population: number | null;
-  accidentCount: number;
-  clusterCount: number;
-  fatalCount: number;
-  seriousCount: number;
-  topCluster: IntersectionCluster | null;
-  clusters: IntersectionCluster[];
-}
-
-interface RegionSummaryAccumulator extends RegionSummary {
-  weightedSeverityPercent: number;
-}
-
-interface PopulationRateRow {
-  name: string;
-  secondaryLabel: string | null;
-  population: number;
-  totalRate: number;
-  fatalRate: number;
-  seriousRate: number;
-  otherRate: number;
-}
-
-type PopulationScatterMetric = "total" | "fatal" | "serious";
-
-interface PopulationScatterChartConfig {
-  titleKey: string;
-  xMetric: PopulationScatterMetric;
-  yMetric: PopulationScatterMetric;
-  xMax: number;
-  yMax: number;
-  pointClass: string;
-}
-
-interface SeverityCorrelationRow extends SeverityPercentSource {
-  name: string;
-  secondaryLabel: string | null;
-  population: number;
-  fatalRate: number;
-  severeRate: number;
-}
-
-type SeverityCorrelationMetric = "fatal" | "severe";
-
-interface SeverityCorrelationChartConfig {
-  titleKey: string;
-  yMetric: SeverityCorrelationMetric;
-  xMax: number;
-  yMax: number;
-  pointClass: string;
-}
-
-interface IntersectionFeatureRow extends SeverityPercentSource {
-  id: string;
-  label: string;
-  clusterCount: number;
-  accidentCount: number;
-  fatalCount: number;
-  seriousCount: number;
-  weightedSeverityPercent: number;
-  sortOrder: number;
-}
-
-interface IntersectionFeatureAccumulator {
-  id: string;
-  label: string;
-  clusterCount: number;
-  accidentCount: number;
-  fatalCount: number;
-  seriousCount: number;
-  weightedSeverityPercent: number;
-  sortOrder: number;
-}
-
-interface RoadClassToken {
-  key: string;
-  label: string;
-}
-
-interface RoadClassSignature {
-  key: string;
-  label: string;
-}
-
-interface SimilarIntersectionGroupRow extends SeverityPercentSource {
-  id: SimilarIntersectionFeatureGroupKey;
-  label: string;
-  clusterCount: number;
-  accidentCount: number;
-  fatalCount: number;
-  seriousCount: number;
-  weightedSeverityPercent: number;
-  sortOrder: number;
-  clusters: IntersectionCluster[];
-}
-
-interface SimilarIntersectionGroupAccumulator extends SimilarIntersectionGroupRow {
-  weightedSeverityPercent: number;
-}
-
-interface SimilarIntersectionComparison {
-  selected: IntersectionCluster;
-  signature: RoadClassSignature;
-  selectedFeatureGroup: SimilarIntersectionFeatureGroupKey | null;
-  groups: SimilarIntersectionGroupRow[];
-  matchedClusterCount: number;
-  omittedCount: number;
-}
-
-interface ScatterRegression {
-  slope: number;
-  intercept: number;
-  correlation: number | null;
-  minX: number;
-  maxX: number;
-}
 
 interface BrowseIndex {
   clusters: IntersectionCluster[];
@@ -1387,7 +1240,6 @@ let result: AnalysisResult | null = null;
 let committedAnalysis: CommittedAnalysisState | null = null;
 let selectedCluster: IntersectionCluster | null = null;
 let selectedRoadClassSignature: RoadClassSignature | null = null;
-let clusterTableSort: ClusterTableSort = { key: "severityPercent", direction: "desc" };
 let analysisSettingsDirty = false;
 let activeDataVersion: string | null = null;
 let userLocation: { lat: number; lon: number; accuracyMeters: number | null } | null = null;
@@ -1398,9 +1250,6 @@ let severityRankCache: SeverityRankCache | null = null;
 let browseIndexCache: BrowseIndex | null = null;
 let unclusteredIncidentMapCache: UnclusteredIncidentMapCache | null = null;
 let renderedMapClusters: IntersectionCluster[] | null | undefined;
-let renderedStateResult: AnalysisResult | null | undefined;
-let renderedRegionResult: AnalysisResult | null | undefined;
-let renderedTableResult: AnalysisResult | null | undefined;
 let postRenderCacheWriteQueue: Promise<void> = Promise.resolve();
 let isStreetViewOpen = readStoredStreetViewOpen();
 let activeView: ViewKey = "map";
@@ -1507,6 +1356,48 @@ const map = new MapCanvas(
   setMapIncidentLegendVisible,
   handleMapZoomChange
 );
+const tableView = new TableView({
+  body: elements.clusterTableBody,
+  featureSummary: elements.intersectionFeatureSummary,
+  getResult: () => result,
+  getStateFilterValue: () => elements.stateFilter.value,
+  selectCluster: (cluster) => selectClusterOnMap(cluster)
+});
+const similarView = new SimilarView({
+  container: elements.similarIntersections,
+  getResult: () => result,
+  getSelectedCluster: () => selectedCluster,
+  getSelectedRoadClassSignature: () => selectedRoadClassSignature,
+  getActiveView: () => activeView,
+  selectCluster: (cluster) => selectClusterOnMap(cluster),
+  renderIntersectionFeatureSection: (rows) => tableView.renderIntersectionFeatureSection(rows)
+});
+const stateRegionView = new StateRegionView({
+  stateRankChart: elements.stateRankChart,
+  statePopulationRates: elements.statePopulationRates,
+  statePopulationScatter: elements.statePopulationScatter,
+  stateSeverityCorrelationScatter: elements.stateSeverityCorrelationScatter,
+  regionRankChart: elements.regionRankChart,
+  regionPopulationRates: elements.regionPopulationRates,
+  regionPopulationScatter: elements.regionPopulationScatter,
+  regionSeverityCorrelationScatter: elements.regionSeverityCorrelationScatter,
+  getResult: () => result,
+  getRegionSummaries: () => browseIndexForCurrentResult()?.regionSummaries ?? []
+});
+const exploreView = new ExploreView({
+  nearbyList: elements.nearbyList,
+  stateHotspotList: elements.stateHotspotList,
+  maxIntersections: STATE_BROWSE_MAX_INTERSECTIONS,
+  getResult: () => result,
+  getUserLocation: () => userLocation,
+  getSelectedCluster: () => selectedCluster,
+  getBrowseStateValue: () => elements.browseState.value,
+  getBrowseRegionValue: () => elements.browseRegion.value,
+  browseIndexForCurrentResult,
+  updateBrowseRegionOptions,
+  selectCluster: (cluster, telemetrySource) => selectClusterOnMap(cluster, telemetrySource),
+  setView: (view) => setView(view)
+});
 const mobileLayout = window.matchMedia(MOBILE_LAYOUT_QUERY);
 
 startApp();
@@ -1523,60 +1414,13 @@ function startApp(): void {
   void loadBundledData();
 }
 
-function detectLocale(): AppLocale {
-  const languages = navigator.languages?.length ? navigator.languages : [navigator.language];
-  for (const language of languages) {
-    const languageCode = language.toLowerCase().split("-")[0];
-    if (languageCode === "de" || languageCode === "en") {
-      return languageCode;
-    }
-  }
-  return "en";
-}
-
-function tr(key: string): string {
-  return TRANSLATIONS[ACTIVE_LOCALE][key] ?? TRANSLATIONS.en[key] ?? key;
-}
-
-function trf(key: string, values: Record<string, string | number>): string {
-  return tr(key).replace(/\{(\w+)\}/g, (match, name) => String(values[name] ?? match));
-}
-
-function applyStaticTranslations(): void {
-  document.documentElement.lang = ACTIVE_LOCALE;
-  document.title = tr("document.title");
-  document.querySelectorAll<HTMLElement>("[data-i18n]").forEach((element) => {
-    const key = element.dataset.i18n;
-    if (key) {
-      element.textContent = tr(key);
-    }
-  });
-  document.querySelectorAll<HTMLElement>("[data-i18n-html]").forEach((element) => {
-    const key = element.dataset.i18nHtml;
-    if (key) {
-      element.innerHTML = tr(key);
-    }
-  });
-  document.querySelectorAll<HTMLElement>("[data-i18n-aria-label]").forEach((element) => {
-    const key = element.dataset.i18nAriaLabel;
-    if (key) {
-      element.setAttribute("aria-label", tr(key));
-    }
-  });
-  document.querySelectorAll<HTMLElement>("[data-i18n-title]").forEach((element) => {
-    const key = element.dataset.i18nTitle;
-    if (key) {
-      element.setAttribute("title", tr(key));
-    }
-  });
-}
-
 function wireEvents(): void {
   wireApplicationCommands();
   wireAnalysisControlEvents();
   wireMapControlEvents();
   wireNavigationEvents();
-  wireClusterSortEvents();
+  tableView.bindSortEvents();
+  similarView.bindEvents();
   wireRankChartEvents();
 }
 
@@ -1586,7 +1430,6 @@ function wireApplicationCommands(): void {
   elements.exportBtn.addEventListener("click", exportClusters);
   elements.selectedPermalinkBtn.addEventListener("click", () => void copySelectedIntersectionPermalink());
   elements.selectionDetails.addEventListener("click", handleSelectionDetailsClick);
-  elements.similarIntersections.addEventListener("click", handleSimilarIntersectionsClick);
   elements.incidentDialog.addEventListener("click", handleIncidentDialogClick);
 }
 
@@ -1612,9 +1455,9 @@ function wireMapControlEvents(): void {
   elements.streetViewToggle.addEventListener("click", toggleStreetViewPanel);
   elements.browseState.addEventListener("change", () => {
     updateBrowseRegionOptions();
-    renderStateHotspotList();
+    exploreView.renderStateHotspotList();
   });
-  elements.browseRegion.addEventListener("change", renderStateHotspotList);
+  elements.browseRegion.addEventListener("change", () => exploreView.renderStateHotspotList());
 }
 
 function wireNavigationEvents(): void {
@@ -1641,23 +1484,6 @@ function wireNavigationEvents(): void {
     setMobileMoreMenuOpen(false);
     scheduleMapRefresh();
   });
-}
-
-function wireClusterSortEvents(): void {
-  for (const button of clusterSortButtons()) {
-    button.addEventListener("click", () => {
-      const key = button.dataset.clusterSort as ClusterSortKey | undefined;
-      if (!key) {
-        return;
-      }
-      clusterTableSort =
-        clusterTableSort.key === key
-          ? { key, direction: clusterTableSort.direction === "asc" ? "desc" : "asc" }
-          : { key, direction: defaultClusterSortDirection(key) };
-      renderedTableResult = undefined;
-      renderTableAnalysisView();
-    });
-  }
 }
 
 function wireRankChartEvents(): void {
@@ -1795,25 +1621,6 @@ function handleSelectionDetailsClick(event: MouseEvent): void {
   if (similarButton) {
     setView("similar");
   }
-}
-
-function handleSimilarIntersectionsClick(event: MouseEvent): void {
-  if (!(event.target instanceof Element)) {
-    return;
-  }
-
-  const button = event.target.closest<HTMLButtonElement>("[data-similar-cluster-id]");
-  const clusterId = button?.dataset.similarClusterId;
-  if (!clusterId) {
-    return;
-  }
-
-  const cluster = result?.clusters.find((candidate) => candidate.id === clusterId) ?? null;
-  if (!cluster) {
-    return;
-  }
-
-  selectClusterOnMap(cluster);
 }
 
 function wireLinkedNumberRange(range: HTMLInputElement, numberInput: HTMLInputElement, onDraftChange: () => void): void {
@@ -2027,9 +1834,8 @@ function clearAnalysisDerivedState(): void {
 
 function invalidateRenderedAnalysisViews(): void {
   renderedMapClusters = undefined;
-  renderedStateResult = undefined;
-  renderedRegionResult = undefined;
-  renderedTableResult = undefined;
+  stateRegionView.invalidate();
+  tableView.invalidate();
 }
 
 async function loadBundledData(): Promise<void> {
@@ -2424,7 +2230,7 @@ function bundledDataYears(): number[] {
 
 function renderAll(): void {
   updateRangeOutputs();
-  renderExplore();
+  exploreView.render();
   renderActiveAnalysisView();
   applySeverityFilter();
   renderMapResults();
@@ -2476,7 +2282,7 @@ function handleClusterSelection(cluster: IntersectionCluster | null, reason: Sel
   measureActiveInteractionStep(
     "rerender browse lists after selection",
     cluster?.id ?? null,
-    renderExplore,
+    () => exploreView.render(),
     () => ({
       stateHotspotCount: elements.stateHotspotList.children.length,
       nearbyCount: elements.nearbyList.children.length
@@ -2796,8 +2602,8 @@ function locateUser(options: { selectNearest: boolean }): void {
       map.setUserLocation(userLocation, !options.selectNearest);
       elements.locateMeBtn.classList.add("located");
       setLocateBusy(false);
-      renderExplore();
-      const selectedNearest = options.selectNearest ? selectNearestCluster() : null;
+      exploreView.render();
+      const selectedNearest = options.selectNearest ? exploreView.selectNearestCluster() : null;
       if (options.selectNearest) {
         setStatus(
           selectedNearest
@@ -2843,1293 +2649,28 @@ function geolocationErrorMessage(error: GeolocationPositionError): string {
 }
 
 function renderTables(): void {
-  renderStateAnalysisView();
-  renderRegionAnalysisView();
-  renderTableAnalysisView();
-  renderSimilarIntersectionsIfVisible();
+  stateRegionView.renderAll();
+  tableView.render();
+  similarView.renderIfVisible();
 }
 
 function renderActiveAnalysisView(): void {
   switch (activeView) {
     case "state":
-      renderStateAnalysisView();
+      stateRegionView.renderState();
       return;
     case "region":
-      renderRegionAnalysisView();
+      stateRegionView.renderRegion();
       return;
     case "table":
-      renderTableAnalysisView();
+      tableView.render();
       return;
     case "similar":
-      renderSimilarIntersectionsIfVisible();
+      similarView.renderIfVisible();
       return;
     default:
       return;
   }
-}
-
-function renderStateAnalysisView(): void {
-  if (renderedStateResult === result) {
-    return;
-  }
-  renderedStateResult = result;
-  renderStateRankChart();
-  renderStatePopulationRates();
-  renderStatePopulationScatter();
-  renderStateSeverityCorrelationScatter();
-}
-
-function renderRegionAnalysisView(): void {
-  if (renderedRegionResult === result) {
-    return;
-  }
-  renderedRegionResult = result;
-  renderRegionRankChart();
-  renderRegionPopulationRates();
-  renderRegionPopulationScatter();
-  renderRegionSeverityCorrelationScatter();
-}
-
-function renderTableAnalysisView(): void {
-  if (renderedTableResult === result) {
-    return;
-  }
-  renderedTableResult = result;
-  updateClusterSortHeaders();
-  renderIntersectionFeatureSummary();
-  elements.clusterTableBody.innerHTML = "";
-  if (!result) {
-    return;
-  }
-
-  const clusters = clustersForTable(result.clusters);
-  for (const cluster of clusters) {
-    const row = document.createElement("tr");
-    row.tabIndex = 0;
-    row.innerHTML = `
-      <td>${escapeHtml(cluster.stateName)}</td>
-      <td>${clusterLocation(cluster)}</td>
-      <td>${formatInteger(cluster.accidentCount)}</td>
-      <td>${formatInteger(cluster.fatalCount)}</td>
-      <td>${formatInteger(cluster.seriousCount)}</td>
-      <td>${renderOsmBooleanBadge(cluster.osmRoundabout)}</td>
-      <td>${renderOsmBooleanBadge(cluster.osmTrafficSignal)}</td>
-      <td>${formatSeverityPercent(cluster)}</td>
-    `;
-    row.addEventListener("click", () => {
-      selectClusterOnMap(cluster);
-    });
-    row.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") {
-        selectClusterOnMap(cluster);
-      }
-    });
-    elements.clusterTableBody.append(row);
-  }
-}
-
-interface RankChartSeries {
-  id: string;
-  name: string;
-  tooltip?: string;
-  color: string;
-  clusters: IntersectionCluster[];
-}
-
-interface RankChartPoint {
-  rank: number;
-  severityPercent: number;
-}
-
-function renderStateRankChart(): void {
-  renderRankChart(elements.stateRankChart, result ? stateRankChartSeries(result.clusters) : [], "stateChart.empty", "stateChart.aria");
-}
-
-function renderRegionRankChart(): void {
-  renderRankChart(elements.regionRankChart, result ? regionRankChartSeries() : [], "regionChart.empty", "regionChart.aria");
-}
-
-function renderStatePopulationRates(): void {
-  renderPopulationRateComparison(elements.statePopulationRates, result?.stateAccidentSummaries ?? [], false);
-}
-
-function renderRegionPopulationRates(): void {
-  renderPopulationRateComparison(elements.regionPopulationRates, result?.regionAccidentSummaries ?? [], true);
-}
-
-function renderStatePopulationScatter(): void {
-  renderPopulationScatterComparison(elements.statePopulationScatter, result?.stateAccidentSummaries ?? [], false);
-}
-
-function renderRegionPopulationScatter(): void {
-  renderPopulationScatterComparison(elements.regionPopulationScatter, result?.regionAccidentSummaries ?? [], true);
-}
-
-function renderStateSeverityCorrelationScatter(): void {
-  const severityByState = new Map((result?.stateSummaries ?? []).map((summary) => [summary.stateCode, summary.severityPercent]));
-  const rows = severityCorrelationRows(
-    result?.stateAccidentSummaries ?? [],
-    false,
-    (summary) => severityByState.get(summary.stateCode) ?? null
-  );
-  renderSeverityCorrelationComparison(elements.stateSeverityCorrelationScatter, rows);
-}
-
-function renderRegionSeverityCorrelationScatter(): void {
-  const severityByRegion = new Map(regionSummaries().map((summary) => [summary.key, summary.severityPercent]));
-  const rows = severityCorrelationRows(
-    result?.regionAccidentSummaries ?? [],
-    true,
-    (summary) => severityByRegion.get(summary.key) ?? null
-  );
-  renderSeverityCorrelationComparison(elements.regionSeverityCorrelationScatter, rows);
-}
-
-function renderIntersectionFeatureSummary(): void {
-  const clusters = result?.clusters ?? [];
-  if (!result || clusters.length === 0) {
-    elements.intersectionFeatureSummary.innerHTML = `<p class="population-rate-empty">${escapeHtml(tr("intersectionFeature.empty"))}</p>`;
-    return;
-  }
-
-  const rows = populationIntersectionFeatureRows(clusters);
-  if (rows.length === 0) {
-    elements.intersectionFeatureSummary.innerHTML = `<p class="population-rate-empty">${escapeHtml(tr("intersectionFeature.empty"))}</p>`;
-    return;
-  }
-
-  elements.intersectionFeatureSummary.innerHTML = renderIntersectionFeatureSection(rows);
-}
-
-function populationIntersectionFeatureRows(clusters: IntersectionCluster[]): IntersectionFeatureRow[] {
-  const accumulators = new Map<string, IntersectionFeatureAccumulator>();
-  INTERSECTION_FEATURE_POPULATION_BUCKETS.forEach((bucket, index) => {
-    accumulators.set(bucket.id, createIntersectionFeatureAccumulator(bucket.id, tr(bucket.labelKey), index));
-  });
-
-  for (const cluster of clusters) {
-    const bucket = intersectionFeaturePopulationBucket(cluster);
-    if (!bucket) {
-      continue;
-    }
-    addClusterToIntersectionFeatureAccumulator(accumulators.get(bucket.id), cluster);
-  }
-
-  return finalizeIntersectionFeatureRows(Array.from(accumulators.values()));
-}
-
-function intersectionFeaturePopulationBucket(cluster: IntersectionCluster): (typeof INTERSECTION_FEATURE_POPULATION_BUCKETS)[number] | null {
-  const population = cluster.municipalityPopulation ?? cluster.administrativeRegionPopulation;
-  if (typeof population !== "number" || population < INTERSECTION_FEATURE_MIN_POPULATION) {
-    return null;
-  }
-  return INTERSECTION_FEATURE_POPULATION_BUCKETS.find((bucket) => population < bucket.maxExclusive) ?? null;
-}
-
-function createIntersectionFeatureAccumulator(
-  id: string,
-  label: string,
-  sortOrder: number
-): IntersectionFeatureAccumulator {
-  return {
-    id,
-    label,
-    clusterCount: 0,
-    accidentCount: 0,
-    fatalCount: 0,
-    seriousCount: 0,
-    weightedSeverityPercent: 0,
-    sortOrder
-  };
-}
-
-function addClusterToIntersectionFeatureAccumulator(
-  accumulator: IntersectionFeatureAccumulator | undefined,
-  cluster: IntersectionCluster
-): void {
-  if (!accumulator) {
-    return;
-  }
-  accumulator.clusterCount += 1;
-  accumulator.accidentCount += cluster.accidentCount;
-  accumulator.fatalCount += cluster.fatalCount;
-  accumulator.seriousCount += cluster.seriousCount;
-  accumulator.weightedSeverityPercent += cluster.severityPercent * cluster.accidentCount;
-}
-
-function finalizeIntersectionFeatureRows(accumulators: IntersectionFeatureAccumulator[]): IntersectionFeatureRow[] {
-  return accumulators
-    .filter((row) => row.clusterCount > 0)
-    .map((row) => ({
-      ...row,
-      severityPercent: row.accidentCount > 0 ? row.weightedSeverityPercent / row.accidentCount : 0
-    }))
-    .sort((a, b) => a.sortOrder - b.sortOrder);
-}
-
-function renderIntersectionFeatureSection(rows: IntersectionFeatureRow[]): string {
-  const maxSeverityPercent = Math.max(0.1, ...rows.map(intersectionFeatureSeverityPercent));
-  const maxTotalPerIntersection = Math.max(1, ...rows.map(intersectionFeatureTotalPerIntersection));
-  const maxFatalPer100 = Math.max(1, ...rows.map(intersectionFeatureFatalPer100));
-  const maxSeriousPer100 = Math.max(1, ...rows.map(intersectionFeatureSeriousPer100));
-  return `
-    <div class="intersection-feature-table" role="table">
-      <div class="intersection-feature-row intersection-feature-row-header" role="row">
-        <div role="columnheader">${escapeHtml(tr("intersectionFeature.group"))}</div>
-        <div role="columnheader">${escapeHtml(tr("intersectionFeature.severity"))}</div>
-        <div role="columnheader">${escapeHtml(tr("intersectionFeature.fatalPer100"))}</div>
-        <div role="columnheader">${escapeHtml(tr("intersectionFeature.seriousPer100"))}</div>
-        <div role="columnheader">${escapeHtml(tr("intersectionFeature.totalPerIntersection"))}</div>
-        <div role="columnheader">${escapeHtml(tr("intersectionFeature.total"))}</div>
-      </div>
-      ${rows.map((row) => renderIntersectionFeatureRow(row, maxSeverityPercent, maxTotalPerIntersection, maxFatalPer100, maxSeriousPer100)).join("")}
-    </div>
-  `;
-}
-
-function renderIntersectionFeatureRow(
-  row: IntersectionFeatureRow,
-  maxSeverityPercent: number,
-  maxTotalPerIntersection: number,
-  maxFatalPer100: number,
-  maxSeriousPer100: number
-): string {
-  const severityPercent = intersectionFeatureSeverityPercent(row);
-  const severityLabel = formatIntersectionFeatureSeverityPercent(row);
-  const fatalPer100 = intersectionFeatureFatalPer100(row);
-  const seriousPer100 = intersectionFeatureSeriousPer100(row);
-  const totalPerIntersection = intersectionFeatureTotalPerIntersection(row);
-  const title = `${row.label}: ${tr("intersectionFeature.severity")} ${severityLabel}, ${tr(
-    "intersectionFeature.fatalPer100"
-  )} ${formatRate(fatalPer100)}, ${tr("intersectionFeature.seriousPer100")} ${formatRate(seriousPer100)}, ${tr(
-    "intersectionFeature.totalPerIntersection"
-  )} ${formatRate(totalPerIntersection)}`;
-  return `
-    <div class="intersection-feature-row" role="row" title="${escapeHtml(title)}">
-      <div class="intersection-feature-group" role="cell">
-        <strong>${escapeHtml(row.label)}</strong>
-        <span>${formatInteger(row.clusterCount)} ${escapeHtml(tr("intersectionFeature.intersections").toLowerCase())}</span>
-      </div>
-      <div role="cell">${renderIntersectionFeatureMetric(severityLabel, severityPercent, maxSeverityPercent, "severity")}</div>
-      <div role="cell">${renderIntersectionFeatureMetric(formatRate(fatalPer100), fatalPer100, maxFatalPer100, "fatal")}</div>
-      <div role="cell">${renderIntersectionFeatureMetric(formatRate(seriousPer100), seriousPer100, maxSeriousPer100, "serious")}</div>
-      <div role="cell">${renderIntersectionFeatureMetric(formatRate(totalPerIntersection), totalPerIntersection, maxTotalPerIntersection, "total")}</div>
-      <div class="intersection-feature-number intersection-feature-total" role="cell">${formatInteger(row.accidentCount)}</div>
-    </div>
-  `;
-}
-
-function intersectionFeatureSeverityPercent(row: IntersectionFeatureRow): number {
-  return row.severityPercent * 100;
-}
-
-function formatIntersectionFeatureSeverityPercent(row: IntersectionFeatureRow): string {
-  return `${formatRate(intersectionFeatureSeverityPercent(row))}%`;
-}
-
-function renderIntersectionFeatureMetric(label: string, value: number, maxValue: number, kind: string): string {
-  const width = maxValue <= 0 ? 0 : clampNumber((value / maxValue) * 100, 0, 100);
-  return `
-    <span class="intersection-feature-metric">
-      <span class="intersection-feature-meter" aria-hidden="true">
-        <span class="intersection-feature-meter-fill intersection-feature-meter-${kind}" style="width: ${round(width, 1)}%"></span>
-      </span>
-      <strong>${escapeHtml(label)}</strong>
-    </span>
-  `;
-}
-
-function intersectionFeatureFatalPer100(row: IntersectionFeatureRow): number {
-  return row.clusterCount > 0 ? (row.fatalCount / row.clusterCount) * 100 : 0;
-}
-
-function intersectionFeatureSeriousPer100(row: IntersectionFeatureRow): number {
-  return row.clusterCount > 0 ? (row.seriousCount / row.clusterCount) * 100 : 0;
-}
-
-function intersectionFeatureTotalPerIntersection(row: IntersectionFeatureRow): number {
-  return row.clusterCount > 0 ? row.accidentCount / row.clusterCount : 0;
-}
-
-function renderSimilarIntersections(): void {
-  const selected = selectedCluster;
-  if (!result || !selected) {
-    elements.similarIntersections.innerHTML = `<p class="population-rate-empty">${escapeHtml(tr("similar.empty"))}</p>`;
-    return;
-  }
-
-  const signature = selectedRoadClassSignature;
-  if (!signature) {
-    elements.similarIntersections.innerHTML = `<p class="population-rate-empty">${escapeHtml(tr("similar.noClass"))}</p>`;
-    return;
-  }
-
-  elements.similarIntersections.innerHTML = renderSimilarIntersectionComparison(
-    buildSimilarIntersectionComparison(selected, signature, result.clusters)
-  );
-}
-
-function renderSimilarIntersectionsIfVisible(): void {
-  if (activeView !== "similar") {
-    return;
-  }
-  renderSimilarIntersections();
-}
-
-function buildSimilarIntersectionComparison(
-  selected: IntersectionCluster,
-  signature: RoadClassSignature,
-  clusters: IntersectionCluster[]
-): SimilarIntersectionComparison {
-  const accumulators = new Map<SimilarIntersectionFeatureGroupKey, SimilarIntersectionGroupAccumulator>();
-  SIMILAR_INTERSECTION_FEATURE_GROUPS.forEach((group) => {
-    accumulators.set(group.id, createSimilarIntersectionGroupAccumulator(group.id, tr(group.labelKey), group.sortOrder));
-  });
-
-  let matchedClusterCount = 0;
-  let omittedCount = 0;
-  for (const cluster of clusters) {
-    if (cluster.id === selected.id) {
-      continue;
-    }
-
-    const clusterSignature = roadClassSignatureForCluster(cluster);
-    if (clusterSignature?.key !== signature.key) {
-      continue;
-    }
-
-    matchedClusterCount += 1;
-    const group = similarIntersectionFeatureGroup(cluster);
-    if (!group) {
-      omittedCount += 1;
-      continue;
-    }
-    addClusterToSimilarIntersectionGroup(accumulators.get(group), cluster);
-  }
-
-  return {
-    selected,
-    signature,
-    selectedFeatureGroup: similarIntersectionFeatureGroup(selected),
-    groups: finalizeSimilarIntersectionGroups(Array.from(accumulators.values())),
-    matchedClusterCount,
-    omittedCount
-  };
-}
-
-function createSimilarIntersectionGroupAccumulator(
-  id: SimilarIntersectionFeatureGroupKey,
-  label: string,
-  sortOrder: number
-): SimilarIntersectionGroupAccumulator {
-  return {
-    id,
-    label,
-    clusterCount: 0,
-    accidentCount: 0,
-    fatalCount: 0,
-    seriousCount: 0,
-    weightedSeverityPercent: 0,
-    severityPercent: 0,
-    sortOrder,
-    clusters: []
-  };
-}
-
-function addClusterToSimilarIntersectionGroup(
-  accumulator: SimilarIntersectionGroupAccumulator | undefined,
-  cluster: IntersectionCluster
-): void {
-  if (!accumulator) {
-    return;
-  }
-  accumulator.clusterCount += 1;
-  accumulator.accidentCount += cluster.accidentCount;
-  accumulator.fatalCount += cluster.fatalCount;
-  accumulator.seriousCount += cluster.seriousCount;
-  accumulator.weightedSeverityPercent += cluster.severityPercent * cluster.accidentCount;
-  accumulator.clusters.push(cluster);
-}
-
-function finalizeSimilarIntersectionGroups(accumulators: SimilarIntersectionGroupAccumulator[]): SimilarIntersectionGroupRow[] {
-  return accumulators
-    .map((group) => ({
-      ...group,
-      severityPercent: group.accidentCount > 0 ? group.weightedSeverityPercent / group.accidentCount : 0,
-      clusters: group.clusters.sort(compareClusterCoreMetric)
-    }))
-    .sort((a, b) => a.sortOrder - b.sortOrder);
-}
-
-function renderSimilarIntersectionComparison(comparison: SimilarIntersectionComparison): string {
-  const selectedFeatureLabel = similarIntersectionFeatureGroupLabel(comparison.selectedFeatureGroup);
-  const overview = `
-    <div class="similar-overview">
-      <div class="similar-overview-item">
-        <span>${escapeHtml(tr("similar.class"))}</span>
-        <strong>${escapeHtml(comparison.signature.label)}</strong>
-      </div>
-      <div class="similar-overview-item">
-        <span>${escapeHtml(tr("similar.selectedFeatures"))}</span>
-        <strong>${escapeHtml(selectedFeatureLabel)}</strong>
-      </div>
-      <div class="similar-overview-item">
-        <span>${escapeHtml(trf("similar.otherMatches", { count: formatInteger(comparison.matchedClusterCount) }))}</span>
-      </div>
-    </div>
-  `;
-
-  if (comparison.matchedClusterCount === 0) {
-    return `${overview}<p class="population-rate-empty">${escapeHtml(
-      trf("similar.noMatches", { class: comparison.signature.label })
-    )}</p>`;
-  }
-
-  const omittedNote =
-    comparison.omittedCount > 0
-      ? `<p class="similar-note">${escapeHtml(trf("similar.omitted", { count: formatInteger(comparison.omittedCount) }))}</p>`
-      : "";
-
-  return `
-    ${overview}
-    ${renderIntersectionFeatureSection(comparison.groups)}
-    ${omittedNote}
-    ${renderSimilarClusterGroups(comparison.groups)}
-  `;
-}
-
-function renderSimilarClusterGroups(groups: SimilarIntersectionGroupRow[]): string {
-  return `
-    <div class="similar-group-grid">
-      ${groups.map(renderSimilarClusterGroup).join("")}
-    </div>
-  `;
-}
-
-function renderSimilarClusterGroup(group: SimilarIntersectionGroupRow): string {
-  const shownClusters = group.clusters.slice(0, SIMILAR_INTERSECTION_PREVIEW_LIMIT);
-  const limitNote =
-    group.clusters.length > shownClusters.length
-      ? `<p class="similar-list-note">${escapeHtml(
-          trf("similar.listLimit", { shown: formatInteger(shownClusters.length), total: formatInteger(group.clusters.length) })
-        )}</p>`
-      : "";
-  const body =
-    shownClusters.length > 0
-      ? `
-        <div class="similar-cluster-table" role="table">
-          <div class="similar-cluster-row similar-cluster-row-header" role="row">
-            <div role="columnheader">${escapeHtml(tr("similar.intersection"))}</div>
-            <div role="columnheader">${escapeHtml(tr("similar.area"))}</div>
-            <div role="columnheader">${escapeHtml(tr("table.accidents"))}</div>
-            <div role="columnheader">${escapeHtml(tr("severity.fatal"))}</div>
-            <div role="columnheader">${escapeHtml(tr("severity.serious"))}</div>
-            <div role="columnheader">${escapeHtml(tr("metric.severityPercent"))}</div>
-          </div>
-          ${shownClusters.map(renderSimilarClusterRow).join("")}
-        </div>
-        ${limitNote}
-      `
-      : `<p class="population-rate-empty">${escapeHtml(tr("similar.noGroupMatches"))}</p>`;
-
-  return `
-    <section class="similar-group-section">
-      <div class="similar-group-heading">
-        <h3>${escapeHtml(group.label)}</h3>
-        <span>${formatInteger(group.clusterCount)} ${escapeHtml(tr("intersectionFeature.intersections").toLowerCase())}</span>
-      </div>
-      <h4>${escapeHtml(tr("similar.topIntersections"))}</h4>
-      ${body}
-    </section>
-  `;
-}
-
-function renderSimilarClusterRow(cluster: IntersectionCluster): string {
-  return `
-    <button class="similar-cluster-row similar-cluster-button" type="button" data-similar-cluster-id="${escapeHtml(cluster.id)}" role="row">
-      <span class="similar-cluster-primary" role="cell">${escapeHtml(similarClusterStreetText(cluster))}</span>
-      <span role="cell">${escapeHtml(clusterAreaText(cluster))}</span>
-      <span class="similar-cluster-number" role="cell">${formatInteger(cluster.accidentCount)}</span>
-      <span class="similar-cluster-number" role="cell">${formatInteger(cluster.fatalCount)}</span>
-      <span class="similar-cluster-number" role="cell">${formatInteger(cluster.seriousCount)}</span>
-      <span class="similar-cluster-number" role="cell">${formatSeverityPercent(cluster)}</span>
-    </button>
-  `;
-}
-
-function similarClusterStreetText(cluster: IntersectionCluster): string {
-  const streetNames = clusterStreetNamesForDisplay(cluster);
-  return streetNames.length > 0 ? formatClusterStreetNames(streetNames) : clusterLocationText(cluster);
-}
-
-function roadClassSignatureForCluster(cluster: IntersectionCluster): RoadClassSignature | null {
-  return roadClassSignatureForStreetNames(clusterStreetNamesForDisplay(cluster));
-}
-
-function roadClassSignatureForStreetNames(streetNames: string[]): RoadClassSignature | null {
-  const tokens = displayStreetNames(streetNames).map(roadClassTokenForStreetName);
-  if (tokens.length === 0 || !tokens.some(isKnownRoadClassToken)) {
-    return null;
-  }
-
-  const sortedTokens = tokens.slice().sort(compareRoadClassTokens);
-  return {
-    key: sortedTokens.map((token) => token.key).join("|"),
-    label: sortedTokens.map((token) => token.label).join(STREET_NAME_SEPARATOR)
-  };
-}
-
-function isKnownRoadClassToken(token: RoadClassToken): boolean {
-  return token.key !== "other";
-}
-
-function roadClassTokenForStreetName(streetName: string): RoadClassToken {
-  const routeMatch = formatStreetNameForDisplay(streetName).match(/\b(St|A|B|L|K|S)\s*\d+[a-z]?\b/i);
-  if (!routeMatch) {
-    return { key: "other", label: tr("similar.classOther") };
-  }
-
-  const prefix = routeMatch[1].toLocaleLowerCase("en") === "st" ? "St" : routeMatch[1].toUpperCase();
-  return { key: prefix.toLocaleLowerCase("en"), label: prefix };
-}
-
-function compareRoadClassTokens(a: RoadClassToken, b: RoadClassToken): number {
-  return roadClassSortValue(a.key) - roadClassSortValue(b.key) || a.label.localeCompare(b.label, "de", { sensitivity: "base" });
-}
-
-function roadClassSortValue(key: string): number {
-  const order = ["a", "b", "k", "l", "s", "st", "other"];
-  const index = order.indexOf(key);
-  return index === -1 ? order.length : index;
-}
-
-function similarIntersectionFeatureGroup(cluster: IntersectionCluster): SimilarIntersectionFeatureGroupKey | null {
-  if (cluster.osmRoundabout === false && cluster.osmTrafficSignal === false) {
-    return "plain";
-  }
-  if (cluster.osmRoundabout === true && cluster.osmTrafficSignal === false) {
-    return "roundabout";
-  }
-  if (cluster.osmRoundabout === false && cluster.osmTrafficSignal === true) {
-    return "trafficSignal";
-  }
-  return null;
-}
-
-function similarIntersectionFeatureGroupLabel(group: SimilarIntersectionFeatureGroupKey | null): string {
-  const definition = group ? SIMILAR_INTERSECTION_FEATURE_GROUPS.find((candidate) => candidate.id === group) : null;
-  return definition ? tr(definition.labelKey) : tr("similar.group.excluded");
-}
-
-function renderPopulationScatterComparison(container: HTMLElement, summaries: PopulationAccidentSummary[], showStateLabel: boolean): void {
-  const rows = populationRateRows(summaries, showStateLabel);
-  if (!result || rows.length === 0) {
-    container.innerHTML = `<p class="population-rate-empty">${escapeHtml(tr("populationScatter.empty"))}</p>`;
-    return;
-  }
-
-  const totalMax = niceRateChartMax(Math.max(...rows.map((row) => row.totalRate)));
-  const fatalMax = niceRateChartMax(Math.max(...rows.map((row) => row.fatalRate)));
-  const seriousMax = niceRateChartMax(Math.max(...rows.map((row) => row.seriousRate)));
-  const charts: PopulationScatterChartConfig[] = [
-    {
-      titleKey: "populationScatter.fatalTitle",
-      xMetric: "total",
-      yMetric: "fatal",
-      xMax: totalMax,
-      yMax: fatalMax,
-      pointClass: "fatal"
-    },
-    {
-      titleKey: "populationScatter.seriousTitle",
-      xMetric: "total",
-      yMetric: "serious",
-      xMax: totalMax,
-      yMax: seriousMax,
-      pointClass: "serious"
-    },
-    {
-      titleKey: "populationScatter.fatalVsSeriousTitle",
-      xMetric: "serious",
-      yMetric: "fatal",
-      xMax: seriousMax,
-      yMax: fatalMax,
-      pointClass: "comparison"
-    }
-  ];
-  container.innerHTML = `
-    <div class="population-scatter-size-legend">${escapeHtml(tr("populationScatter.sizeLegend"))}</div>
-    <div class="population-scatter-plots">
-      ${charts.map((chart) => renderPopulationScatterChart(rows, chart)).join("")}
-    </div>
-  `;
-}
-
-function renderPopulationScatterChart(rows: PopulationRateRow[], config: PopulationScatterChartConfig): string {
-  const regression = populationScatterRegression(rows, config);
-  const correlationLabel = scatterCorrelationLabel(regression?.correlation);
-  return `
-    <section class="population-scatter-chart">
-      <h3><span>${escapeHtml(tr(config.titleKey))}</span>${correlationLabel}</h3>
-      ${renderPopulationScatterSvg(rows, config, regression)}
-    </section>
-  `;
-}
-
-function renderPopulationScatterSvg(
-  rows: PopulationRateRow[],
-  config: PopulationScatterChartConfig,
-  regression: ScatterRegression | null
-): string {
-  const width = 760;
-  const height = 420;
-  const chart = { left: 62, right: 22, top: 20, bottom: 350 };
-  const chartWidth = width - chart.left - chart.right;
-  const chartHeight = chart.bottom - chart.top;
-  const xTicks = uniqueNumbers([0, config.xMax / 2, config.xMax]).sort((a, b) => a - b);
-  const yTicks = uniqueNumbers([0, config.yMax / 2, config.yMax]).sort((a, b) => a - b);
-  const populations = rows.map((row) => row.population);
-  const minPopulation = Math.min(...populations);
-  const maxPopulation = Math.max(...populations);
-  const xForRate = (rate: number) => chart.left + (rate / config.xMax) * chartWidth;
-  const yForRate = (rate: number) => chart.bottom - (rate / config.yMax) * chartHeight;
-  const xAxisTicks = xTicks
-    .map((rate) => {
-      const x = xForRate(rate);
-      return `
-        <line class="population-scatter-grid-line" x1="${round(x, 1)}" y1="${chart.top}" x2="${round(x, 1)}" y2="${chart.bottom}"></line>
-        <text class="population-scatter-tick" x="${round(x, 1)}" y="${chart.bottom + 19}" text-anchor="middle">${formatRate(rate)}</text>
-      `;
-    })
-    .join("");
-  const yAxisTicks = yTicks
-    .map((rate) => {
-      const y = yForRate(rate);
-      return `
-        <line class="population-scatter-grid-line" x1="${chart.left}" y1="${round(y, 1)}" x2="${width - chart.right}" y2="${round(y, 1)}"></line>
-        <text class="population-scatter-tick" x="${chart.left - 10}" y="${round(y + 4, 1)}" text-anchor="end">${formatRate(rate)}</text>
-      `;
-    })
-    .join("");
-  const trend = renderScatterTrend(regression, config, xForRate, yForRate);
-  const points = [...rows]
-    .sort((a, b) => b.population - a.population)
-    .map((row) => {
-      const xRate = populationScatterMetricValue(row, config.xMetric);
-      const yRate = populationScatterMetricValue(row, config.yMetric);
-      const label = populationScatterPointLabel(row, config);
-      return `
-        <circle class="population-scatter-point population-scatter-point-${config.pointClass}" cx="${round(xForRate(xRate), 1)}" cy="${round(yForRate(yRate), 1)}" r="${round(populationScatterRadius(row.population, minPopulation, maxPopulation), 1)}" tabindex="0" aria-label="${escapeHtml(label)}">
-          <title>${escapeHtml(label)}</title>
-        </circle>
-      `;
-    })
-    .join("");
-  const ariaLabel = `${tr(config.titleKey)}: ${tr("populationScatter.sizeLegend")}`;
-
-  return `
-    <svg class="population-scatter-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(ariaLabel)}">
-      ${xAxisTicks}
-      ${yAxisTicks}
-      <line class="population-scatter-axis" x1="${chart.left}" y1="${chart.top}" x2="${chart.left}" y2="${chart.bottom}"></line>
-      <line class="population-scatter-axis" x1="${chart.left}" y1="${chart.bottom}" x2="${width - chart.right}" y2="${chart.bottom}"></line>
-      ${trend}
-      ${points}
-      <text class="population-scatter-axis-label" x="${chart.left + chartWidth / 2}" y="${height - 10}" text-anchor="middle">${escapeHtml(populationScatterAxisLabel(config.xMetric))}</text>
-      <text class="population-scatter-axis-label" x="16" y="${chart.top + chartHeight / 2}" text-anchor="middle" transform="rotate(-90 16 ${chart.top + chartHeight / 2})">${escapeHtml(populationScatterAxisLabel(config.yMetric))}</text>
-    </svg>
-  `;
-}
-
-function renderSeverityCorrelationComparison(container: HTMLElement, rows: SeverityCorrelationRow[]): void {
-  if (!result || rows.length === 0) {
-    container.innerHTML = `<p class="population-rate-empty">${escapeHtml(tr("severityCorrelation.empty"))}</p>`;
-    return;
-  }
-
-  const severityMax = niceSeverityPercentChartMax(Math.max(...rows.map((row) => row.severityPercent * 100)));
-  const fatalMax = niceRateChartMax(Math.max(...rows.map((row) => row.fatalRate)));
-  const severeMax = niceRateChartMax(Math.max(...rows.map((row) => row.severeRate)));
-  const charts: SeverityCorrelationChartConfig[] = [
-    {
-      titleKey: "severityCorrelation.fatalTitle",
-      yMetric: "fatal",
-      xMax: severityMax,
-      yMax: fatalMax,
-      pointClass: "fatal"
-    },
-    {
-      titleKey: "severityCorrelation.severeTitle",
-      yMetric: "severe",
-      xMax: severityMax,
-      yMax: severeMax,
-      pointClass: "severe"
-    }
-  ];
-  container.innerHTML = `
-    <div class="population-scatter-size-legend">${escapeHtml(tr("severityCorrelation.sizeLegend"))}</div>
-    <div class="population-scatter-plots">
-      ${charts.map((chart) => renderSeverityCorrelationChart(rows, chart)).join("")}
-    </div>
-  `;
-}
-
-function renderSeverityCorrelationChart(rows: SeverityCorrelationRow[], config: SeverityCorrelationChartConfig): string {
-  const regression = severityCorrelationRegression(rows, config.yMetric);
-  const correlationLabel = scatterCorrelationLabel(regression?.correlation);
-  return `
-    <section class="population-scatter-chart">
-      <h3><span>${escapeHtml(tr(config.titleKey))}</span>${correlationLabel}</h3>
-      ${renderSeverityCorrelationSvg(rows, config, regression)}
-    </section>
-  `;
-}
-
-function renderSeverityCorrelationSvg(
-  rows: SeverityCorrelationRow[],
-  config: SeverityCorrelationChartConfig,
-  regression: ScatterRegression | null
-): string {
-  const width = 760;
-  const height = 420;
-  const chart = { left: 62, right: 22, top: 20, bottom: 350 };
-  const chartWidth = width - chart.left - chart.right;
-  const chartHeight = chart.bottom - chart.top;
-  const xTicks = uniqueNumbers([0, config.xMax / 2, config.xMax]).sort((a, b) => a - b);
-  const yTicks = uniqueNumbers([0, config.yMax / 2, config.yMax]).sort((a, b) => a - b);
-  const populations = rows.map((row) => row.population);
-  const minPopulation = Math.min(...populations);
-  const maxPopulation = Math.max(...populations);
-  const xForPercent = (percent: number) => chart.left + (percent / config.xMax) * chartWidth;
-  const yForRate = (rate: number) => chart.bottom - (rate / config.yMax) * chartHeight;
-  const xAxisTicks = xTicks
-    .map((percent) => {
-      const x = xForPercent(percent);
-      return `
-        <line class="population-scatter-grid-line" x1="${round(x, 1)}" y1="${chart.top}" x2="${round(x, 1)}" y2="${chart.bottom}"></line>
-        <text class="population-scatter-tick" x="${round(x, 1)}" y="${chart.bottom + 19}" text-anchor="middle">${formatSeverityAxisPercent(percent)}</text>
-      `;
-    })
-    .join("");
-  const yAxisTicks = yTicks
-    .map((rate) => {
-      const y = yForRate(rate);
-      return `
-        <line class="population-scatter-grid-line" x1="${chart.left}" y1="${round(y, 1)}" x2="${width - chart.right}" y2="${round(y, 1)}"></line>
-        <text class="population-scatter-tick" x="${chart.left - 10}" y="${round(y + 4, 1)}" text-anchor="end">${formatRate(rate)}</text>
-      `;
-    })
-    .join("");
-  const trend = renderScatterTrend(regression, config, xForPercent, yForRate);
-  const points = [...rows]
-    .sort((a, b) => b.population - a.population)
-    .map((row) => {
-      const xPercent = row.severityPercent * 100;
-      const yRate = severityCorrelationMetricValue(row, config.yMetric);
-      const label = severityCorrelationPointLabel(row, config);
-      return `
-        <circle class="population-scatter-point population-scatter-point-${config.pointClass}" cx="${round(xForPercent(xPercent), 1)}" cy="${round(yForRate(yRate), 1)}" r="${round(populationScatterRadius(row.population, minPopulation, maxPopulation), 1)}" tabindex="0" aria-label="${escapeHtml(label)}">
-          <title>${escapeHtml(label)}</title>
-        </circle>
-      `;
-    })
-    .join("");
-  const ariaLabel = `${tr(config.titleKey)}: ${tr("severityCorrelation.sizeLegend")}`;
-
-  return `
-    <svg class="population-scatter-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(ariaLabel)}">
-      ${xAxisTicks}
-      ${yAxisTicks}
-      <line class="population-scatter-axis" x1="${chart.left}" y1="${chart.top}" x2="${chart.left}" y2="${chart.bottom}"></line>
-      <line class="population-scatter-axis" x1="${chart.left}" y1="${chart.bottom}" x2="${width - chart.right}" y2="${chart.bottom}"></line>
-      ${trend}
-      ${points}
-      <text class="population-scatter-axis-label" x="${chart.left + chartWidth / 2}" y="${height - 10}" text-anchor="middle">${escapeHtml(tr("severityCorrelation.xAxis"))}</text>
-      <text class="population-scatter-axis-label" x="16" y="${chart.top + chartHeight / 2}" text-anchor="middle" transform="rotate(-90 16 ${chart.top + chartHeight / 2})">${escapeHtml(severityCorrelationYAxisLabel(config.yMetric))}</text>
-    </svg>
-  `;
-}
-
-function renderScatterTrend(
-  regression: ScatterRegression | null,
-  config: { xMax: number; yMax: number },
-  xForValue: (value: number) => number,
-  yForRate: (rate: number) => number
-): string {
-  if (!regression) {
-    return "";
-  }
-  const x1Value = clampNumber(regression.minX, 0, config.xMax);
-  const x2Value = clampNumber(regression.maxX, 0, config.xMax);
-  const y1Rate = clampNumber(regression.intercept + regression.slope * x1Value, 0, config.yMax);
-  const y2Rate = clampNumber(regression.intercept + regression.slope * x2Value, 0, config.yMax);
-  return `
-    <line class="population-scatter-trend" x1="${round(xForValue(x1Value), 1)}" y1="${round(yForRate(y1Rate), 1)}" x2="${round(xForValue(x2Value), 1)}" y2="${round(yForRate(y2Rate), 1)}">
-      <title>${escapeHtml(tr("severityCorrelation.trend"))}</title>
-    </line>
-  `;
-}
-
-function scatterCorrelationLabel(correlation: number | null | undefined): string {
-  if (correlation === null || correlation === undefined) {
-    return "";
-  }
-  return `<span class="population-scatter-correlation">${escapeHtml(trf("severityCorrelation.correlation", { value: formatCorrelation(correlation) }))}</span>`;
-}
-
-function populationScatterMetricValue(row: PopulationRateRow, metric: PopulationScatterMetric): number {
-  if (metric === "fatal") {
-    return row.fatalRate;
-  }
-  if (metric === "serious") {
-    return row.seriousRate;
-  }
-  return row.totalRate;
-}
-
-function populationScatterAxisLabel(metric: PopulationScatterMetric): string {
-  if (metric === "fatal") {
-    return tr("populationRate.fatal");
-  }
-  if (metric === "serious") {
-    return tr("populationRate.serious");
-  }
-  return tr("populationRate.total");
-}
-
-function populationScatterPointLabel(row: PopulationRateRow, config: PopulationScatterChartConfig): string {
-  const areaLabel = row.secondaryLabel ? `${row.name}, ${row.secondaryLabel}` : row.name;
-  const xRate = populationScatterMetricValue(row, config.xMetric);
-  const yRate = populationScatterMetricValue(row, config.yMetric);
-  return `${areaLabel}: ${formatRate(xRate)} ${populationScatterAxisLabel(config.xMetric)}, ${formatRate(yRate)} ${populationScatterAxisLabel(config.yMetric)}, ${tr("populationRate.population")}: ${formatInteger(row.population)}`;
-}
-
-function populationScatterRegression(rows: PopulationRateRow[], config: PopulationScatterChartConfig): ScatterRegression | null {
-  if (rows.length < 2) {
-    return null;
-  }
-
-  const points = rows.map((row) => ({
-    x: populationScatterMetricValue(row, config.xMetric),
-    y: populationScatterMetricValue(row, config.yMetric)
-  }));
-  return scatterRegression(points);
-}
-
-function populationScatterRadius(population: number, minPopulation: number, maxPopulation: number): number {
-  if (maxPopulation <= minPopulation) {
-    return 9;
-  }
-  const minSqrt = Math.sqrt(minPopulation);
-  const maxSqrt = Math.sqrt(maxPopulation);
-  const normalized = (Math.sqrt(population) - minSqrt) / (maxSqrt - minSqrt);
-  return 5 + normalized * 12;
-}
-
-function severityCorrelationRows(
-  summaries: PopulationAccidentSummary[],
-  showStateLabel: boolean,
-  severityForSummary: (summary: PopulationAccidentSummary) => number | null
-): SeverityCorrelationRow[] {
-  return summaries
-    .map((summary): SeverityCorrelationRow | null => {
-      const severityPercent = severityForSummary(summary);
-      if (
-        typeof summary.population !== "number" ||
-        summary.population <= 0 ||
-        summary.accidentCount <= 0 ||
-        typeof severityPercent !== "number" ||
-        !Number.isFinite(severityPercent)
-      ) {
-        return null;
-      }
-      const population = summary.population;
-      const name = cleanAreaNameForDisplay(summary.name);
-      const secondaryLabel = showStateLabel && name !== summary.stateName ? summary.stateName : null;
-      return {
-        name,
-        secondaryLabel,
-        population,
-        severityPercent,
-        fatalRate: accidentRate(summary.fatalCount, population),
-        severeRate: accidentRate(summary.fatalCount + summary.seriousCount, population)
-      };
-    })
-    .filter((row): row is SeverityCorrelationRow => row !== null)
-    .sort(compareSeverityCorrelationRows);
-}
-
-function compareSeverityCorrelationRows(a: SeverityCorrelationRow, b: SeverityCorrelationRow): number {
-  return (
-    b.severityPercent - a.severityPercent ||
-    b.severeRate - a.severeRate ||
-    b.fatalRate - a.fatalRate ||
-    a.name.localeCompare(b.name, "de", { sensitivity: "base" })
-  );
-}
-
-function severityCorrelationMetricValue(row: SeverityCorrelationRow, metric: SeverityCorrelationMetric): number {
-  return metric === "fatal" ? row.fatalRate : row.severeRate;
-}
-
-function severityCorrelationYAxisLabel(metric: SeverityCorrelationMetric): string {
-  return metric === "fatal" ? tr("severityCorrelation.fatalYAxis") : tr("severityCorrelation.severeYAxis");
-}
-
-function severityCorrelationPointLabel(row: SeverityCorrelationRow, config: SeverityCorrelationChartConfig): string {
-  const areaLabel = row.secondaryLabel ? `${row.name}, ${row.secondaryLabel}` : row.name;
-  return `${areaLabel}: ${tr("metric.severityPercent")}: ${formatSeverityPercent(row)}, ${severityCorrelationYAxisLabel(config.yMetric)}: ${formatRate(severityCorrelationMetricValue(row, config.yMetric))}, ${tr("populationRate.population")}: ${formatInteger(row.population)}`;
-}
-
-function severityCorrelationRegression(rows: SeverityCorrelationRow[], metric: SeverityCorrelationMetric): ScatterRegression | null {
-  if (rows.length < 2) {
-    return null;
-  }
-
-  const points = rows.map((row) => ({
-    x: row.severityPercent * 100,
-    y: severityCorrelationMetricValue(row, metric)
-  }));
-  return scatterRegression(points);
-}
-
-function scatterRegression(points: Array<{ x: number; y: number }>): ScatterRegression | null {
-  if (points.length < 2) {
-    return null;
-  }
-  const meanX = points.reduce((sum, point) => sum + point.x, 0) / points.length;
-  const meanY = points.reduce((sum, point) => sum + point.y, 0) / points.length;
-  let sumXX = 0;
-  let sumXY = 0;
-  let sumYY = 0;
-  for (const point of points) {
-    const dx = point.x - meanX;
-    const dy = point.y - meanY;
-    sumXX += dx * dx;
-    sumXY += dx * dy;
-    sumYY += dy * dy;
-  }
-  if (sumXX <= 0) {
-    return null;
-  }
-
-  return {
-    slope: sumXY / sumXX,
-    intercept: meanY - (sumXY / sumXX) * meanX,
-    correlation: sumYY > 0 ? sumXY / Math.sqrt(sumXX * sumYY) : null,
-    minX: Math.min(...points.map((point) => point.x)),
-    maxX: Math.max(...points.map((point) => point.x))
-  };
-}
-
-function niceSeverityPercentChartMax(maxPercent: number): number {
-  return Math.min(100, Math.max(10, niceRateChartMax(maxPercent)));
-}
-
-function formatSeverityAxisPercent(value: number): string {
-  return `${formatRate(value)}%`;
-}
-
-function renderPopulationRateComparison(container: HTMLElement, summaries: PopulationAccidentSummary[], showStateLabel: boolean): void {
-  const rows = populationRateRows(summaries, showStateLabel);
-  if (!result || rows.length === 0) {
-    container.innerHTML = `<p class="population-rate-empty">${escapeHtml(tr("populationRate.empty"))}</p>`;
-    return;
-  }
-
-  const maxTotalRate = Math.max(1, ...rows.map((row) => row.totalRate));
-  container.innerHTML = `
-    ${renderPopulationRateLegend()}
-    <div class="population-rate-table" role="table">
-      <div class="population-rate-row population-rate-row-header" role="row">
-        <div role="columnheader">${escapeHtml(tr("populationRate.area"))}</div>
-        <div role="columnheader">${escapeHtml(tr("populationRate.outcomeMix"))}</div>
-        <div role="columnheader">${escapeHtml(tr("populationRate.total"))}</div>
-        <div role="columnheader">${escapeHtml(tr("populationRate.fatal"))}</div>
-        <div role="columnheader">${escapeHtml(tr("populationRate.serious"))}</div>
-        <div role="columnheader">${escapeHtml(tr("populationRate.other"))}</div>
-        <div role="columnheader">${escapeHtml(tr("populationRate.population"))}</div>
-      </div>
-      ${rows.map((row) => renderPopulationRateRow(row, maxTotalRate)).join("")}
-    </div>
-  `;
-}
-
-function populationRateRows(summaries: PopulationAccidentSummary[], showStateLabel: boolean): PopulationRateRow[] {
-  return summaries
-    .filter((summary) => typeof summary.population === "number" && summary.population > 0 && summary.accidentCount > 0)
-    .map((summary) => {
-      const population = summary.population as number;
-      const otherCount = Math.max(0, summary.accidentCount - summary.fatalCount - summary.seriousCount);
-      const name = cleanAreaNameForDisplay(summary.name);
-      const secondaryLabel = showStateLabel && name !== summary.stateName ? summary.stateName : null;
-      return {
-        name,
-        secondaryLabel,
-        population,
-        totalRate: accidentRate(summary.accidentCount, population),
-        fatalRate: accidentRate(summary.fatalCount, population),
-        seriousRate: accidentRate(summary.seriousCount, population),
-        otherRate: accidentRate(otherCount, population)
-      };
-    })
-    .sort(comparePopulationRateRows);
-}
-
-function comparePopulationRateRows(a: PopulationRateRow, b: PopulationRateRow): number {
-  return (
-    b.totalRate - a.totalRate ||
-    b.fatalRate - a.fatalRate ||
-    b.seriousRate - a.seriousRate ||
-    a.name.localeCompare(b.name, "de", { sensitivity: "base" })
-  );
-}
-
-function renderPopulationRateLegend(): string {
-  return `
-    <div class="population-rate-legend" aria-hidden="true">
-      <span class="population-rate-legend-item"><span class="population-rate-swatch population-rate-fatal"></span>${escapeHtml(tr("severity.fatal"))}</span>
-      <span class="population-rate-legend-item"><span class="population-rate-swatch population-rate-serious"></span>${escapeHtml(tr("severity.serious"))}</span>
-      <span class="population-rate-legend-item"><span class="population-rate-swatch population-rate-other"></span>${escapeHtml(tr("severity.other"))}</span>
-    </div>
-  `;
-}
-
-function renderPopulationRateRow(row: PopulationRateRow, maxTotalRate: number): string {
-  const title = `${row.name}: ${formatRate(row.totalRate)} ${tr("populationRate.total")}, ${formatRate(row.fatalRate)} ${tr("populationRate.fatal")}, ${formatRate(row.seriousRate)} ${tr("populationRate.serious")}, ${formatRate(row.otherRate)} ${tr("populationRate.other")}`;
-  return `
-    <div class="population-rate-row" role="row">
-      <div class="population-rate-area" role="cell">
-        <strong>${escapeHtml(row.name)}</strong>
-        ${row.secondaryLabel ? `<span>${escapeHtml(row.secondaryLabel)}</span>` : ""}
-      </div>
-      <div class="population-rate-bar-cell" role="cell">
-        <div class="population-rate-bar-track" title="${escapeHtml(title)}">
-          ${populationRateSegment("fatal", row.fatalRate, maxTotalRate)}
-          ${populationRateSegment("serious", row.seriousRate, maxTotalRate)}
-          ${populationRateSegment("other", row.otherRate, maxTotalRate)}
-        </div>
-      </div>
-      <div class="population-rate-number population-rate-total" role="cell">${formatRate(row.totalRate)}</div>
-      <div class="population-rate-number" role="cell">${formatRate(row.fatalRate)}</div>
-      <div class="population-rate-number" role="cell">${formatRate(row.seriousRate)}</div>
-      <div class="population-rate-number" role="cell">${formatRate(row.otherRate)}</div>
-      <div class="population-rate-number" role="cell">${formatCompactPopulation(row.population)}</div>
-    </div>
-  `;
-}
-
-function populationRateSegment(kind: "fatal" | "serious" | "other", rate: number, maxTotalRate: number): string {
-  if (rate <= 0) {
-    return "";
-  }
-  const width = Math.max(0, Math.min(100, (rate / maxTotalRate) * 100));
-  return `<span class="population-rate-segment population-rate-${kind}" style="width: ${round(width, 2)}%; min-width: 2px"></span>`;
-}
-
-function accidentRate(count: number, population: number): number {
-  return (count / population) * POPULATION_RATE_DENOMINATOR;
-}
-
-function niceRateChartMax(maxRate: number): number {
-  if (!Number.isFinite(maxRate) || maxRate <= 0) {
-    return 1;
-  }
-  const magnitude = 10 ** Math.floor(Math.log10(maxRate));
-  const scaled = maxRate / magnitude;
-  const niceScaled = scaled <= 1 ? 1 : scaled <= 2 ? 2 : scaled <= 5 ? 5 : 10;
-  return niceScaled * magnitude;
-}
-
-function renderRankChart(container: HTMLElement, series: RankChartSeries[], emptyKey: string, ariaLabelKey: string): void {
-  if (!result || result.clusters.length === 0 || series.length === 0) {
-    container.innerHTML = `<p class="state-rank-chart-empty">${escapeHtml(tr(emptyKey))}</p>`;
-    return;
-  }
-
-  container.innerHTML = `
-    ${renderRankChartSvg(series, ariaLabelKey)}
-    <div class="state-rank-chart-tooltip" role="tooltip" hidden></div>
-    ${renderRankChartLegend(series)}
-  `;
-}
-
-function stateRankChartSeries(clusters: IntersectionCluster[]): RankChartSeries[] {
-  const byState = new Map<string, RankChartSeries>();
-  for (const cluster of clusters) {
-    const stateSeries =
-      byState.get(cluster.stateCode) ??
-      ({
-        id: cluster.stateCode,
-        name: cluster.stateName ?? STATE_NAMES[cluster.stateCode] ?? cluster.stateCode,
-        color: stateRankChartColor(cluster.stateCode),
-        clusters: []
-      } satisfies RankChartSeries);
-    if (stateSeries.clusters.length < STATE_RANK_CHART_MAX_RANK) {
-      stateSeries.clusters.push(cluster);
-    }
-    byState.set(cluster.stateCode, stateSeries);
-  }
-
-  return Array.from(byState.values()).sort((a, b) => a.name.localeCompare(b.name, "de", { sensitivity: "base" }));
-}
-
-function regionRankChartSeries(): RankChartSeries[] {
-  return regionSummaries().map((summary, index) => ({
-    id: summary.key,
-    name: `${summary.regionName}, ${summary.stateName}`,
-    tooltip: regionTooltipLabel(summary),
-    color: rankChartColor(index),
-    clusters: summary.clusters.slice(0, STATE_RANK_CHART_MAX_RANK)
-  }));
-}
-
-function renderRankChartSvg(series: RankChartSeries[], ariaLabelKey: string): string {
-  const width = 760;
-  const height = 600;
-  const chart = { left: 54, right: 20, top: 28, bottom: 520 };
-  const chartWidth = width - chart.left - chart.right;
-  const chartHeight = chart.bottom - chart.top;
-  const chartSeries = series.map((item) => ({
-    ...item,
-    points: rankChartPoints(item.clusters)
-  }));
-  const maxSeverity = Math.max(1, ...chartSeries.flatMap((item) => item.points.map((point) => point.severityPercent)));
-  const yMax = niceSeverityChartMax(maxSeverity);
-  const xTicks = [1, 10, 100, 1000];
-  const yTicks = uniqueNumbers([0, yMax / 2, yMax].map((value) => Math.round(value))).sort((a, b) => a - b);
-  const xForRank = (rank: number) => chart.left + (Math.log10(Math.max(1, rank)) / Math.log10(STATE_RANK_CHART_MAX_RANK)) * chartWidth;
-  const yForSeverity = (severityPercent: number) => chart.bottom - (severityPercent / yMax) * chartHeight;
-  const xAxisTicks = xTicks
-    .map((rank) => {
-      const x = xForRank(rank);
-      return `
-        <line class="state-rank-chart-grid" x1="${round(x, 1)}" y1="${chart.top}" x2="${round(x, 1)}" y2="${chart.bottom}"></line>
-        <text class="state-rank-chart-tick" x="${round(x, 1)}" y="${chart.bottom + 21}" text-anchor="middle">${rank}</text>
-      `;
-    })
-    .join("");
-  const yAxisTicks = yTicks
-    .map((severity) => {
-      const y = yForSeverity(severity);
-      return `
-        <line class="state-rank-chart-grid" x1="${chart.left}" y1="${round(y, 1)}" x2="${width - chart.right}" y2="${round(y, 1)}"></line>
-        <text class="state-rank-chart-tick" x="${chart.left - 10}" y="${round(y + 4, 1)}" text-anchor="end">${formatInteger(severity)}</text>
-      `;
-    })
-    .join("");
-  const lines = chartSeries
-    .map((item) => {
-      const points = item.points.map((point) => ({
-        x: xForRank(point.rank),
-        y: yForSeverity(point.severityPercent)
-      }));
-      const path = linePath(points);
-      const firstPoint = points[0];
-      const lastPoint = points[points.length - 1] ?? firstPoint;
-      const dots =
-        points.length === 1
-          ? `<circle class="state-rank-chart-dot" cx="${round(firstPoint.x, 1)}" cy="${round(firstPoint.y, 1)}" r="3.5" style="--series-color: ${item.color}"></circle>`
-          : `
-            <circle class="state-rank-chart-dot" cx="${round(firstPoint.x, 1)}" cy="${round(firstPoint.y, 1)}" r="3" style="--series-color: ${item.color}"></circle>
-            <circle class="state-rank-chart-dot" cx="${round(lastPoint.x, 1)}" cy="${round(lastPoint.y, 1)}" r="3" style="--series-color: ${item.color}"></circle>
-          `;
-      const tooltipAttribute = item.tooltip ? ` data-series-tooltip="${escapeHtml(item.tooltip)}"` : "";
-      return `
-        <g class="state-rank-chart-series" data-rank-chart-series="true" data-series-name="${escapeHtml(item.name)}"${tooltipAttribute} tabindex="0" aria-label="${escapeHtml(item.name)}" style="--series-color: ${item.color}">
-          <title>${escapeHtml(item.name)}</title>
-          ${path ? `<path class="state-rank-chart-hit-line" d="${path}"></path><path class="state-rank-chart-line" d="${path}"></path>` : ""}
-          ${dots}
-        </g>
-      `;
-    })
-    .join("");
-
-  return `
-    <svg class="state-rank-chart-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(tr(ariaLabelKey))}">
-      ${xAxisTicks}
-      ${yAxisTicks}
-      <line class="state-rank-chart-axis" x1="${chart.left}" y1="${chart.top}" x2="${chart.left}" y2="${chart.bottom}"></line>
-      <line class="state-rank-chart-axis" x1="${chart.left}" y1="${chart.bottom}" x2="${width - chart.right}" y2="${chart.bottom}"></line>
-      ${lines}
-      <text class="state-rank-chart-axis-label" x="${chart.left + chartWidth / 2}" y="${height - 9}" text-anchor="middle">${escapeHtml(tr("stateChart.xAxis"))}</text>
-      <text class="state-rank-chart-axis-label" x="16" y="${chart.top + chartHeight / 2}" text-anchor="middle" transform="rotate(-90 16 ${chart.top + chartHeight / 2})">${escapeHtml(tr("stateChart.yAxis"))}</text>
-    </svg>
-  `;
-}
-
-function rankChartPoints(clusters: IntersectionCluster[]): RankChartPoint[] {
-  let runningSeverity = 0;
-  const sampledRanks = rankChartSampleRanks(clusters.length);
-  const sampledRankSet = new Set(sampledRanks);
-  const points: RankChartPoint[] = [];
-
-  for (let index = 0; index < clusters.length && index < STATE_RANK_CHART_MAX_RANK; index += 1) {
-    const rank = index + 1;
-    runningSeverity += clusters[index].severityPercent * 100;
-    if (sampledRankSet.has(rank)) {
-      points.push({
-        rank,
-        severityPercent: runningSeverity / rank
-      });
-    }
-  }
-
-  return points;
-}
-
-function rankChartSampleRanks(clusterCount: number): number[] {
-  const maxRank = Math.min(clusterCount, STATE_RANK_CHART_MAX_RANK);
-  if (maxRank <= 0) {
-    return [];
-  }
-
-  const ranks = STATE_RANK_CHART_SAMPLE_RANKS.filter((rank) => rank <= maxRank);
-  if (ranks[ranks.length - 1] !== maxRank) {
-    ranks.push(maxRank);
-  }
-  return ranks;
-}
-
-function renderRankChartLegend(series: RankChartSeries[]): string {
-  const legend = series
-    .map(
-      (item) => `
-        <span class="state-rank-chart-legend-item">
-          <span class="state-rank-chart-swatch" style="--series-color: ${item.color}"></span>
-          ${escapeHtml(item.name)}
-        </span>
-      `
-    )
-    .join("");
-
-  return `
-    <div class="state-rank-chart-legend">${legend}</div>
-  `;
-}
-
-function niceSeverityChartMax(maxSeverity: number): number {
-  if (maxSeverity <= 5) {
-    return 5;
-  }
-  if (maxSeverity <= 20) {
-    return Math.ceil(maxSeverity / 5) * 5;
-  }
-  return Math.min(100, Math.ceil(maxSeverity / 10) * 10);
-}
-
-function stateRankChartColor(stateCode: string): string {
-  const stateCodes = Object.keys(STATE_NAMES).sort();
-  const index = Math.max(0, stateCodes.indexOf(stateCode));
-  return rankChartColor(index);
-}
-
-function rankChartColor(index: number): string {
-  return STATE_RANK_CHART_COLORS[index % STATE_RANK_CHART_COLORS.length];
-}
-
-function regionSummaries(): RegionSummary[] {
-  return browseIndexForCurrentResult()?.regionSummaries ?? [];
 }
 
 function browseIndexForCurrentResult(): BrowseIndex | null {
@@ -4267,39 +2808,12 @@ function regionOptionLabel(region: RegionSummary): string {
   return region.population === null ? region.regionName : `${region.regionName} (${formatCompactPopulation(region.population)})`;
 }
 
-function regionTooltipLabel(region: RegionSummary): string {
-  const name = `${region.regionName}, ${region.stateName}`;
-  return region.population === null ? name : `${name} - ${tr("metric.population")}: ${formatInteger(region.population)}`;
-}
-
 function clusterRegionName(cluster: IntersectionCluster): string {
   return cleanAreaNameForDisplay(cluster.administrativeRegionName ?? cluster.stateName);
 }
 
 function clusterRegionKey(cluster: IntersectionCluster): string {
   return `${cluster.stateCode}:${cluster.administrativeRegionCode ?? "state"}`;
-}
-
-function clustersForTable(clusters: IntersectionCluster[]): IntersectionCluster[] {
-  if (elements.stateFilter.value !== "all") {
-    return topSortedClusters(clusters, TABLE_ROWS_PER_STATE);
-  }
-
-  const selectedByState = new Map<string, IntersectionCluster[]>();
-  for (const cluster of clusters) {
-    const stateClusters = selectedByState.get(cluster.stateCode) ?? [];
-    insertSortedCluster(stateClusters, cluster, TABLE_ROWS_PER_STATE, compareClustersForTable);
-    selectedByState.set(cluster.stateCode, stateClusters);
-  }
-  return Array.from(selectedByState.values()).flat().sort(compareClustersForTable);
-}
-
-function topSortedClusters(clusters: IntersectionCluster[], limit: number): IntersectionCluster[] {
-  const selected: IntersectionCluster[] = [];
-  for (const cluster of clusters) {
-    insertSortedCluster(selected, cluster, limit, compareClustersForTable);
-  }
-  return selected;
 }
 
 function insertSortedCluster(
@@ -4320,80 +2834,6 @@ function insertSortedCluster(
   if (selected.length > limit) {
     selected.length = limit;
   }
-}
-
-function compareClustersForTable(a: IntersectionCluster, b: IntersectionCluster): number {
-  const primary = compareClusterSortValue(a, b, clusterTableSort.key, clusterTableSort.direction);
-  return primary || compareClusterCoreMetric(a, b);
-}
-
-function compareClusterSortValue(
-  a: IntersectionCluster,
-  b: IntersectionCluster,
-  key: ClusterSortKey,
-  direction: SortDirection
-): number {
-  const aValue = clusterSortValue(a, key);
-  const bValue = clusterSortValue(b, key);
-  const aMissing = aValue === null || (typeof aValue === "number" && !Number.isFinite(aValue));
-  const bMissing = bValue === null || (typeof bValue === "number" && !Number.isFinite(bValue));
-
-  if (aMissing && bMissing) {
-    return 0;
-  }
-  if (aMissing) {
-    return 1;
-  }
-  if (bMissing) {
-    return -1;
-  }
-
-  const comparison =
-    typeof aValue === "string" && typeof bValue === "string"
-      ? aValue.localeCompare(bValue, "de", { sensitivity: "base" })
-      : Number(aValue) - Number(bValue);
-  return direction === "asc" ? comparison : -comparison;
-}
-
-function clusterSortValue(cluster: IntersectionCluster, key: ClusterSortKey): number | string | null {
-  switch (key) {
-    case "state":
-      return cluster.stateName;
-    case "location":
-      return clusterLocationText(cluster);
-    case "accidents":
-      return cluster.accidentCount;
-    case "fatal":
-      return cluster.fatalCount;
-    case "serious":
-      return cluster.seriousCount;
-    case "roundabout":
-      return osmBooleanSortValue(cluster.osmRoundabout);
-    case "trafficSignal":
-      return osmBooleanSortValue(cluster.osmTrafficSignal);
-    case "severityPercent":
-      return cluster.severityPercent;
-  }
-}
-
-function osmBooleanSortValue(value: boolean | null | undefined): number | null {
-  if (value === true) {
-    return 1;
-  }
-  if (value === false) {
-    return 0;
-  }
-  return null;
-}
-
-function compareClusterCoreMetric(a: IntersectionCluster, b: IntersectionCluster): number {
-  return (
-    b.severityPercent - a.severityPercent ||
-    b.fatalCount - a.fatalCount ||
-    b.seriousCount - a.seriousCount ||
-    b.accidentCount - a.accidentCount ||
-    clusterLocationText(a).localeCompare(clusterLocationText(b), "de", { sensitivity: "base" })
-  );
 }
 
 function formatSeverityPercentWithContext(cluster: IntersectionCluster): string {
@@ -4564,170 +3004,6 @@ function severityRankKey(cluster: IntersectionCluster): string {
   return `${cluster.stateCode}\0${cluster.id}`;
 }
 
-function defaultClusterSortDirection(key: ClusterSortKey): SortDirection {
-  return key === "state" || key === "location" ? "asc" : "desc";
-}
-
-function updateClusterSortHeaders(): void {
-  for (const button of clusterSortButtons()) {
-    const key = button.dataset.clusterSort as ClusterSortKey | undefined;
-    const active = key === clusterTableSort.key;
-    const indicator = button.querySelector<HTMLElement>(".sort-indicator");
-    const label = button.querySelector("span")?.textContent?.trim() ?? tr("table.location");
-    const header = button.closest("th");
-    button.classList.toggle("active", active);
-    button.setAttribute(
-      "aria-label",
-      trf("table.sorted", {
-        label,
-        direction: active ? tr(clusterTableSort.direction === "asc" ? "table.sort.asc" : "table.sort.desc") : tr("table.sort.none")
-      })
-    );
-    if (indicator) {
-      indicator.textContent = active ? (clusterTableSort.direction === "asc" ? "^" : "v") : "";
-    }
-    if (header) {
-      header.setAttribute("aria-sort", active ? (clusterTableSort.direction === "asc" ? "ascending" : "descending") : "none");
-    }
-  }
-}
-
-function clusterSortButtons(): HTMLButtonElement[] {
-  return Array.from(document.querySelectorAll<HTMLButtonElement>("[data-cluster-sort]"));
-}
-
-function renderExplore(): void {
-  updateBrowseRegionOptions();
-  renderNearbyList();
-  renderStateHotspotList();
-}
-
-function renderNearbyList(): void {
-  elements.nearbyList.innerHTML = "";
-  elements.nearbyList.hidden = false;
-  if (!result || !userLocation) {
-    elements.nearbyList.hidden = true;
-    return;
-  }
-
-  const nearby = nearbyClusters(6);
-  if (nearby.length === 0) {
-    elements.nearbyList.append(emptyHotspotMessage(tr("status.noSeverityNearby")));
-    return;
-  }
-
-  nearby.forEach((entry) => {
-    elements.nearbyList.append(
-      hotspotButton(entry.cluster, trf("label.away", { distance: formatDistance(entry.distanceMeters) }), {
-        metricPlacement: "header",
-        telemetrySource: "nearby hotspot"
-      })
-    );
-  });
-}
-
-function renderStateHotspotList(): void {
-  elements.stateHotspotList.innerHTML = "";
-  if (!result) {
-    elements.stateHotspotList.append(emptyHotspotMessage(tr("status.stateHotspotsPending")));
-    return;
-  }
-
-  const browseIndex = browseIndexForCurrentResult();
-  if (!browseIndex) {
-    elements.stateHotspotList.append(emptyHotspotMessage(tr("status.noAnalysisMatches")));
-    return;
-  }
-
-  const stateCode = elements.browseState.value;
-  const regionKey = elements.browseRegion.value;
-  const sourceClusters =
-    stateCode === "all"
-      ? browseIndex.topClustersByState
-      : regionKey === "all"
-        ? browseIndex.browseClustersByState.get(stateCode) ?? []
-        : browseIndex.browseClustersByRegion.get(regionKey) ?? [];
-  const clusters = sourceClusters.slice(0, STATE_BROWSE_MAX_INTERSECTIONS);
-
-  if (clusters.length === 0) {
-    elements.stateHotspotList.append(emptyHotspotMessage(tr("status.noAnalysisMatches")));
-    return;
-  }
-
-  clusters.forEach((cluster) => {
-    elements.stateHotspotList.append(
-      hotspotButton(cluster, stateCode === "all" ? cluster.stateName : clusterLocationText(cluster), {
-        metricPlacement: "header",
-        telemetrySource: "state hotspot"
-      })
-    );
-  });
-}
-
-function hotspotButton(
-  cluster: IntersectionCluster,
-  context: string,
-  options: { metricPlacement?: HotspotMetricPlacement; telemetrySource?: string } = {}
-): HTMLButtonElement {
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = "hotspot-button";
-  button.classList.toggle("selected", selectedCluster?.id === cluster.id);
-  const metricPlacement = options.metricPlacement ?? "stats";
-  const metricStat = `<span class="hotspot-stat hotspot-stat-metric"><strong>${formatSeverityPercent(cluster)}</strong> ${escapeHtml(tr("metric.severity"))}</span>`;
-  button.innerHTML = `
-    <span class="hotspot-main">
-      <span class="hotspot-heading">
-        <span class="hotspot-title">${escapeHtml(context)}</span>
-        ${metricPlacement === "header" ? metricStat : ""}
-      </span>
-      <span class="hotspot-stats">
-        ${metricPlacement === "stats" ? metricStat : ""}
-        <span class="hotspot-stat hotspot-stat-total"><strong>${formatInteger(cluster.accidentCount)}</strong> ${escapeHtml(accidentCountNoun(cluster.accidentCount))}</span>
-        <span class="hotspot-stat"><strong>${formatInteger(cluster.fatalCount)}</strong> ${escapeHtml(tr("severity.fatal").toLowerCase())}</span>
-        <span class="hotspot-stat"><strong>${formatInteger(cluster.seriousCount)}</strong> ${escapeHtml(tr("severity.serious").toLowerCase())}</span>
-      </span>
-    </span>
-  `;
-  button.addEventListener("click", () => {
-    selectClusterOnMap(cluster, options.telemetrySource ?? "hotspot");
-  });
-  return button;
-}
-
-function accidentCountNoun(count: number): string {
-  return tr(count === 1 ? "noun.accident.one" : "noun.accident.other");
-}
-
-function emptyHotspotMessage(message: string): HTMLParagraphElement {
-  const element = document.createElement("p");
-  element.className = "hotspot-empty";
-  element.textContent = message;
-  return element;
-}
-
-function nearbyClusters(limit: number): Array<{ cluster: IntersectionCluster; distanceMeters: number }> {
-  const location = userLocation;
-  if (!location) {
-    return [];
-  }
-
-  return (result?.clusters ?? [])
-    .map((cluster) => ({ cluster, distanceMeters: distanceMeters(location, cluster) }))
-    .sort((a, b) => a.distanceMeters - b.distanceMeters || compareClusterCoreMetric(a.cluster, b.cluster))
-    .slice(0, limit);
-}
-
-function selectNearestCluster(): { cluster: IntersectionCluster; distanceMeters: number } | null {
-  const nearest = nearbyClusters(1)[0];
-  if (!nearest) {
-    setView("map");
-    return null;
-  }
-  selectClusterOnMap(nearest.cluster, "nearest hotspot");
-  return nearest;
-}
-
 function selectClusterOnMap(cluster: IntersectionCluster, telemetrySource = "cluster selection", zoomLevel: number | null = null): void {
   const telemetry = createInteractionTelemetry("select cluster from list", telemetrySource, cluster.id, clusterLocationText(cluster));
   activeInteractionTelemetry = telemetry;
@@ -4838,7 +3114,7 @@ function buildSelectedIntersectionViewModel(cluster: IntersectionCluster): Selec
   const roadClassSignature = measureActiveInteractionStep(
     "derive selected road class signature",
     cluster.id,
-    () => roadClassSignatureForStreetNames(streetNames),
+    () => similarView.roadClassSignatureForStreetNames(streetNames),
     (signature) => ({ comparable: signature !== null, roadClass: signature?.label ?? null })
   );
   const pressSearchUrl = measureActiveInteractionStep("build press search URL", cluster.id, () =>
@@ -4904,7 +3180,7 @@ function applySelectedIntersectionViewModel(viewModel: SelectedIntersectionViewM
     if (!viewModel.roadClassSignature) {
       measureActiveInteractionStep("fallback from unavailable comparison", cluster.id, () => setView("map"));
     } else {
-      measureActiveInteractionStep("render visible comparison", cluster.id, renderSimilarIntersections);
+      measureActiveInteractionStep("render visible comparison", cluster.id, () => similarView.render());
     }
   }
   measureActiveInteractionStep("update street view panel", cluster.id, updateStreetViewPanel, () => ({
@@ -5201,89 +3477,6 @@ function renderClusterOsmFeatureDetailRows(cluster: IntersectionCluster): string
     .join("");
 }
 
-function formatOsmBoolean(value: boolean | null | undefined): string {
-  if (value === true) {
-    return tr("details.yes");
-  }
-  if (value === false) {
-    return tr("details.no");
-  }
-  return tr("details.unknown");
-}
-
-function renderOsmBooleanBadge(value: boolean | null | undefined): string {
-  const label = formatOsmBoolean(value);
-  const state = value === true ? "yes" : value === false ? "no" : "unknown";
-  return `<span class="osm-feature-pill osm-feature-${state}">${escapeHtml(label)}</span>`;
-}
-
-function clusterStreetNamesForDisplay(cluster: IntersectionCluster, records: CrossingAccident[] = []): string[] {
-  const storedNames = uniqueStreetNames(Array.isArray(cluster.streetNames) ? cluster.streetNames : []);
-  return storedNames.length > 0 ? storedNames : uniqueStreetNames(records.flatMap(({ accident }) => accidentStreetNamesForDisplay(accident)));
-}
-
-function accidentStreetNamesForDisplay(accident: AccidentRecord): string[] {
-  return uniqueStreetNames(Array.isArray(accident.streetNames) && accident.streetNames.length > 0 ? accident.streetNames : [accident.streetName]);
-}
-
-function uniqueStreetNames(values: Array<string | null | undefined>): string[] {
-  const names: string[] = [];
-  const seen = new Set<string>();
-  for (const value of values) {
-    const name = value?.trim();
-    if (!name) {
-      continue;
-    }
-    const key = name.toLocaleLowerCase("de");
-    if (!seen.has(key)) {
-      seen.add(key);
-      names.push(name);
-    }
-  }
-  return names;
-}
-
-function clusterStreetLabel(streetNames: string[]): string {
-  return displayStreetNames(streetNames).length === 1 ? tr("details.street") : tr("details.streets");
-}
-
-function formatClusterStreetNames(streetNames: string[]): string {
-  return displayStreetNames(streetNames).join(STREET_NAME_SEPARATOR);
-}
-
-function displayStreetNames(streetNames: string[]): string[] {
-  return uniqueStreetNames(streetNames.map(formatStreetNameForDisplay));
-}
-
-function formatStreetNameForDisplay(streetName: string): string {
-  return streetName.replace(/\b(A|B|L|K|S|St)\s+(\d+[a-z]?)\b/gi, (_match, prefix: string, routeNumber: string) => {
-    const normalizedPrefix = prefix.length === 2 ? "St" : prefix.toUpperCase();
-    return `${normalizedPrefix}${routeNumber}`;
-  });
-}
-
-function formatAccidentStreetNames(accident: AccidentRecord, streetOrder: string[] = []): string | null {
-  const streetNames = orderStreetNamesForCrossing(accidentStreetNamesForDisplay(accident), streetOrder);
-  return streetNames.length > 0 ? formatClusterStreetNames(streetNames) : null;
-}
-
-function orderStreetNamesForCrossing(streetNames: string[], streetOrder: string[]): string[] {
-  if (streetNames.length < 2 || streetOrder.length === 0) {
-    return streetNames;
-  }
-
-  const rankByName = new Map(streetOrder.map((name, index) => [streetNameSortKey(name), index]));
-  return streetNames.slice().sort((a, b) => {
-    const aRank = rankByName.get(streetNameSortKey(a)) ?? Number.MAX_SAFE_INTEGER;
-    const bRank = rankByName.get(streetNameSortKey(b)) ?? Number.MAX_SAFE_INTEGER;
-    return aRank - bRank || a.localeCompare(b, "de", { sensitivity: "base" });
-  });
-}
-
-function streetNameSortKey(name: string): string {
-  return name.toLocaleLowerCase("de");
-}
-
 function toggleStreetViewPanel(): void {
   isStreetViewOpen = !isStreetViewOpen;
   writeStoredStreetViewOpen(isStreetViewOpen);
@@ -5404,14 +3597,6 @@ function cleanPressSearchPlaceName(placeName: string): string {
     parts.pop();
   }
   return parts.join(", ") || placeName;
-}
-
-function isCityTitleSuffix(value: string): boolean {
-  const normalized = value
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLocaleLowerCase("de");
-  return normalized === "stadt" || normalized.endsWith("stadt") || normalized.startsWith("stadt ");
 }
 
 function accidentSearchDateLabel(accident: AccidentRecord): string {
@@ -6205,17 +4390,6 @@ function renderTrendChart(series: ClusterYearStat[], direction: AccidentTrendDir
       ${yearLabels}
     </svg>
   `;
-}
-
-function uniqueNumbers(values: number[]): number[] {
-  return [...new Set(values)];
-}
-
-function linePath(points: Array<{ x: number; y: number }>): string {
-  if (points.length < 2) {
-    return "";
-  }
-  return points.map((point, index) => `${index === 0 ? "M" : "L"}${round(point.x, 1)} ${round(point.y, 1)}`).join(" ");
 }
 
 function trendDirectionLabel(direction: AccidentTrendDirection): string {
@@ -7228,54 +5402,6 @@ function maxSeriesAccidents(series: ClusterYearStat[], fallback: number): number
   return maximum;
 }
 
-function clusterAreaText(cluster: IntersectionCluster): string {
-  const seen = new Set<string>();
-  return [cluster.stateName, cluster.administrativeRegionName, cluster.districtName, cluster.municipalityName]
-    .map((part) => (part ? cleanAreaNameForDisplay(part) : ""))
-    .filter((part): part is string => Boolean(part))
-    .filter((part) => {
-      const key = normalizedAreaNameKey(part);
-      if (seen.has(key)) {
-        return false;
-      }
-      seen.add(key);
-      return true;
-    })
-    .join(", ");
-}
-
-function cleanAreaNameForDisplay(name: string): string {
-  const withoutAdministrativePrefix = name
-    .trim()
-    .replace(/^früher:\s*/i, "")
-    .replace(/^Reg\.-Bez\.\s*/i, "")
-    .replace(/^Regierungsbezirk\s+/i, "");
-  const parts = withoutAdministrativePrefix
-    .split(",")
-    .map((part) => part.trim())
-    .filter(Boolean);
-
-  while (parts.length > 1 && isOfficialAreaSuffix(parts[parts.length - 1])) {
-    parts.pop();
-  }
-
-  return parts.join(", ") || withoutAdministrativePrefix || name;
-}
-
-function isOfficialAreaSuffix(value: string): boolean {
-  const normalized = normalizedAreaNameKey(value);
-  return isCityTitleSuffix(value) || normalized === "stadtkreis" || normalized === "landkreis" || normalized === "kreisfreie stadt";
-}
-
-function normalizedAreaNameKey(value: string): string {
-  return value
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLocaleLowerCase("de");
-}
-
 function factsheetPeriodLabel(cluster: IntersectionCluster, records: CrossingAccident[]): string {
   const years = uniqueNumbers((records.length ? records.map(({ accident }) => accident.year) : cluster.years).filter(Boolean)).sort((a, b) => a - b);
   if (years.length === 0) {
@@ -7494,14 +5620,6 @@ function roadUserColor(key: RoadUserKey): string {
   }
 }
 
-function clusterLocation(cluster: IntersectionCluster): string {
-  return escapeHtml(clusterLocationText(cluster));
-}
-
-function clusterLocationText(cluster: IntersectionCluster): string {
-  return cluster.municipalityName ?? cluster.districtName ?? cluster.administrativeRegionName ?? `${cluster.lat.toFixed(5)}, ${cluster.lon.toFixed(5)}`;
-}
-
 function showNextLoadingFact(): void {
   const factIndex = nextLoadingFactIndex();
   const fact = LOADING_FACTS[factIndex] ?? LOADING_FACTS[0] ?? null;
@@ -7659,68 +5777,6 @@ async function loadAccidentsForState(stateCode: string, telemetry: Initializatio
   return dataRepository.loadAccidentsForState(stateCode, repositoryTelemetry(telemetry));
 }
 
-function formatInteger(value: number): string {
-  return new Intl.NumberFormat(NUMBER_LOCALE, { maximumFractionDigits: 0 }).format(value);
-}
-
-function formatCompactPopulation(value: number): string {
-  return new Intl.NumberFormat(NUMBER_LOCALE, { maximumFractionDigits: 1, notation: "compact" }).format(value);
-}
-
-function formatRate(value: number): string {
-  const maximumFractionDigits = value >= 100 ? 0 : 1;
-  return new Intl.NumberFormat(NUMBER_LOCALE, { maximumFractionDigits }).format(value);
-}
-
-function formatNumber(value: number): string {
-  return new Intl.NumberFormat(NUMBER_LOCALE, { maximumFractionDigits: 2 }).format(value);
-}
-
-function formatCorrelation(value: number): string {
-  return new Intl.NumberFormat(NUMBER_LOCALE, { maximumFractionDigits: 2, minimumFractionDigits: 2 }).format(value);
-}
-
-function formatDate(value: Date): string {
-  return new Intl.DateTimeFormat(NUMBER_LOCALE, { year: "numeric", month: "short", day: "2-digit" }).format(value);
-}
-
-function formatSignedPercent(value: number): string {
-  return `${value > 0 ? "+" : ""}${new Intl.NumberFormat(NUMBER_LOCALE, { maximumFractionDigits: 1 }).format(value * 100)}%`;
-}
-
-function formatSharePercent(value: number): string {
-  return `${new Intl.NumberFormat(NUMBER_LOCALE, { maximumFractionDigits: 0 }).format(value * 100)}%`;
-}
-
-function formatSeverityPercent(source: SeverityPercentSource): string {
-  return `${severityPercentValue(source)}%`;
-}
-
-function severityPercentValue(source: SeverityPercentSource): number {
-  return Math.round(source.severityPercent * 100);
-}
-
-function formatDistance(valueMeters: number): string {
-  if (valueMeters >= 10_000) {
-    return `${formatNumber(valueMeters / 1000)} km`;
-  }
-  if (valueMeters >= 1000) {
-    return `${new Intl.NumberFormat(NUMBER_LOCALE, { maximumFractionDigits: 1 }).format(valueMeters / 1000)} km`;
-  }
-  return `${formatInteger(Math.round(valueMeters))} m`;
-}
-
-function distanceMeters(a: { lat: number; lon: number }, b: { lat: number; lon: number }): number {
-  const earthRadiusMeters = 6_371_000;
-  const deltaLat = radians(b.lat - a.lat);
-  const deltaLon = radians(b.lon - a.lon);
-  const latA = radians(a.lat);
-  const latB = radians(b.lat);
-  const hav =
-    Math.sin(deltaLat / 2) ** 2 + Math.cos(latA) * Math.cos(latB) * Math.sin(deltaLon / 2) ** 2;
-  return 2 * earthRadiusMeters * Math.atan2(Math.sqrt(hav), Math.sqrt(1 - hav));
-}
-
 function radians(degrees: number): number {
   return (degrees * Math.PI) / 180;
 }
@@ -7733,31 +5789,9 @@ function inputMax(input: HTMLInputElement): number {
   return input.max === "" ? Number.POSITIVE_INFINITY : Number(input.max);
 }
 
-function clampNumber(value: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, value));
-}
-
-function round(value: number, decimals: number): number {
-  const factor = 10 ** decimals;
-  return Math.round(value * factor) / factor;
-}
-
 function csvCell(value: unknown): string {
   const raw = String(value ?? "");
   return /[",\n]/.test(raw) ? `"${raw.replace(/"/g, '""')}"` : raw;
-}
-
-function escapeHtml(value: string): string {
-  return value.replace(/[&<>"']/g, (char) => {
-    const entities: Record<string, string> = {
-      "&": "&amp;",
-      "<": "&lt;",
-      ">": "&gt;",
-      '"': "&quot;",
-      "'": "&#039;"
-    };
-    return entities[char];
-  });
 }
 
 function enqueuePostRenderCacheWrites(

@@ -13,6 +13,17 @@ export function lonLatToMeterPoint(point: GeoPoint): { x: number; y: number } {
   };
 }
 
+export function distanceMeters(a: GeoPoint, b: GeoPoint): number {
+  const earthRadiusMeters = 6_371_000;
+  const deltaLat = radians(b.lat - a.lat);
+  const deltaLon = radians(b.lon - a.lon);
+  const latA = radians(a.lat);
+  const latB = radians(b.lat);
+  const hav =
+    Math.sin(deltaLat / 2) ** 2 + Math.cos(latA) * Math.cos(latB) * Math.sin(deltaLon / 2) ** 2;
+  return 2 * earthRadiusMeters * Math.atan2(Math.sqrt(hav), Math.sqrt(1 - hav));
+}
+
 export class GeoGridIndex<T extends GeoPoint> {
   private readonly buckets = new Map<string, T[]>();
 
@@ -56,4 +67,8 @@ export class GeoGridIndex<T extends GeoPoint> {
   private key(cx: number, cy: number): string {
     return `${cx}:${cy}`;
   }
+}
+
+function radians(degrees: number): number {
+  return degrees * DEG_TO_RAD;
 }
