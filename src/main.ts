@@ -4,8 +4,9 @@ import { AnalysisCoordinator } from "./analysisCoordinator";
 import { AppRouter } from "./appRouter";
 import { BrowseIndexStore, regionOptionLabel, STATE_BROWSE_MAX_INTERSECTIONS, type BrowseIndex } from "./browseIndex";
 import { clustersCsv } from "./clusterCsvExport";
+import { ClusterSelectionCoordinator, clusterSeverityKey } from "./clusterSelectionCoordinator";
 import { DataRepository } from "./dataRepository";
-import { clusterLocationText, compareClusterCoreMetric } from "./clusterDisplay";
+import { compareClusterCoreMetric } from "./clusterDisplay";
 import {
   configureNumberLocale,
   formatDistance,
@@ -35,15 +36,7 @@ import {
   type SeverityRankIndexHooks
 } from "./severityRankIndex";
 import { STATE_NAMES } from "./states";
-import {
-  createInteractionTelemetry,
-  finishInteractionStep,
-  logInteractionTelemetry,
-  measureInteractionStep,
-  startInteractionStep,
-  type InteractionTelemetry,
-  type TelemetryMetadata
-} from "./telemetry";
+import type { TelemetryMetadata } from "./telemetry";
 import { UnclusteredIncidentLayer } from "./unclusteredIncidentLayer";
 import {
   AccidentRecord,
@@ -62,8 +55,6 @@ import { TableView } from "./views/tableView";
 
 declare const __SICHERE_KNOTEN_APP_VERSION__: string | undefined;
 declare const __SICHERE_KNOTEN_ANALYSIS_CACHE_VERSION__: string | undefined;
-
-type SeverityFilterKey = "fatal" | "serious" | "other";
 
 interface SiteVersionManifest {
   appVersion?: string;
@@ -90,7 +81,6 @@ let result: AnalysisResult | null = null;
 let committedAnalysis: CommittedAnalysisState | null = null;
 let userLocation: { lat: number; lon: number; accuracyMeters: number | null } | null = null;
 let renderedMapClusters: IntersectionCluster[] | null | undefined;
-let activeInteractionTelemetry: InteractionTelemetry | null = null;
 let loadingFactFallbackIndex = 0;
 let pendingUrlIntersectionSelection: IntersectionUrlSelection | null = readIntersectionSelectionFromUrl();
 
@@ -245,6 +235,7 @@ const selectedIntersectionPanelView = new SelectedIntersectionPanelView({
 });
 let selectedIntersectionController: SelectedIntersectionController;
 let appRouter: AppRouter;
+let clusterSelectionCoordinator: ClusterSelectionCoordinator;
 let similarView: SimilarView;
 let exploreView: ExploreView;
 let unclusteredIncidentLayer: UnclusteredIncidentLayer;
@@ -316,7 +307,8 @@ selectedIntersectionController = new SelectedIntersectionController({
   setStatus,
   updateIntersectionSelectionUrl,
   scheduleMapRefresh,
-  measureStep: measureActiveInteractionStep
+  measureStep: (name, detail, work, metadata) =>
+    clusterSelectionCoordinator.measureActiveInteractionStep(name, detail, work, metadata)
 });
 appRouter = new AppRouter(
   {
@@ -354,11 +346,21 @@ appRouter = new AppRouter(
     scheduleMapRefresh
   }
 );
+clusterSelectionCoordinator = new ClusterSelectionCoordinator({
+  getActiveView: () => appRouter.activeView,
+  isMobileLayout: () => appRouter.isMobileLayout,
+  setView: (view) => appRouter.setView(view),
+  mapSelect: (cluster, focus, reason, zoomLevel) => map.select(cluster, focus, reason, zoomLevel),
+  ensureSeverityVisible: ensureClusterSeverityVisible,
+  scheduleFrame: (work) => {
+    window.requestAnimationFrame(work);
+  }
+});
 const tableView = new TableView({
   body: elements.clusterTableBody,
   getResult: () => result,
   getStateFilterValue: () => elements.stateFilter.value,
-  selectCluster: (cluster) => selectClusterOnMap(cluster)
+  selectCluster: (cluster) => clusterSelectionCoordinator.selectCluster(cluster)
 });
 similarView = new SimilarView({
   container: elements.similarIntersections,
@@ -366,7 +368,7 @@ similarView = new SimilarView({
   getSelectedCluster: () => selectedIntersectionController.selectedCluster,
   getSelectedRoadClassSignature: () => selectedIntersectionController.selectedRoadClassSignature,
   getActiveView: () => appRouter.activeView,
-  selectCluster: (cluster) => selectClusterOnMap(cluster)
+  selectCluster: (cluster) => clusterSelectionCoordinator.selectCluster(cluster)
 });
 const stateRegionView = new StateRegionView({
   stateRankChart: elements.stateRankChart,
@@ -391,7 +393,7 @@ exploreView = new ExploreView({
   getBrowseRegionValue: () => elements.browseRegion.value,
   browseIndexForCurrentResult,
   updateBrowseRegionOptions,
-  selectCluster: (cluster, telemetrySource) => selectClusterOnMap(cluster, telemetrySource),
+  selectCluster: (cluster, telemetrySource) => clusterSelectionCoordinator.selectCluster(cluster, telemetrySource),
   setView: (view) => appRouter.setView(view)
 });
 
@@ -770,7 +772,7 @@ function applyPendingUrlIntersectionSelection(): void {
     return;
   }
 
-  selectClusterOnMap(nearest.cluster, "intersection URL", selection.zoomLevel);
+  clusterSelectionCoordinator.selectCluster(nearest.cluster, "intersection URL", selection.zoomLevel);
 }
 
 function nearestClusterTo(point: LatLon): { cluster: IntersectionCluster; distanceMeters: number } | null {
@@ -945,15 +947,15 @@ function severityRankContext(cluster: IntersectionCluster): SeverityRankContext 
 function severityRankIndexHooks(cluster: IntersectionCluster | null): SeverityRankIndexHooks {
   return {
     prepareIndex: (compute) =>
-      measureActiveInteractionStep("prepare severity rank cache", null, compute, (index: SeverityRankIndex) => ({
+      clusterSelectionCoordinator.measureActiveInteractionStep("prepare severity rank cache", null, compute, (index: SeverityRankIndex) => ({
         clusterCount: index.clusters.length,
         hasMultipleStates: index.hasMultipleStates
       })),
     computeStateRank: cluster
-      ? (compute) => measureActiveInteractionStep("compute state severity rank", cluster.id, compute, severityRankTelemetryMetadata)
+      ? (compute) => clusterSelectionCoordinator.measureActiveInteractionStep("compute state severity rank", cluster.id, compute, severityRankTelemetryMetadata)
       : undefined,
     computeGermanyRank: cluster
-      ? (compute) => measureActiveInteractionStep("compute germany severity rank", cluster.id, compute, severityRankTelemetryMetadata)
+      ? (compute) => clusterSelectionCoordinator.measureActiveInteractionStep("compute germany severity rank", cluster.id, compute, severityRankTelemetryMetadata)
       : undefined
   };
 }
@@ -965,43 +967,8 @@ function severityRankTelemetryMetadata(rank: SeverityRank | null): TelemetryMeta
   };
 }
 
-function selectClusterOnMap(cluster: IntersectionCluster, telemetrySource = "cluster selection", zoomLevel: number | null = null): void {
-  const telemetry = createInteractionTelemetry("select cluster from list", telemetrySource, cluster.id, clusterLocationText(cluster));
-  activeInteractionTelemetry = telemetry;
-  const openDetailsOnMobile = appRouter.isMobileLayout;
-  measureInteractionStep(telemetry, "ensure severity visible", cluster.id, () => ensureClusterSeverityVisible(cluster), () => ({
-    severity: clusterSeverity(cluster),
-    fatalCount: cluster.fatalCount,
-    seriousCount: cluster.seriousCount
-  }));
-  if (!openDetailsOnMobile) {
-    measureInteractionStep(telemetry, "set view to map", appRouter.activeView, () => appRouter.setView("map"), () => ({
-      activeView: appRouter.activeView
-    }));
-  }
-  const frameStep = startInteractionStep(telemetry, "wait for selection animation frame", cluster.id);
-  window.requestAnimationFrame(() => {
-    finishInteractionStep(frameStep, {});
-    try {
-      withInteractionTelemetry(telemetry, () => {
-        measureInteractionStep(telemetry, "map select, focus, draw, callback", cluster.id, () => map.select(cluster, true, "program", zoomLevel), () => ({
-          clusterId: cluster.id,
-          accidentCount: cluster.accidentCount
-        }));
-        if (openDetailsOnMobile) {
-          measureInteractionStep(telemetry, "mobile set view details", cluster.id, () => appRouter.setView("details"), () => ({
-            activeView: appRouter.activeView
-          }));
-        }
-      });
-    } finally {
-      scheduleInteractionTelemetryLog(telemetry);
-    }
-  });
-}
-
 function ensureClusterSeverityVisible(cluster: IntersectionCluster): void {
-  const severity = clusterSeverity(cluster);
+  const severity = clusterSeverityKey(cluster);
   const input =
     severity === "fatal" ? elements.showFatalPoints : severity === "serious" ? elements.showSeriousPoints : elements.showOtherPoints;
   if (input.checked) {
@@ -1009,16 +976,6 @@ function ensureClusterSeverityVisible(cluster: IntersectionCluster): void {
   }
   input.checked = true;
   applySeverityFilter();
-}
-
-function clusterSeverity(cluster: IntersectionCluster): SeverityFilterKey {
-  if (cluster.fatalCount > 0) {
-    return "fatal";
-  }
-  if (cluster.seriousCount > 0) {
-    return "serious";
-  }
-  return "other";
 }
 
 function scheduleMapRefresh(): void {
@@ -1142,39 +1099,6 @@ function scheduleIdleWork(work: () => void): void {
   } else {
     globalThis.setTimeout(work, 0);
   }
-}
-
-function measureActiveInteractionStep<T>(
-  name: string,
-  detail: string | null,
-  work: () => T,
-  metadata?: (result: T) => TelemetryMetadata
-): T {
-  const telemetry = activeInteractionTelemetry;
-  return telemetry ? measureInteractionStep(telemetry, name, detail, work, metadata) : work();
-}
-
-function withInteractionTelemetry<T>(telemetry: InteractionTelemetry, work: () => T): T {
-  const previous = activeInteractionTelemetry;
-  activeInteractionTelemetry = telemetry;
-  try {
-    return work();
-  } finally {
-    activeInteractionTelemetry = previous;
-  }
-}
-
-function scheduleInteractionTelemetryLog(telemetry: InteractionTelemetry): void {
-  const paintStep = startInteractionStep(telemetry, "wait for browser paint", telemetry.clusterId);
-  window.requestAnimationFrame(() => {
-    window.requestAnimationFrame(() => {
-      finishInteractionStep(paintStep, { activeView: appRouter.activeView });
-      logInteractionTelemetry(telemetry, { activeView: appRouter.activeView });
-      if (activeInteractionTelemetry === telemetry) {
-        activeInteractionTelemetry = null;
-      }
-    });
-  });
 }
 
 function byId<T extends HTMLElement>(id: string): T {
