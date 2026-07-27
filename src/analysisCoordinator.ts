@@ -3,6 +3,7 @@ import { analyzeDangerousIntersectionsInBackground, type AnalysisExecutionPlan }
 import type { DataRepository, AnalysisCacheContext, DataRepositoryTelemetry } from "./dataRepository";
 import { formatInteger } from "./formatting";
 import { tr, trf } from "./i18n";
+import type { LoadingStatusKind } from "./loadingStatusPresenter";
 import { roadUserFocusKey } from "./roadUsers";
 import type { RequestGate, RequestToken } from "./requestGate";
 import {
@@ -16,8 +17,6 @@ import {
   type InitializationTelemetryStatus
 } from "./telemetry";
 import type { AccidentRecord, AnalysisOptions, AnalysisResult } from "./types";
-
-type LoadingStatusKind = "normal" | "problem" | "idle";
 
 interface PendingAnalysisCacheWrite {
   cacheContext: AnalysisCacheContext;

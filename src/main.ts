@@ -22,6 +22,7 @@ import {
   type LatLon
 } from "./intersectionUrlState";
 import { DEFAULT_LOADING_FACT_META, LOADING_FACTS } from "./loadingFacts";
+import { LoadingStatusPresenter, type LoadingStatusKind } from "./loadingStatusPresenter";
 import { round } from "./math";
 import { MapCanvas } from "./mapCanvas";
 import { RequestGate } from "./requestGate";
@@ -63,7 +64,6 @@ declare const __SICHERE_KNOTEN_APP_VERSION__: string | undefined;
 declare const __SICHERE_KNOTEN_ANALYSIS_CACHE_VERSION__: string | undefined;
 
 type SeverityFilterKey = "fatal" | "serious" | "other";
-type LoadingStatusKind = "normal" | "problem" | "idle";
 
 interface SiteVersionManifest {
   appVersion?: string;
@@ -90,9 +90,7 @@ let result: AnalysisResult | null = null;
 let committedAnalysis: CommittedAnalysisState | null = null;
 let userLocation: { lat: number; lon: number; accuracyMeters: number | null } | null = null;
 let renderedMapClusters: IntersectionCluster[] | null | undefined;
-let loadingStatusKind: LoadingStatusKind = "normal";
 let activeInteractionTelemetry: InteractionTelemetry | null = null;
-let isSplashDisplayed = false;
 let loadingFactFallbackIndex = 0;
 let pendingUrlIntersectionSelection: IntersectionUrlSelection | null = readIntersectionSelectionFromUrl();
 
@@ -208,6 +206,17 @@ const analysisOptionsForm = new AnalysisOptionsForm(
     onDraftChange: markAnalysisSettingsDirty
   }
 );
+const loadingStatusPresenter = new LoadingStatusPresenter({
+  elements: {
+    splash: elements.splash,
+    mapLoadingTitle: elements.mapLoadingTitle,
+    mapLoadingStatus: elements.mapLoadingStatus,
+    mapLoadingBar: elements.mapLoadingBar
+  },
+  hasNoClusters: () => Boolean(result && result.clusters.length === 0),
+  onShowSplash: showNextLoadingFact,
+  translate: tr
+});
 const analysisCoordinator = new AnalysisCoordinator({
   dataRepository,
   requestGate,
@@ -391,7 +400,6 @@ startApp();
 function startApp(): void {
   applyStaticTranslations();
   showNextLoadingFact();
-  isSplashDisplayed = !elements.splash.hidden;
   analysisOptionsForm.resetToDefaults();
   wireEvents();
   appRouter.setView(appRouter.initialView());
@@ -1085,51 +1093,11 @@ function normalizeLoadingFactIndex(index: number): number {
 function setBusy(isBusy: boolean): void {
   analysisOptionsForm.setDisabled(isBusy);
   elements.resetAppBtn.disabled = isBusy;
-  if (isBusy && !isSplashDisplayed) {
-    showNextLoadingFact();
-  }
-  isSplashDisplayed = isBusy;
-  elements.splash.hidden = !isBusy;
-  elements.splash.setAttribute("aria-busy", String(isBusy));
+  loadingStatusPresenter.setBusy(isBusy);
 }
 
 function setStatus(message: string, progress: number, kind: LoadingStatusKind = "normal"): void {
-  loadingStatusKind = kind;
-  const normalizedProgress = Math.max(0, Math.min(100, progress));
-  updateLoadingPanels(message, normalizedProgress);
-}
-
-function updateLoadingPanels(message: string, progress: number): void {
-  const isProblem = loadingStatusKind === "problem";
-  const isIdle = loadingStatusKind === "idle";
-  const hasNoClusters = Boolean(result && result.clusters.length === 0 && progress >= 100);
-  const title = loadingTitle(progress, isProblem, isIdle, hasNoClusters);
-
-  elements.mapLoadingStatus.textContent = message;
-  elements.mapLoadingBar.style.width = `${progress}%`;
-  elements.mapLoadingTitle.textContent = title;
-}
-
-function loadingTitle(progress: number, isProblem: boolean, isIdle: boolean, hasNoClusters: boolean): string {
-  if (isProblem) {
-    return tr("loading.title.problem");
-  }
-  if (isIdle) {
-    return tr("loading.title.idle");
-  }
-  if (hasNoClusters) {
-    return tr("loading.title.noMatches");
-  }
-  if (progress >= 100) {
-    return tr("loading.title.ready");
-  }
-  if (progress >= 75) {
-    return tr("loading.title.analyze");
-  }
-  if (progress >= 10) {
-    return tr("loading.title.result");
-  }
-  return tr("loading.title.bundle");
+  loadingStatusPresenter.setStatus(message, progress, kind);
 }
 
 async function loadAccidentsForState(stateCode: string): Promise<AccidentRecord[]> {

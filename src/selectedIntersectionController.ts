@@ -3,6 +3,7 @@ import { ClusterAccidentRecordMatcher, type ClusterAccidentRecordsSnapshot, type
 import { clusterStreetNamesForDisplay } from "./clusterDisplay";
 import { createFactsheetPdf, factsheetFileName, type CreateFactsheetPdfOptions } from "./factsheet";
 import { tr, trf } from "./i18n";
+import type { LoadingStatusKind } from "./loadingStatusPresenter";
 import { RequestGate } from "./requestGate";
 import { errorMessage, type TelemetryMetadata } from "./telemetry";
 import type { AccidentRecord, AnalysisOptions, AnalysisResult, ClusterYearStat, IntersectionCluster } from "./types";
@@ -22,7 +23,6 @@ const STREET_VIEW_OPEN_STORAGE_KEY = "sichere-knoten:street-view-open";
 
 type SelectedIntersectionViewKey = "map" | "details" | "similar";
 type SelectionReason = "auto" | "program" | "user";
-type LoadingStatusKind = "normal" | "problem" | "idle";
 
 interface SelectedIntersectionViewModel {
   cluster: IntersectionCluster;
