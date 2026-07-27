@@ -1,9 +1,9 @@
 import "./styles.css";
 import { AnalysisOptionsForm, analysisOptionsEqual, cloneAnalysisOptions } from "./analysisOptionsForm";
-import { analyzeDangerousIntersectionsInBackground, type AnalysisExecutionPlan } from "./analysisRunner";
+import { AnalysisCoordinator } from "./analysisCoordinator";
 import { AppRouter } from "./appRouter";
 import { BrowseIndexStore, regionOptionLabel, STATE_BROWSE_MAX_INTERSECTIONS, type BrowseIndex } from "./browseIndex";
-import { DataRepository, type AnalysisCacheContext, type DataRepositoryTelemetry } from "./dataRepository";
+import { DataRepository } from "./dataRepository";
 import { clusterLocationText, compareClusterCoreMetric } from "./clusterDisplay";
 import {
   configureNumberLocale,
@@ -13,13 +13,11 @@ import {
   severityPercentValue
 } from "./formatting";
 import { distanceMeters } from "./geo";
-import { escapeHtml } from "./html";
 import { applyStaticTranslations, configureI18n, detectLocale, tr, trf, type AppLocale } from "./i18n";
 import { DEFAULT_LOADING_FACT_META, LOADING_FACTS } from "./loadingFacts";
 import { round } from "./math";
 import { MapCanvas } from "./mapCanvas";
-import { RequestGate, type RequestToken } from "./requestGate";
-import { roadUserFocusKey } from "./roadUsers";
+import { RequestGate } from "./requestGate";
 import { SelectedIntersectionController } from "./selectedIntersectionController";
 import {
   SeverityRankIndexStore,
@@ -30,19 +28,11 @@ import {
 } from "./severityRankIndex";
 import { STATE_NAMES } from "./states";
 import {
-  createInitializationTelemetry,
   createInteractionTelemetry,
-  createPostRenderCacheTelemetry,
-  errorMessage,
   finishInteractionStep,
-  logInitializationTelemetry,
   logInteractionTelemetry,
-  measureInitializationStep,
   measureInteractionStep,
-  recordInitializationStep,
   startInteractionStep,
-  type InitializationTelemetry,
-  type InitializationTelemetryStatus,
   type InteractionTelemetry,
   type TelemetryMetadata
 } from "./telemetry";
@@ -94,15 +84,6 @@ const LOADING_FACT_STORAGE_KEY = "sichere-knoten:loading-fact-index";
 const ACTIVE_LOCALE: AppLocale = detectLocale();
 configureI18n(ACTIVE_LOCALE, TRANSLATIONS);
 configureNumberLocale(ACTIVE_LOCALE);
-interface PendingAnalysisCacheWrite {
-  cacheContext: AnalysisCacheContext;
-  options: AnalysisOptions;
-  result: AnalysisResult;
-}
-
-interface PostRenderCacheWrites {
-  analysis: PendingAnalysisCacheWrite | null;
-}
 
 interface CommittedAnalysisState {
   result: AnalysisResult;
@@ -113,10 +94,8 @@ interface CommittedAnalysisState {
 let accidents: AccidentRecord[] = [];
 let result: AnalysisResult | null = null;
 let committedAnalysis: CommittedAnalysisState | null = null;
-let activeDataVersion: string | null = null;
 let userLocation: { lat: number; lon: number; accuracyMeters: number | null } | null = null;
 let renderedMapClusters: IntersectionCluster[] | null | undefined;
-let postRenderCacheWriteQueue: Promise<void> = Promise.resolve();
 let loadingStatusKind: LoadingStatusKind = "normal";
 let activeInteractionTelemetry: InteractionTelemetry | null = null;
 let isSplashDisplayed = false;
@@ -235,6 +214,28 @@ const analysisOptionsForm = new AnalysisOptionsForm(
     onDraftChange: markAnalysisSettingsDirty
   }
 );
+const analysisCoordinator = new AnalysisCoordinator({
+  dataRepository,
+  requestGate,
+  appVersion: APP_CACHE_VERSION,
+  analysisCacheVersion: ANALYSIS_CACHE_VERSION,
+  readOptions: () => analysisOptionsForm.readOptions(),
+  normalizeOptionsDraft: () => analysisOptionsForm.normalizeClusterRadius(),
+  resetRuntimeState: resetRuntimeAnalysisState,
+  onAccidentsLoaded: (records, context) => {
+    if (context.scope === "analysis" && context.options?.stateCode !== "all") {
+      return;
+    }
+    handleAccidentsLoaded(records);
+  },
+  commitAnalysisState: (options, analysisResult, dataVersion) => commitAnalysisState(options, analysisResult, dataVersion),
+  populateFilters,
+  renderAll,
+  scheduleSelectionSupportPrewarm,
+  scheduleAfterFirstRender,
+  setBusy,
+  setStatus
+});
 const selectedIntersectionPanelView = new SelectedIntersectionPanelView({
   container: elements.selectionDetails,
   formatSeverityPercentWithContext
@@ -402,7 +403,7 @@ function startApp(): void {
   appRouter.setView(appRouter.initialView());
   renderAll();
   void checkForFreshDeploymentHtml();
-  void loadBundledData();
+  void analysisCoordinator.loadBundledData();
 }
 
 function wireEvents(): void {
@@ -417,7 +418,7 @@ function wireEvents(): void {
 
 function wireApplicationCommands(): void {
   elements.resetAppBtn.addEventListener("click", () => void resetApp());
-  elements.analyzeBtn.addEventListener("click", () => runAnalysis());
+  elements.analyzeBtn.addEventListener("click", () => analysisCoordinator.runAnalysis());
   elements.exportBtn.addEventListener("click", exportClusters);
   selectedIntersectionController.bindEvents();
 }
@@ -613,17 +614,6 @@ function reloadFreshDeploymentHtml(latestAppVersion: string): void {
   window.location.replace(url.href);
 }
 
-function repositoryTelemetry(telemetry: InitializationTelemetry | null): DataRepositoryTelemetry | null {
-  if (!telemetry) {
-    return null;
-  }
-
-  return {
-    measure: (name, detail, work, metadata) => measureInitializationStep(telemetry, name, detail, work, metadata),
-    record: (name, detail, metadata) => recordInitializationStep(telemetry, name, detail, metadata)
-  };
-}
-
 function clearCommittedAnalysisState(): void {
   result = null;
   committedAnalysis = null;
@@ -632,16 +622,30 @@ function clearCommittedAnalysisState(): void {
   analysisOptionsForm.setDirty(false);
 }
 
-function commitAnalysisState(options: AnalysisOptions, analysisResult: AnalysisResult): void {
+function resetRuntimeAnalysisState(): void {
+  accidents = [];
+  clearCommittedAnalysisState();
+}
+
+function commitAnalysisState(options: AnalysisOptions, analysisResult: AnalysisResult, dataVersion: string | null): void {
   result = analysisResult;
   committedAnalysis = {
     result: analysisResult,
     options: cloneAnalysisOptions(options),
-    dataVersion: activeDataVersion
+    dataVersion
   };
   selectedIntersectionController.resetSelectionState();
   clearAnalysisDerivedState();
   analysisOptionsForm.setDirty(false);
+}
+
+function handleAccidentsLoaded(records: AccidentRecord[]): void {
+  if (accidents === records) {
+    return;
+  }
+  accidents = records;
+  selectedIntersectionController.clearAccidentRecordCaches();
+  populateFilters();
 }
 
 function clearAnalysisDerivedState(): void {
@@ -657,247 +661,6 @@ function invalidateRenderedAnalysisViews(): void {
   stateRegionView.invalidate();
   intersectionFeatureSummaryView.invalidate();
   tableView.invalidate();
-}
-
-async function loadBundledData(): Promise<void> {
-  const telemetry = createInitializationTelemetry(APP_CACHE_VERSION);
-  setBusy(true);
-  let analysisStarted = false;
-  try {
-    accidents = [];
-    clearCommittedAnalysisState();
-    dataRepository.resetRuntimeState();
-    activeDataVersion = null;
-    populateFilters();
-    renderAll();
-    setStatus(tr("status.loadingDataManifest"), 2);
-    await dataRepository.ensureManifest(repositoryTelemetry(telemetry));
-    const dataVersion = dataRepository.dataVersion();
-    telemetry.dataVersion = dataVersion;
-    activeDataVersion = dataVersion;
-    populateFilters();
-    recordInitializationStep(telemetry, "skip parsed data cache", dataVersion, {
-      reason: "normalized bundle is faster than IndexedDB object cache"
-    });
-
-    const options = analysisOptionsForm.readOptions();
-    const cacheContext = { dataVersion, appVersion: ANALYSIS_CACHE_VERSION };
-    const bundledDefaultAnalysis = await dataRepository.readDefaultAnalysis(
-      dataVersion,
-      ANALYSIS_CACHE_VERSION,
-      options,
-      analysisTelemetryDetail(options),
-      repositoryTelemetry(telemetry)
-    );
-    if (bundledDefaultAnalysis) {
-      commitAnalysisState(options, bundledDefaultAnalysis);
-      await measureInitializationStep(
-        telemetry,
-        "render analysis results",
-        analysisTelemetryDetail(options),
-        async () => {
-          renderAll();
-        },
-        () => ({ clusterCount: result?.clusters.length ?? 0 })
-      );
-      scheduleSelectionSupportPrewarm();
-      setStatus(trf("status.intersectionClustersLoadedFromBundle", { count: formatInteger(bundledDefaultAnalysis.clusters.length) }), 100);
-      setBusy(false);
-      logInitializationTelemetry(telemetry, "done");
-      return;
-    }
-
-    setStatus(tr("status.checkingAnalysisCache"), 20);
-    const cachedAnalysis = await measureInitializationStep(
-      telemetry,
-      "read analysis cache",
-      analysisTelemetryDetail(options),
-      () => dataRepository.readCachedAnalysis(cacheContext, options),
-      (cachedResult) => ({
-        cacheHit: Boolean(cachedResult),
-        clusterCount: cachedResult?.clusters.length ?? 0
-      })
-    );
-    if (cachedAnalysis) {
-      commitAnalysisState(options, cachedAnalysis);
-      await measureInitializationStep(
-        telemetry,
-        "render analysis results",
-        analysisTelemetryDetail(options),
-        async () => {
-          renderAll();
-        },
-        () => ({ clusterCount: result?.clusters.length ?? 0 })
-      );
-      scheduleSelectionSupportPrewarm();
-      setStatus(trf("status.intersectionClustersLoadedFromCache", { count: formatInteger(cachedAnalysis.clusters.length) }), 100);
-      setBusy(false);
-      logInitializationTelemetry(telemetry, "done");
-      return;
-    }
-
-    setStatus(tr("status.cacheMissParsingBundled"), 10);
-    await loadAccidentData(telemetry);
-    setStatus(trf("status.accidentRecordsLoaded", { count: formatInteger(accidents.length) }), 60);
-
-    analysisStarted = true;
-    const requestToken = requestGate.start("analysis", "startup fallback");
-    void runAnalysisWithCache(options, cacheContext, telemetry, "analysis cache already missed before accident records loaded", null, requestToken);
-  } catch (error) {
-    setStatus(errorMessage(error), 0, "problem");
-    logInitializationTelemetry(telemetry, "error");
-  } finally {
-    if (!analysisStarted) {
-      setBusy(false);
-    }
-  }
-}
-
-function runAnalysis(initializationTelemetry: InitializationTelemetry | null = null): void {
-  analysisOptionsForm.normalizeClusterRadius();
-  const options = analysisOptionsForm.readOptions();
-  const cacheContext = activeDataVersion ? { dataVersion: activeDataVersion, appVersion: ANALYSIS_CACHE_VERSION } : null;
-  const requestToken = requestGate.start("analysis", analysisTelemetryDetail(options));
-  setBusy(true);
-  void runAnalysisWhenAccidentsReady(requestToken, options, cacheContext, initializationTelemetry);
-}
-
-async function runAnalysisWhenAccidentsReady(
-  requestToken: RequestToken,
-  options: AnalysisOptions,
-  cacheContext: AnalysisCacheContext | null,
-  initializationTelemetry: InitializationTelemetry | null
-): Promise<void> {
-  try {
-    await runAnalysisWithCache(options, cacheContext, initializationTelemetry, null, null, requestToken);
-  } catch (error) {
-    if (requestGate.isCurrent(requestToken)) {
-      setStatus(errorMessage(error), 0, "problem");
-      setBusy(false);
-      logInitializationTelemetry(initializationTelemetry, "error");
-    }
-  }
-}
-
-async function runAnalysisWithCache(
-  options: AnalysisOptions,
-  cacheContext: AnalysisCacheContext | null,
-  initializationTelemetry: InitializationTelemetry | null = null,
-  skipAnalysisCacheReason: string | null = null,
-  analysisAccidents: AccidentRecord[] | null = null,
-  requestToken: RequestToken | null = null
-): Promise<void> {
-  let telemetryStatus: InitializationTelemetryStatus = "done";
-  try {
-    if (cacheContext && skipAnalysisCacheReason) {
-      recordInitializationStep(initializationTelemetry, "skip analysis cache", analysisTelemetryDetail(options), {
-        reason: skipAnalysisCacheReason
-      });
-    } else if (cacheContext) {
-      setStatus(tr("status.checkingAnalysisCache"), 75);
-      const cached = await measureInitializationStep(
-        initializationTelemetry,
-        "read analysis cache",
-        analysisTelemetryDetail(options),
-        () => dataRepository.readCachedAnalysis(cacheContext, options),
-        (cachedResult) => ({
-          cacheHit: Boolean(cachedResult),
-          clusterCount: cachedResult?.clusters.length ?? 0
-        })
-      );
-      if (cached) {
-        if (requestToken && !requestGate.isCurrent(requestToken)) {
-          return;
-        }
-        commitAnalysisState(options, cached);
-        await measureInitializationStep(
-          initializationTelemetry,
-          "render analysis results",
-          analysisTelemetryDetail(options),
-          async () => {
-            renderAll();
-          },
-          () => ({ clusterCount: result?.clusters.length ?? 0 })
-        );
-        scheduleSelectionSupportPrewarm();
-        setStatus(trf("status.intersectionClustersLoadedFromCache", { count: formatInteger(cached.clusters.length) }), 100);
-        return;
-      }
-    }
-
-    if (requestToken && !requestGate.isCurrent(requestToken)) {
-      return;
-    }
-    setStatus(tr("status.analyzingIntersections"), 75);
-    await yieldToBrowser();
-    let analysisPlan: AnalysisExecutionPlan | null = null;
-    const sourceAccidents = analysisAccidents ?? (await loadAccidentsForAnalysis(options, initializationTelemetry));
-    if (requestToken && !requestGate.isCurrent(requestToken)) {
-      return;
-    }
-    const analyzedResult = await measureInitializationStep(
-      initializationTelemetry,
-      "analyze intersections",
-      analysisTelemetryDetail(options),
-      () =>
-        analyzeDangerousIntersectionsInBackground(sourceAccidents, options, (plan) => {
-          analysisPlan = plan;
-          if (!requestToken || requestGate.isCurrent(requestToken)) {
-            updateAnalysisPlanStatus();
-          }
-        }),
-      (analysisResult) => ({
-        accidentCount: sourceAccidents.length,
-        filteredAccidentCount: analysisResult.filteredAccidentCount,
-        clusterCount: analysisResult.clusters.length,
-        workerCount: analysisPlan?.workerCount ?? 0,
-        partitionCount: analysisPlan?.partitionCount ?? 1,
-        background: analysisPlan?.background ?? false,
-        fallback: analysisPlan?.fallback ?? false,
-        parallel: analysisPlan?.parallel ?? false
-      })
-    );
-    if (requestToken && !requestGate.isCurrent(requestToken)) {
-      return;
-    }
-    commitAnalysisState(options, analyzedResult);
-    await measureInitializationStep(
-      initializationTelemetry,
-      "render analysis results",
-      analysisTelemetryDetail(options),
-      async () => {
-        renderAll();
-      },
-      () => ({ clusterCount: result?.clusters.length ?? 0 })
-    );
-    scheduleSelectionSupportPrewarm();
-
-    setStatus(trf("status.intersectionClustersAnalyzed", { count: formatInteger(analyzedResult.clusters.length) }), 100);
-    enqueuePostRenderCacheWrites(initializationTelemetry, {
-      analysis:
-        cacheContext
-          ? {
-              cacheContext,
-              options: cloneAnalysisOptions(options),
-              result: analyzedResult
-            }
-          : null
-    });
-  } catch (error) {
-    if (!requestToken || requestGate.isCurrent(requestToken)) {
-      telemetryStatus = "error";
-      setStatus(errorMessage(error), 0, "problem");
-    }
-  } finally {
-    if (!requestToken || requestGate.isCurrent(requestToken)) {
-      setBusy(false);
-      logInitializationTelemetry(initializationTelemetry, telemetryStatus);
-    }
-  }
-}
-
-function updateAnalysisPlanStatus(): void {
-  setStatus(tr("status.analyzingIntersections"), 75);
 }
 
 function populateFilters(): void {
@@ -1156,13 +919,6 @@ function geolocationErrorMessage(error: GeolocationPositionError): string {
     default:
       return tr("status.locationFailed");
   }
-}
-
-function renderTables(): void {
-  stateRegionView.renderAll();
-  intersectionFeatureSummaryView.render();
-  tableView.render();
-  similarView.renderIfVisible();
 }
 
 function renderActiveAnalysisView(): void {
@@ -1464,93 +1220,13 @@ function loadingTitle(progress: number, isProblem: boolean, isIdle: boolean, has
   return tr("loading.title.bundle");
 }
 
-async function loadAccidentData(
-  telemetry: InitializationTelemetry | null,
-  options: { updateStatus?: boolean } = {}
-): Promise<AccidentRecord[]> {
-  const records = await dataRepository.loadAllAccidents(
-    repositoryTelemetry(telemetry),
-    options.updateStatus ?? true
-      ? ({ current, total }) => {
-          setStatus(trf("status.loadingBundledChunk", { current, total }), Math.min(60, 10 + Math.floor((current / total) * 50)));
-        }
-      : null
-  );
-  if (accidents !== records) {
-    accidents = records;
-    selectedIntersectionController.clearAccidentRecordCaches();
-    populateFilters();
-  }
-  return accidents;
-}
-
-async function loadAccidentsForAnalysis(
-  options: AnalysisOptions,
-  telemetry: InitializationTelemetry | null
-): Promise<AccidentRecord[]> {
-  const records = await dataRepository.loadAccidentsForAnalysis(
-    options,
-    repositoryTelemetry(telemetry),
-    ({ current, total }) => {
-      setStatus(trf("status.loadingBundledChunk", { current, total }), Math.min(60, 10 + Math.floor((current / total) * 50)));
-    }
-  );
-  if (options.stateCode === "all" && accidents !== records) {
-    accidents = records;
-    selectedIntersectionController.clearAccidentRecordCaches();
-    populateFilters();
-  }
-  return records;
-}
-
-async function loadAccidentsForState(stateCode: string, telemetry: InitializationTelemetry | null = null): Promise<AccidentRecord[]> {
-  return dataRepository.loadAccidentsForState(stateCode, repositoryTelemetry(telemetry));
+async function loadAccidentsForState(stateCode: string): Promise<AccidentRecord[]> {
+  return dataRepository.loadAccidentsForState(stateCode, null);
 }
 
 function csvCell(value: unknown): string {
   const raw = String(value ?? "");
   return /[",\n]/.test(raw) ? `"${raw.replace(/"/g, '""')}"` : raw;
-}
-
-function enqueuePostRenderCacheWrites(
-  initializationTelemetry: InitializationTelemetry | null,
-  writes: PostRenderCacheWrites
-): void {
-  if (!writes.analysis) {
-    return;
-  }
-
-  const telemetry = createPostRenderCacheTelemetry(initializationTelemetry);
-  scheduleAfterFirstRender(() => {
-    postRenderCacheWriteQueue = postRenderCacheWriteQueue
-      .catch(() => undefined)
-      .then(() => writePostRenderCaches(telemetry, writes));
-    void postRenderCacheWriteQueue;
-  });
-}
-
-async function writePostRenderCaches(telemetry: InitializationTelemetry | null, writes: PostRenderCacheWrites): Promise<void> {
-  let status: Exclude<InitializationTelemetryStatus, "running"> = "done";
-
-  if (writes.analysis) {
-    try {
-      await measureInitializationStep(
-        telemetry,
-        "write analysis cache",
-        analysisTelemetryDetail(writes.analysis.options),
-        () => dataRepository.writeCachedAnalysis(writes.analysis!.cacheContext, writes.analysis!.options, writes.analysis!.result),
-        () => ({
-          clusterCount: writes.analysis?.result.clusters.length ?? 0,
-          afterFirstRender: true
-        })
-      );
-    } catch (error) {
-      status = "error";
-      console.warn("[Safe Intersections] Could not write analysis cache after startup.", error);
-    }
-  }
-
-  logInitializationTelemetry(telemetry, status, "post-render cache telemetry");
 }
 
 function scheduleAfterFirstRender(work: () => void): void {
@@ -1624,16 +1300,6 @@ function scheduleInteractionTelemetryLog(telemetry: InteractionTelemetry): void 
       }
     });
   });
-}
-
-function analysisTelemetryDetail(options: AnalysisOptions): string {
-  const years = Array.from(options.years).sort((a, b) => a - b).join(",") || "all";
-  const roadUsers = roadUserFocusKey(options.roadUserFocus) || "all";
-  return `state=${options.stateCode}; years=${years}; roadUsers=${roadUsers}; radius=${options.clusterRadiusMeters}m; minAccidents=${options.minAccidents}`;
-}
-
-function yieldToBrowser(): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, 0));
 }
 
 function byId<T extends HTMLElement>(id: string): T {

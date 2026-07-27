@@ -37,6 +37,19 @@ export function deserializeAnalysisOptions(options: SerializedAnalysisOptions): 
   };
 }
 
+export function cloneAnalysisOptions(options: AnalysisOptions): AnalysisOptions {
+  return {
+    ...options,
+    years: new Set(options.years),
+    roadUserFocus: new Set(options.roadUserFocus),
+    severityPercent: { ...options.severityPercent }
+  };
+}
+
+export function analysisOptionsEqual(left: AnalysisOptions, right: AnalysisOptions): boolean {
+  return serializedAnalysisOptionsEqual(serializeAnalysisOptions(left), serializeAnalysisOptions(right));
+}
+
 export function analysisOptionsMetadataMatches(
   metadata: AnalysisOptionsMetadata | null | undefined,
   dataVersion: string,

@@ -1,9 +1,10 @@
-import { serializeAnalysisOptions } from "./analysisOptions";
 import { tr } from "./i18n";
 import { clampNumber, round } from "./math";
 import { ROAD_USER_DEFINITIONS } from "./roadUsers";
 import { STATE_NAMES } from "./states";
 import type { AnalysisOptions, RoadUserKey, SeverityPercentOptions } from "./types";
+
+export { analysisOptionsEqual, cloneAnalysisOptions } from "./analysisOptions";
 
 export interface AnalysisOptionsFormElements {
   analyzeButton: HTMLButtonElement;
@@ -297,17 +298,4 @@ export class AnalysisOptionsForm {
   private inputMax(input: HTMLInputElement): number {
     return input.max === "" ? Number.POSITIVE_INFINITY : Number(input.max);
   }
-}
-
-export function cloneAnalysisOptions(options: AnalysisOptions): AnalysisOptions {
-  return {
-    ...options,
-    years: new Set(options.years),
-    roadUserFocus: new Set(options.roadUserFocus),
-    severityPercent: { ...options.severityPercent }
-  };
-}
-
-export function analysisOptionsEqual(left: AnalysisOptions, right: AnalysisOptions): boolean {
-  return JSON.stringify(serializeAnalysisOptions(left)) === JSON.stringify(serializeAnalysisOptions(right));
 }

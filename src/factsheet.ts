@@ -508,10 +508,10 @@ function drawFactsheetRows(layout: FactsheetLayout, rows: Array<[string, string]
     const drawContext = layout.context;
     drawContext.font = factsheetFont(18, 600);
     drawContext.fillStyle = "#53636d";
-    drawCanvasTextLines(layout, drawContext, labelLines, labelX, layout.y + 18, lineHeight);
+    drawCanvasTextLines(layout, labelLines, labelX, layout.y + 18, lineHeight);
     drawContext.font = factsheetFont(18, 500);
     drawContext.fillStyle = "#172126";
-    drawCanvasTextLines(layout, drawContext, valueLines, valueX, layout.y + 18, lineHeight);
+    drawCanvasTextLines(layout, valueLines, valueX, layout.y + 18, lineHeight);
     layout.y += lineCount * lineHeight + 8;
   }
 }
@@ -569,7 +569,6 @@ function drawFactsheetLines(layout: FactsheetLayout, lines: string[], x: number,
 
 function drawCanvasTextLines(
   layout: FactsheetLayout,
-  context: CanvasRenderingContext2D,
   lines: string[],
   x: number,
   y: number,
@@ -679,7 +678,7 @@ async function drawFactsheetOsmMap(
 
   drawFactsheetOsmMarkers(context, cluster, records, x, y, width, height, zoom, topLeft);
   context.restore();
-  drawFactsheetMapAttribution(context, x, y, width, height);
+  drawFactsheetMapAttribution(context, x, y, height);
 }
 
 function drawFactsheetOsmMarkers(
@@ -731,7 +730,7 @@ function drawFactsheetOsmMarkers(
   context.textBaseline = "alphabetic";
 }
 
-function drawFactsheetMapAttribution(context: CanvasRenderingContext2D, x: number, y: number, width: number, height: number): void {
+function drawFactsheetMapAttribution(context: CanvasRenderingContext2D, x: number, y: number, height: number): void {
   const label = tr("factsheet.mapAttribution");
   context.font = factsheetFont(15, 600);
   const labelWidth = context.measureText(label).width + 14;
