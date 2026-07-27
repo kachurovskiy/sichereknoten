@@ -3,14 +3,14 @@ import { AnalysisOptionsForm, analysisOptionsEqual, cloneAnalysisOptions } from 
 import { AnalysisCoordinator } from "./analysisCoordinator";
 import { AppRouter } from "./appRouter";
 import { BrowseIndexStore, regionOptionLabel, STATE_BROWSE_MAX_INTERSECTIONS, type BrowseIndex } from "./browseIndex";
+import { clustersCsv } from "./clusterCsvExport";
 import { DataRepository } from "./dataRepository";
 import { clusterLocationText, compareClusterCoreMetric } from "./clusterDisplay";
 import {
   configureNumberLocale,
   formatDistance,
   formatInteger,
-  formatSeverityPercent,
-  severityPercentValue
+  formatSeverityPercent
 } from "./formatting";
 import { distanceMeters } from "./geo";
 import { applyStaticTranslations, configureI18n, detectLocale, tr, trf, type AppLocale } from "./i18n";
@@ -1038,60 +1038,13 @@ function exportClusters(): void {
     return;
   }
 
-  const header = [
-    "state",
-    "administrative_region",
-    "administrative_region_population",
-    "district",
-    "municipality",
-    "municipality_population",
-    "lat",
-    "lon",
-    "accidents",
-    "fatal",
-    "serious",
-    "osm_roundabout",
-    "osm_traffic_signal",
-    "severity_percent"
-  ];
-  const rows = result.clusters.map((cluster) =>
-    [
-      cluster.stateName,
-      cluster.administrativeRegionName ?? "",
-      cluster.administrativeRegionPopulation ?? "",
-      cluster.districtName ?? "",
-      cluster.municipalityName ?? "",
-      cluster.municipalityPopulation ?? "",
-      cluster.lat,
-      cluster.lon,
-      cluster.accidentCount,
-      cluster.fatalCount,
-      cluster.seriousCount,
-      osmBooleanCsvValue(cluster.osmRoundabout),
-      osmBooleanCsvValue(cluster.osmTrafficSignal),
-      severityPercentValue(cluster)
-    ]
-      .map(csvCell)
-      .join(",")
-  );
-
-  const blob = new Blob([[header.join(","), ...rows].join("\n")], { type: "text/csv;charset=utf-8" });
+  const blob = new Blob([clustersCsv(result.clusters)], { type: "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
   link.download = "high-severity-intersections.csv";
   link.click();
   URL.revokeObjectURL(url);
-}
-
-function osmBooleanCsvValue(value: boolean | null | undefined): string {
-  if (value === true) {
-    return "yes";
-  }
-  if (value === false) {
-    return "no";
-  }
-  return "unknown";
 }
 
 function showNextLoadingFact(): void {
@@ -1181,11 +1134,6 @@ function loadingTitle(progress: number, isProblem: boolean, isIdle: boolean, has
 
 async function loadAccidentsForState(stateCode: string): Promise<AccidentRecord[]> {
   return dataRepository.loadAccidentsForState(stateCode, null);
-}
-
-function csvCell(value: unknown): string {
-  const raw = String(value ?? "");
-  return /[",\n]/.test(raw) ? `"${raw.replace(/"/g, '""')}"` : raw;
 }
 
 function scheduleAfterFirstRender(work: () => void): void {
