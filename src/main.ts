@@ -1,6 +1,7 @@
 import "./styles.css";
-import { AnalysisOptionsForm, analysisOptionsEqual, cloneAnalysisOptions } from "./analysisOptionsForm";
+import { AnalysisOptionsForm, analysisOptionsEqual } from "./analysisOptionsForm";
 import { AnalysisCoordinator } from "./analysisCoordinator";
+import { AppState } from "./appState";
 import { AppRouter } from "./appRouter";
 import { BrowseIndexStore, regionOptionLabel, STATE_BROWSE_MAX_INTERSECTIONS, type BrowseIndex } from "./browseIndex";
 import { clustersCsv } from "./clusterCsvExport";
@@ -70,17 +71,7 @@ const ACTIVE_LOCALE: AppLocale = detectLocale();
 configureI18n(ACTIVE_LOCALE, TRANSLATIONS);
 configureNumberLocale(ACTIVE_LOCALE);
 
-interface CommittedAnalysisState {
-  result: AnalysisResult;
-  options: AnalysisOptions;
-  dataVersion: string | null;
-}
-
-let accidents: AccidentRecord[] = [];
-let result: AnalysisResult | null = null;
-let committedAnalysis: CommittedAnalysisState | null = null;
-let userLocation: { lat: number; lon: number; accuracyMeters: number | null } | null = null;
-let renderedMapClusters: IntersectionCluster[] | null | undefined;
+const appState = new AppState();
 let loadingFactFallbackIndex = 0;
 let pendingUrlIntersectionSelection: IntersectionUrlSelection | null = readIntersectionSelectionFromUrl();
 
@@ -203,7 +194,7 @@ const loadingStatusPresenter = new LoadingStatusPresenter({
     mapLoadingStatus: elements.mapLoadingStatus,
     mapLoadingBar: elements.mapLoadingBar
   },
-  hasNoClusters: () => Boolean(result && result.clusters.length === 0),
+  hasNoClusters: () => Boolean(appState.result && appState.result.clusters.length === 0),
   onShowSplash: showNextLoadingFact,
   translate: tr
 });
@@ -241,13 +232,13 @@ let exploreView: ExploreView;
 let unclusteredIncidentLayer: UnclusteredIncidentLayer;
 const intersectionFeatureSummaryView = new IntersectionFeatureSummaryView({
   container: elements.intersectionFeatureSummary,
-  getResult: () => result
+  getResult: () => appState.result
 });
 const selectedPreviewMapView = new SelectedPreviewMapView({
   container: elements.selectedPreviewMap,
   canvas: elements.selectedPreviewCanvas,
   getSelectedClusterId: () => selectedIntersectionController.selectedClusterId,
-  clusterRadiusMeters: () => committedAnalysis?.options.clusterRadiusMeters ?? 50
+  clusterRadiusMeters: () => appState.committedAnalysis?.options.clusterRadiusMeters ?? 50
 });
 const map = new MapCanvas(
   elements.mapCanvas,
@@ -259,7 +250,7 @@ const map = new MapCanvas(
 );
 unclusteredIncidentLayer = new UnclusteredIncidentLayer({
   map,
-  getAnalysisState: () => committedAnalysis,
+  getAnalysisState: () => appState.committedAnalysis,
   hasStateShard: (stateCode) => dataRepository.hasStateShard(stateCode),
   loadAccidentsForState: (stateCode) => loadAccidentsForState(stateCode)
 });
@@ -285,9 +276,10 @@ selectedIntersectionController = new SelectedIntersectionController({
   previewMapView: selectedPreviewMapView,
   map,
   requestGate,
-  getAnalysisResult: () => result,
-  getAnalysisOptions: () => committedAnalysis?.options ?? analysisOptionsForm.readOptions(),
-  getCachedAccidentsForState: (stateCode) => dataRepository.cachedAccidentsForStateOrAll(stateCode) ?? (accidents.length > 0 ? accidents : null),
+  getAnalysisResult: () => appState.result,
+  getAnalysisOptions: () => appState.committedAnalysis?.options ?? analysisOptionsForm.readOptions(),
+  getCachedAccidentsForState: (stateCode) =>
+    dataRepository.cachedAccidentsForStateOrAll(stateCode) ?? appState.allAccidentsSnapshot(),
   hasAccidentStateShard: (stateCode) => dataRepository.hasStateShard(stateCode),
   loadAccidentsForState: (stateCode) => loadAccidentsForState(stateCode),
   latestBundledFileDate: () => dataRepository.latestBundledFileDate(),
@@ -358,13 +350,13 @@ clusterSelectionCoordinator = new ClusterSelectionCoordinator({
 });
 const tableView = new TableView({
   body: elements.clusterTableBody,
-  getResult: () => result,
+  getResult: () => appState.result,
   getStateFilterValue: () => elements.stateFilter.value,
   selectCluster: (cluster) => clusterSelectionCoordinator.selectCluster(cluster)
 });
 similarView = new SimilarView({
   container: elements.similarIntersections,
-  getResult: () => result,
+  getResult: () => appState.result,
   getSelectedCluster: () => selectedIntersectionController.selectedCluster,
   getSelectedRoadClassSignature: () => selectedIntersectionController.selectedRoadClassSignature,
   getActiveView: () => appRouter.activeView,
@@ -379,15 +371,15 @@ const stateRegionView = new StateRegionView({
   regionPopulationRates: elements.regionPopulationRates,
   regionPopulationScatter: elements.regionPopulationScatter,
   regionSeverityCorrelationScatter: elements.regionSeverityCorrelationScatter,
-  getResult: () => result,
+  getResult: () => appState.result,
   getRegionSummaries: () => browseIndexForCurrentResult()?.regionSummaries ?? []
 });
 exploreView = new ExploreView({
   nearbyList: elements.nearbyList,
   stateHotspotList: elements.stateHotspotList,
   maxIntersections: STATE_BROWSE_MAX_INTERSECTIONS,
-  getResult: () => result,
-  getUserLocation: () => userLocation,
+  getResult: () => appState.result,
+  getUserLocation: () => appState.userLocation,
   getSelectedCluster: () => selectedIntersectionController.selectedCluster,
   getBrowseStateValue: () => elements.browseState.value,
   getBrowseRegionValue: () => elements.browseRegion.value,
@@ -569,6 +561,7 @@ function rankChartTooltip(chart: HTMLElement): HTMLElement | null {
 }
 
 function markAnalysisSettingsDirty(): void {
+  const committedAnalysis = appState.committedAnalysis;
   if (!dataRepository.hasAnyAccidents() && !committedAnalysis) {
     return;
   }
@@ -618,36 +611,24 @@ function reloadFreshDeploymentHtml(latestAppVersion: string): void {
   window.location.replace(url.href);
 }
 
-function clearCommittedAnalysisState(): void {
-  result = null;
-  committedAnalysis = null;
+function resetRuntimeAnalysisState(): void {
+  appState.resetRuntimeAnalysis();
   selectedIntersectionController.resetSelectionState();
   clearAnalysisDerivedState();
   analysisOptionsForm.setDirty(false);
 }
 
-function resetRuntimeAnalysisState(): void {
-  accidents = [];
-  clearCommittedAnalysisState();
-}
-
 function commitAnalysisState(options: AnalysisOptions, analysisResult: AnalysisResult, dataVersion: string | null): void {
-  result = analysisResult;
-  committedAnalysis = {
-    result: analysisResult,
-    options: cloneAnalysisOptions(options),
-    dataVersion
-  };
+  appState.commitAnalysis(options, analysisResult, dataVersion);
   selectedIntersectionController.resetSelectionState();
   clearAnalysisDerivedState();
   analysisOptionsForm.setDirty(false);
 }
 
 function handleAccidentsLoaded(records: AccidentRecord[]): void {
-  if (accidents === records) {
+  if (!appState.setAccidents(records)) {
     return;
   }
-  accidents = records;
   selectedIntersectionController.clearAccidentRecordCaches();
   populateFilters();
 }
@@ -661,7 +642,7 @@ function clearAnalysisDerivedState(): void {
 }
 
 function invalidateRenderedAnalysisViews(): void {
-  renderedMapClusters = undefined;
+  appState.invalidateRenderedMapClusters();
   stateRegionView.invalidate();
   intersectionFeatureSummaryView.invalidate();
   tableView.invalidate();
@@ -689,7 +670,7 @@ function populateFilters(): void {
 
 function updateBrowseRegionOptions(preferredRegion = elements.browseRegion.value): void {
   const stateCode = elements.browseState.value;
-  const shouldShow = Boolean(result) && stateCode !== "all";
+  const shouldShow = Boolean(appState.result) && stateCode !== "all";
   elements.browseRegionField.hidden = !shouldShow;
   elements.browseRegion.disabled = !shouldShow;
 
@@ -710,21 +691,11 @@ function updateBrowseRegionOptions(preferredRegion = elements.browseRegion.value
 }
 
 function stateCodesForFilters(): Set<string> {
-  if (accidents.length > 0) {
-    return new Set(accidents.map((accident) => accident.stateCode));
-  }
-  return new Set(Object.keys(STATE_NAMES));
+  return appState.availableStateCodes(Object.keys(STATE_NAMES));
 }
 
 function yearsForFilters(): number[] {
-  if (accidents.length > 0) {
-    return Array.from(new Set(accidents.map((accident) => accident.year).filter(Boolean))).sort((a, b) => a - b);
-  }
-  const manifestYears = bundledDataYears();
-  if (manifestYears.length > 0) {
-    return manifestYears;
-  }
-  return result?.years ?? [];
+  return appState.availableYears(bundledDataYears());
 }
 
 function bundledDataYears(): number[] {
@@ -740,18 +711,19 @@ function renderAll(): void {
 }
 
 function renderMapResults(): void {
-  if (result) {
-    if (renderedMapClusters !== result.clusters) {
-      map.setData(result.clusters);
-      renderedMapClusters = result.clusters;
+  const currentResult = appState.result;
+  if (currentResult) {
+    if (appState.renderedMapClusters !== currentResult.clusters) {
+      map.setData(currentResult.clusters);
+      appState.markRenderedMapClusters(currentResult.clusters);
     }
-    elements.mapEmpty.hidden = result.clusters.length > 0;
+    elements.mapEmpty.hidden = currentResult.clusters.length > 0;
     updateMapLegendVisibility();
     applyPendingUrlIntersectionSelection();
   } else {
-    if (renderedMapClusters !== null) {
+    if (appState.renderedMapClusters !== null) {
       map.setData([]);
-      renderedMapClusters = null;
+      appState.markRenderedMapClusters(null);
     }
     elements.mapEmpty.hidden = false;
     elements.mapIncidentLegend.hidden = true;
@@ -761,7 +733,7 @@ function renderMapResults(): void {
 }
 
 function applyPendingUrlIntersectionSelection(): void {
-  if (!pendingUrlIntersectionSelection || !result) {
+  if (!pendingUrlIntersectionSelection || !appState.result) {
     return;
   }
 
@@ -777,7 +749,7 @@ function applyPendingUrlIntersectionSelection(): void {
 
 function nearestClusterTo(point: LatLon): { cluster: IntersectionCluster; distanceMeters: number } | null {
   let nearest: { cluster: IntersectionCluster; distanceMeters: number } | null = null;
-  for (const cluster of result?.clusters ?? []) {
+  for (const cluster of appState.result?.clusters ?? []) {
     const clusterDistance = distanceMeters(point, cluster);
     if (
       !nearest ||
@@ -817,7 +789,7 @@ function setMapIncidentLegendVisible(isVisible: boolean): void {
 }
 
 function updateMapLegendVisibility(): void {
-  const hasIntersections = Boolean(result && result.clusters.length > 0);
+  const hasIntersections = Boolean(appState.result && appState.result.clusters.length > 0);
   const hasIncidentLegend = !elements.mapIncidentLegend.hidden;
   elements.mapIntersectionLegend.hidden = hasIncidentLegend || !hasIntersections;
 }
@@ -840,8 +812,9 @@ function locateUser(options: { selectNearest: boolean }): void {
   navigator.geolocation.getCurrentPosition(
     (position) => {
       const { latitude, longitude, accuracy } = position.coords;
-      userLocation = { lat: latitude, lon: longitude, accuracyMeters: accuracy };
-      map.setUserLocation(userLocation, !options.selectNearest);
+      const location = { lat: latitude, lon: longitude, accuracyMeters: accuracy };
+      appState.setUserLocation(location);
+      map.setUserLocation(location, !options.selectNearest);
       elements.locateMeBtn.classList.add("located");
       setLocateBusy(false);
       exploreView.render();
@@ -911,7 +884,7 @@ function renderActiveAnalysisView(): void {
 }
 
 function browseIndexForCurrentResult(): BrowseIndex | null {
-  return browseIndexes.forClusters(result?.clusters);
+  return browseIndexes.forClusters(appState.result?.clusters);
 }
 
 function formatSeverityPercentWithContext(cluster: IntersectionCluster): string {
@@ -941,7 +914,7 @@ function formatSeverityPercentWithContext(cluster: IntersectionCluster): string 
 }
 
 function severityRankContext(cluster: IntersectionCluster): SeverityRankContext | null {
-  return severityRankIndexes.contextForCluster(result?.clusters, cluster, severityRankIndexHooks(cluster));
+  return severityRankIndexes.contextForCluster(appState.result?.clusters, cluster, severityRankIndexHooks(cluster));
 }
 
 function severityRankIndexHooks(cluster: IntersectionCluster | null): SeverityRankIndexHooks {
@@ -998,12 +971,13 @@ async function resetApp(): Promise<void> {
 }
 
 function exportClusters(): void {
-  if (!result || result.clusters.length === 0) {
+  const currentResult = appState.result;
+  if (!currentResult || currentResult.clusters.length === 0) {
     setStatus(tr("status.noClustersToExport"), 0, "idle");
     return;
   }
 
-  const blob = new Blob([clustersCsv(result.clusters)], { type: "text/csv;charset=utf-8" });
+  const blob = new Blob([clustersCsv(currentResult.clusters)], { type: "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
@@ -1068,14 +1042,14 @@ function scheduleAfterFirstRender(work: () => void): void {
 }
 
 function scheduleSelectionSupportPrewarm(): void {
-  const sourceResult = result;
+  const sourceResult = appState.result;
   if (!sourceResult?.clusters.length) {
     return;
   }
 
   scheduleAfterFirstRender(() => {
     scheduleIdleWork(() => {
-      if (result !== sourceResult) {
+      if (appState.result !== sourceResult) {
         return;
       }
 
