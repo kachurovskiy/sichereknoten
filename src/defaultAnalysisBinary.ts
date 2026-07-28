@@ -24,7 +24,7 @@ import type {
   StateSummary
 } from "./types";
 
-const DEFAULT_ANALYSIS_BINARY_MAGIC = "SKABIN01";
+const DEFAULT_ANALYSIS_BINARY_MAGIC = "SKABIN02";
 const DEFAULT_ANALYSIS_COORDINATE_SCALE = 10_000_000;
 const DEFAULT_ANALYSIS_SEVERITY_SCALE = 10_000;
 const DEFAULT_ANALYSIS_TREND_SCALE = 10_000;
@@ -159,6 +159,9 @@ function writeAnalysisCluster(writer: BinaryWriter, stringIds: Map<string, numbe
   for (const stats of cluster.yearlyStats) {
     writer.writeVarUint(stats.year);
     writer.writeVarUint(stats.accidentCount);
+    writer.writeVarUint(stats.fatalCount ?? 0);
+    writer.writeVarUint(stats.seriousCount ?? 0);
+    writer.writeVarUint(stats.lightCount ?? 0);
   }
   writeAccidentTrend(writer, cluster.accidentTrend);
   writeIndexArray(writer, cluster.accidentIndexes ?? []);
@@ -355,7 +358,10 @@ function readClusterYearStats(reader: BinaryReader): ClusterYearStat[] {
   for (let index = 0; index < count; index += 1) {
     stats[index] = {
       year: reader.readVarUint(),
-      accidentCount: reader.readVarUint()
+      accidentCount: reader.readVarUint(),
+      fatalCount: reader.readVarUint(),
+      seriousCount: reader.readVarUint(),
+      lightCount: reader.readVarUint()
     };
   }
   return stats;

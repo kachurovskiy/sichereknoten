@@ -431,7 +431,10 @@ export class SelectedIntersectionController {
       }
       return {
         year,
-        accidentCount: 0
+        accidentCount: 0,
+        fatalCount: 0,
+        seriousCount: 0,
+        lightCount: 0
       };
     });
   }

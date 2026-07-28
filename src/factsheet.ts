@@ -18,6 +18,13 @@ import {
   osmWorldPixel,
   wrapOsmTileX
 } from "./osmTiles";
+import {
+  clusterYearSeverityCounts,
+  TREND_SEVERITY_STACK_ORDER,
+  trendSeverityCount,
+  type TrendSeverityCounts,
+  type TrendSeverityKey
+} from "./trendSeries";
 import type { AccidentRecord, AccidentTrendDirection, ClusterYearStat, IntersectionCluster, RoadUserKey } from "./types";
 
 const FACTSHEET_PAGE_WIDTH = 1240;
@@ -74,6 +81,13 @@ interface FactsheetLayout {
   y: number;
   links: FactsheetPdfLink[];
   textSpans: FactsheetPdfTextSpan[];
+}
+
+interface FactsheetTrendPoint extends ClusterYearStat {
+  x: number;
+  barX: number;
+  barWidth: number;
+  counts: TrendSeverityCounts;
 }
 
 interface FactsheetPdfPage {
@@ -310,7 +324,7 @@ function drawFactsheetTrendChart(
     left: x + 78,
     right: x + width - 34,
     top: y + 32,
-    bottom: y + height - 50
+    bottom: y + height - 82
   };
   const chartWidth = chart.right - chart.left;
   const chartHeight = chart.bottom - chart.top;
@@ -326,45 +340,133 @@ function drawFactsheetTrendChart(
     drawFactsheetText(layout, formatInteger(value), chart.left - 12, tickY);
   }
 
+  context.strokeStyle = "#d7ddd7";
+  context.lineWidth = 1.5;
+  for (const value of yAxisTicks.filter((tick) => tick > 0)) {
+    const tickY = chart.bottom - (value / maxAccidents) * chartHeight;
+    context.beginPath();
+    context.moveTo(chart.left, tickY);
+    context.lineTo(chart.right, tickY);
+    context.stroke();
+  }
+
   context.strokeStyle = "#8fa09a";
   context.lineWidth = 2;
   context.beginPath();
   context.moveTo(chart.left, chart.top);
   context.lineTo(chart.left, chart.bottom);
+  context.lineTo(chart.right, chart.bottom);
   context.stroke();
 
-  const points = series.map((point, index) => {
-    const pointX = series.length === 1 ? chart.left + chartWidth / 2 : chart.left + (index / (series.length - 1)) * chartWidth;
-    const pointY = chart.bottom - (point.accidentCount / maxAccidents) * chartHeight;
-    return { ...point, x: pointX, y: pointY };
+  const slotWidth = chartWidth / series.length;
+  const barWidth = Math.min(64, Math.max(28, slotWidth * 0.58));
+  const points = series.map((point, index): FactsheetTrendPoint => {
+    const barX =
+      series.length === 1
+        ? chart.left + chartWidth / 2 - barWidth / 2
+        : chart.left + index * slotWidth + (slotWidth - barWidth) / 2;
+    return {
+      ...point,
+      x: barX + barWidth / 2,
+      barX,
+      barWidth,
+      counts: clusterYearSeverityCounts(point)
+    };
   });
 
-  context.strokeStyle = "#166b6d";
-  context.lineWidth = 5;
-  context.beginPath();
-  points.forEach((point, index) => {
-    if (index === 0) {
-      context.moveTo(point.x, point.y);
-    } else {
-      context.lineTo(point.x, point.y);
-    }
-  });
-  context.stroke();
+  points.forEach((point) => drawFactsheetTrendBar(context, point, chart.bottom, chartHeight, maxAccidents));
 
   context.textAlign = "center";
   context.textBaseline = "alphabetic";
   context.font = factsheetFont(17, 500);
   points.forEach((point) => {
-    context.fillStyle = "#166b6d";
-    context.beginPath();
-    context.arc(point.x, point.y, 7, 0, Math.PI * 2);
-    context.fill();
     context.fillStyle = "#53636d";
     drawFactsheetText(layout, String(point.year), point.x, chart.bottom + 34);
   });
 
+  drawFactsheetTrendLegend(layout, chart.left, y + height - 22);
+
   context.textAlign = "start";
   context.textBaseline = "alphabetic";
+}
+
+function drawFactsheetTrendBar(
+  context: CanvasRenderingContext2D,
+  point: FactsheetTrendPoint,
+  chartBottom: number,
+  chartHeight: number,
+  maxAccidents: number
+): void {
+  let stackedCount = 0;
+  for (const key of TREND_SEVERITY_STACK_ORDER) {
+    const count = trendSeverityCount(point.counts, key);
+    if (count <= 0) {
+      continue;
+    }
+    const segmentTop = stackedCount + count;
+    const segmentHeight = (count / maxAccidents) * chartHeight;
+    const segmentY = chartBottom - (segmentTop / maxAccidents) * chartHeight;
+    drawFactsheetTrendSegment(context, key, point.barX, segmentY, point.barWidth, segmentHeight);
+    stackedCount = segmentTop;
+  }
+}
+
+function drawFactsheetTrendSegment(
+  context: CanvasRenderingContext2D,
+  key: TrendSeverityKey,
+  x: number,
+  y: number,
+  width: number,
+  height: number
+): void {
+  if (height <= 0) {
+    return;
+  }
+
+  context.fillStyle = trendSeverityColor(key);
+  context.fillRect(x, y, width, height);
+  context.strokeStyle = "#ffffff";
+  context.lineWidth = 1.5;
+  context.strokeRect(x, y, width, height);
+}
+
+function drawFactsheetTrendLegend(layout: FactsheetLayout, x: number, y: number): void {
+  const context = layout.context;
+  const items: TrendSeverityKey[] = ["fatal", "serious", "light"];
+  let currentX = x;
+  context.font = factsheetFont(17, 500);
+  context.textAlign = "start";
+  context.textBaseline = "middle";
+
+  for (const key of items) {
+    drawFactsheetTrendSegment(context, key, currentX, y - 11, 22, 16);
+    context.fillStyle = "#38454b";
+    const label = trendSeverityLabel(key);
+    drawFactsheetText(layout, label, currentX + 30, y - 3);
+    currentX += 30 + context.measureText(label).width + 28;
+  }
+}
+
+function trendSeverityColor(key: TrendSeverityKey): string {
+  switch (key) {
+    case "fatal":
+      return "#b9392b";
+    case "serious":
+      return "#c1842f";
+    case "light":
+      return "#166b6d";
+  }
+}
+
+function trendSeverityLabel(key: TrendSeverityKey): string {
+  switch (key) {
+    case "fatal":
+      return tr("severity.fatal");
+    case "serious":
+      return tr("severity.serious");
+    case "light":
+      return tr("severity.light");
+  }
 }
 
 function drawFactsheetRoadUserSection(layout: FactsheetLayout, items: FactsheetRoadUserItem[]): void {

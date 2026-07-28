@@ -200,7 +200,7 @@ All Fatal % parameters are available in Settings. The result is capped by the me
 
 ## Accident Trend
 
-Each cluster also stores per-year accident counts for the selected analysis years. Years with no accidents in the cluster are treated as zero accident years for trend calculation.
+Each cluster also stores per-year accident counts and fatal/serious/light breakdowns for the selected analysis years. Years with no accidents in the cluster are treated as zero accident years for trend calculation.
 
 The falling/stable/rising label is based on a linear trend over the selected years. The slope is measured in accidents per year. A relative slope within +/-8% per year is labelled `stable`; larger positive slopes are `rising`, and larger negative slopes are `falling`.
 

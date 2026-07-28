@@ -14,8 +14,15 @@ import {
 import { formatInteger, formatSharePercent, formatSignedPercent } from "../formatting";
 import { escapeHtml } from "../html";
 import { tr, trf } from "../i18n";
-import { linePath, round, uniqueNumbers } from "../math";
+import { round, uniqueNumbers } from "../math";
 import { ROAD_USER_DEFINITIONS, type RoadUserDefinition } from "../roadUsers";
+import {
+  clusterYearSeverityCounts,
+  TREND_SEVERITY_STACK_ORDER,
+  trendSeverityCount,
+  type TrendSeverityCounts,
+  type TrendSeverityKey
+} from "../trendSeries";
 import type { AccidentRecord, AccidentTrendDirection, ClusterYearStat, IntersectionCluster, RoadUserKey } from "../types";
 import { pressSearchUrlForAccident } from "../urlBuilders";
 
@@ -56,7 +63,9 @@ export interface SelectedIntersectionPanelViewDependencies {
 
 interface TrendSeriesPoint extends ClusterYearStat {
   x: number;
-  accidentY: number;
+  barX: number;
+  barWidth: number;
+  counts: TrendSeverityCounts;
 }
 
 export class SelectedIntersectionPanelView {
@@ -278,7 +287,9 @@ export class SelectedIntersectionPanelView {
       </div>
       ${this.renderTrendChart(series, trend.direction)}
       <div class="trend-legend">
-        <span class="legend-accidents">${escapeHtml(tr("trend.legend.accidents"))}</span>
+        <span class="legend-fatal">${escapeHtml(tr("severity.fatal"))}</span>
+        <span class="legend-serious">${escapeHtml(tr("severity.serious"))}</span>
+        <span class="legend-light">${escapeHtml(tr("severity.light"))}</span>
       </div>
       <p class="trend-note">${escapeHtml(tr("trend.note"))}</p>
     </section>
@@ -293,11 +304,21 @@ export class SelectedIntersectionPanelView {
     const chart = { left: 38, top: 12, width: 218, height: 80, bottom: 92 };
     const maxAccidents = this.maxSeriesAccidents(series, 1);
     const yAxisTicks = uniqueNumbers([0, Math.ceil(maxAccidents / 2), maxAccidents]).sort((a, b) => b - a);
+    const slotWidth = chart.width / series.length;
+    const barWidth = Math.min(30, Math.max(9, slotWidth * 0.58));
 
     const plotted = series.map((point, index): TrendSeriesPoint => {
-      const x = series.length === 1 ? chart.left + chart.width / 2 : chart.left + (index / (series.length - 1)) * chart.width;
-      const accidentY = chart.bottom - (point.accidentCount / maxAccidents) * chart.height;
-      return { ...point, x, accidentY };
+      const barX =
+        series.length === 1
+          ? chart.left + chart.width / 2 - barWidth / 2
+          : chart.left + index * slotWidth + (slotWidth - barWidth) / 2;
+      return {
+        ...point,
+        x: barX + barWidth / 2,
+        barX,
+        barWidth,
+        counts: clusterYearSeverityCounts(point)
+      };
     });
     const yAxisGrid = yAxisTicks
       .filter((value) => value > 0)
@@ -312,16 +333,8 @@ export class SelectedIntersectionPanelView {
         return `<text class="chart-y-label" x="${chart.left - 7}" y="${round(y, 1)}" dy="0.35em">${escapeHtml(formatInteger(value))}</text>`;
       })
       .join("");
-    const accidentPath = linePath(plotted.map((point) => ({ x: point.x, y: point.accidentY })));
     const yearLabels = plotted.map((point) => `<text class="chart-year" x="${round(point.x, 1)}" y="126">${point.year}</text>`).join("");
-    const accidentDots = plotted
-      .map(
-        (point) =>
-          `<circle class="chart-dot chart-dot-accident" cx="${round(point.x, 1)}" cy="${round(point.accidentY, 1)}" r="2.6"><title>${escapeHtml(
-            trf("trend.dotTitle", { year: point.year, count: formatInteger(point.accidentCount) })
-          )}</title></circle>`
-      )
-      .join("");
+    const accidentBars = plotted.map((point) => this.renderTrendBar(point, chart.bottom, chart.height, maxAccidents)).join("");
 
     return `
     <svg class="trend-chart" viewBox="0 0 280 136" role="img" aria-label="${escapeHtml(
@@ -331,11 +344,49 @@ export class SelectedIntersectionPanelView {
       <line class="chart-axis" x1="${chart.left}" y1="${chart.top}" x2="${chart.left}" y2="${chart.bottom}"></line>
       <line class="chart-axis" x1="${chart.left}" y1="${chart.bottom}" x2="${chart.left + chart.width}" y2="${chart.bottom}"></line>
       ${yAxisLabels}
-      ${accidentPath ? `<path class="chart-line chart-line-accidents" d="${accidentPath}"></path>` : ""}
-      ${accidentDots}
+      ${accidentBars}
       ${yearLabels}
     </svg>
   `;
+  }
+
+  private renderTrendBar(point: TrendSeriesPoint, chartBottom: number, chartHeight: number, maxAccidents: number): string {
+    let stackedCount = 0;
+    return TREND_SEVERITY_STACK_ORDER.map((key) => {
+      const count = trendSeverityCount(point.counts, key);
+      if (count <= 0) {
+        return "";
+      }
+      const segmentTop = stackedCount + count;
+      const segmentHeight = (count / maxAccidents) * chartHeight;
+      const y = chartBottom - (segmentTop / maxAccidents) * chartHeight;
+      stackedCount = segmentTop;
+      return `
+        <rect class="chart-bar chart-bar-${key}" x="${round(point.barX, 1)}" y="${round(y, 1)}" width="${round(
+          point.barWidth,
+          1
+        )}" height="${round(segmentHeight, 1)}">
+          <title>${escapeHtml(this.trendBarTitle(point, key, count))}</title>
+        </rect>
+      `;
+    }).join("");
+  }
+
+  private trendBarTitle(point: TrendSeriesPoint, key: TrendSeverityKey, count: number): string {
+    return `${point.year}: ${this.trendSeverityLabel(key)} ${formatInteger(count)}, ${formatInteger(point.accidentCount)} ${tr(
+      "trend.legend.accidents"
+    ).toLowerCase()}`;
+  }
+
+  private trendSeverityLabel(key: TrendSeverityKey): string {
+    switch (key) {
+      case "fatal":
+        return tr("severity.fatal");
+      case "serious":
+        return tr("severity.serious");
+      case "light":
+        return tr("severity.light");
+    }
   }
 
   private maxSeriesAccidents(series: ClusterYearStat[], fallback: number): number {

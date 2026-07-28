@@ -402,7 +402,10 @@ function accidentStreetNames(accident: AccidentRecord): string[] {
 function toClusterYearStat(stats: ClusterYearAccumulator): ClusterYearStat {
   return {
     year: stats.year,
-    accidentCount: stats.accidentCount
+    accidentCount: stats.accidentCount,
+    fatalCount: stats.fatalCount,
+    seriousCount: stats.seriousCount,
+    lightCount: stats.lightCount
   };
 }
 
@@ -618,6 +621,9 @@ function mergeSummaryYearStats(target: Map<number, ClusterYearAccumulator>, year
         vulnerableCount: 0
       } satisfies ClusterYearAccumulator);
     current.accidentCount += stats.accidentCount;
+    current.fatalCount += stats.fatalCount ?? 0;
+    current.seriousCount += stats.seriousCount ?? 0;
+    current.lightCount += stats.lightCount ?? 0;
     target.set(stats.year, current);
   }
 }

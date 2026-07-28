@@ -74,8 +74,8 @@ function sampleAnalysisResult() {
     severityPercent: 0.3456,
     years: [2021, 2023],
     yearlyStats: [
-      { year: 2021, accidentCount: 1 },
-      { year: 2023, accidentCount: 2 }
+      { year: 2021, accidentCount: 1, fatalCount: 1, seriousCount: 0, lightCount: 0 },
+      { year: 2023, accidentCount: 2, fatalCount: 0, seriousCount: 1, lightCount: 1 }
     ],
     accidentTrend: {
       direction: "rising",
@@ -113,7 +113,7 @@ function sampleAnalysisResult() {
     osmTrafficSignalCount: 0,
     severityPercent: 0.01,
     years: [2022],
-    yearlyStats: [{ year: 2022, accidentCount: 2 }],
+    yearlyStats: [{ year: 2022, accidentCount: 2, fatalCount: 0, seriousCount: 1, lightCount: 1 }],
     accidentTrend: {
       direction: "unknown",
       slopePerYear: null,

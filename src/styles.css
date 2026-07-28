@@ -1471,24 +1471,25 @@ button.map-service-link {
   stroke: #cbd4ce;
 }
 
-.chart-line {
-  fill: none;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 2.2;
-}
-
-.chart-line-accidents {
-  stroke: #b9392b;
-}
-
-.chart-dot {
+.chart-bar {
+  shape-rendering: crispEdges;
   stroke: #ffffff;
-  stroke-width: 1.4;
+  stroke-width: 0.8;
 }
 
-.chart-dot-accident {
+.chart-bar-fatal {
+  color: #b9392b;
   fill: #b9392b;
+}
+
+.chart-bar-serious {
+  color: #c1842f;
+  fill: #c1842f;
+}
+
+.chart-bar-light {
+  color: #166b6d;
+  fill: #166b6d;
 }
 
 .chart-year {
@@ -1519,14 +1520,34 @@ button.map-service-link {
 
 .trend-legend span::before {
   content: "";
-  width: 10px;
-  height: 3px;
-  border-radius: 99px;
-  background: currentColor;
+  width: 12px;
+  height: 10px;
+  border: 1px solid rgba(23, 33, 38, 0.18);
+  border-radius: 2px;
 }
 
-.legend-accidents {
+.legend-fatal {
   color: #b9392b;
+}
+
+.legend-fatal::before {
+  background: #b9392b;
+}
+
+.legend-serious {
+  color: #7c4d12;
+}
+
+.legend-serious::before {
+  background: #c1842f;
+}
+
+.legend-light {
+  color: #166b6d;
+}
+
+.legend-light::before {
+  background: #166b6d;
 }
 
 .trend-note {

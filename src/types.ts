@@ -83,6 +83,9 @@ export interface AccidentTrend {
 export interface ClusterYearStat {
   year: number;
   accidentCount: number;
+  fatalCount?: number;
+  seriousCount?: number;
+  lightCount?: number;
 }
 
 export interface IntersectionCluster {
