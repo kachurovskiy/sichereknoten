@@ -1,4 +1,10 @@
-import { cleanAreaNameForDisplay, compareClusterCoreMetric } from "./clusterDisplay";
+import {
+  cleanAreaNameForDisplay,
+  clusterAreaText,
+  clusterLocationText,
+  compareClusterCoreMetric,
+  displayStreetNames
+} from "./clusterDisplay";
 import { formatCompactPopulation, type SeverityPercentSource } from "./formatting";
 import type { IntersectionCluster } from "./types";
 
@@ -12,6 +18,7 @@ export interface BrowseClusterFilters {
   roundabout: BrowseFeatureFilter;
   trafficSignal: BrowseFeatureFilter;
   fatal: BrowseFatalFilter;
+  addressQuery: string;
   minSeverityPercent: number | null;
   maxSeverityPercent: number | null;
 }
@@ -20,6 +27,7 @@ export const DEFAULT_BROWSE_CLUSTER_FILTERS: BrowseClusterFilters = {
   roundabout: "any",
   trafficSignal: "any",
   fatal: "any",
+  addressQuery: "",
   minSeverityPercent: null,
   maxSeverityPercent: null
 };
@@ -164,6 +172,7 @@ export function browseFiltersActive(filters: BrowseClusterFilters): boolean {
     filters.roundabout !== DEFAULT_BROWSE_CLUSTER_FILTERS.roundabout ||
     filters.trafficSignal !== DEFAULT_BROWSE_CLUSTER_FILTERS.trafficSignal ||
     filters.fatal !== DEFAULT_BROWSE_CLUSTER_FILTERS.fatal ||
+    browseAddressQueryActive(filters) ||
     filters.minSeverityPercent !== DEFAULT_BROWSE_CLUSTER_FILTERS.minSeverityPercent ||
     filters.maxSeverityPercent !== DEFAULT_BROWSE_CLUSTER_FILTERS.maxSeverityPercent
   );
@@ -180,6 +189,9 @@ export function browseFilterActiveCount(filters: BrowseClusterFilters): number {
   if (filters.fatal !== DEFAULT_BROWSE_CLUSTER_FILTERS.fatal) {
     count += 1;
   }
+  if (browseAddressQueryActive(filters)) {
+    count += 1;
+  }
   if (filters.minSeverityPercent !== DEFAULT_BROWSE_CLUSTER_FILTERS.minSeverityPercent) {
     count += 1;
   }
@@ -189,6 +201,10 @@ export function browseFilterActiveCount(filters: BrowseClusterFilters): number {
   return count;
 }
 
+export function browseAddressQueryActive(filters: BrowseClusterFilters): boolean {
+  return normalizeAddressQuery(filters.addressQuery) !== DEFAULT_BROWSE_CLUSTER_FILTERS.addressQuery;
+}
+
 export function filterBrowseClusters(clusters: IntersectionCluster[], filters: BrowseClusterFilters): IntersectionCluster[] {
   if (!browseFiltersActive(filters)) {
     return clusters;
@@ -196,12 +212,17 @@ export function filterBrowseClusters(clusters: IntersectionCluster[], filters: B
   return clusters.filter((cluster) => browseClusterMatchesFilters(cluster, filters));
 }
 
-export function browseClusterMatchesFilters(cluster: IntersectionCluster, filters: BrowseClusterFilters): boolean {
+export function browseClusterMatchesFilters(
+  cluster: IntersectionCluster,
+  filters: BrowseClusterFilters,
+  addressSearchText = browseClusterAddressSearchText(cluster)
+): boolean {
   const severityPercent = cluster.severityPercent * 100;
   return (
     nullableBooleanMatches(cluster.osmRoundabout, filters.roundabout) &&
     nullableBooleanMatches(cluster.osmTrafficSignal, filters.trafficSignal) &&
     fatalCountMatches(cluster.fatalCount, filters.fatal) &&
+    addressQueryMatches(addressSearchText, filters.addressQuery) &&
     (filters.minSeverityPercent === null || severityPercent >= filters.minSeverityPercent) &&
     (filters.maxSeverityPercent === null || severityPercent <= filters.maxSeverityPercent)
   );
@@ -291,4 +312,63 @@ function fatalCountMatches(fatalCount: number, filter: BrowseFatalFilter): boole
     default:
       return true;
   }
+}
+
+function addressQueryMatches(searchableAddress: string, addressQuery: string | null | undefined): boolean {
+  const normalizedQuery = normalizeAddressQuery(addressQuery);
+  if (!normalizedQuery) {
+    return true;
+  }
+
+  return searchTextVariants(normalizedQuery).some((query) => query !== "" && searchableAddress.includes(query));
+}
+
+export function browseClusterAddressSearchText(cluster: IntersectionCluster): string {
+  const streetNames = Array.isArray(cluster.streetNames) ? cluster.streetNames : [];
+  const parts = [
+    ...streetNames,
+    ...displayStreetNames(streetNames),
+    clusterLocationText(cluster),
+    clusterAreaText(cluster),
+    cluster.stateName,
+    cluster.administrativeRegionName,
+    cluster.districtName,
+    cluster.municipalityName
+  ];
+  return uniqueSearchText(parts.flatMap((part) => searchTextVariants(part ?? ""))).join(" ");
+}
+
+function normalizeAddressQuery(value: string | null | undefined): string {
+  return value?.trim() ?? "";
+}
+
+function searchTextVariants(value: string): string[] {
+  const lowerValue = value.toLocaleLowerCase("de");
+  const baseFolded = foldSearchText(lowerValue);
+  const germanFolded = foldSearchText(
+    lowerValue.replace(/ä/g, "ae").replace(/ö/g, "oe").replace(/ü/g, "ue").replace(/ß/g, "ss")
+  );
+  return uniqueSearchText([baseFolded, germanFolded]);
+}
+
+function foldSearchText(value: string): string {
+  return value
+    .replace(/ß/g, "ss")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function uniqueSearchText(values: string[]): string[] {
+  const seen = new Set<string>();
+  const uniqueValues: string[] = [];
+  for (const value of values) {
+    if (!value || seen.has(value)) {
+      continue;
+    }
+    seen.add(value);
+    uniqueValues.push(value);
+  }
+  return uniqueValues;
 }

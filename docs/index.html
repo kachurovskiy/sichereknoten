@@ -8,7 +8,7 @@
     <meta http-equiv="Expires" content="0" />
     <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
     <title>Safe Intersections</title>
-    <link rel="stylesheet" href="./assets/app.css?v=ae46af1b42eea399" />
+    <link rel="stylesheet" href="./assets/app.css?v=f9572dcef00b0f93" />
   </head>
   <body>
     <div id="appSplash" class="splash-screen" role="status" aria-live="polite" aria-busy="true">
@@ -75,6 +75,10 @@
                     <option value="no" data-i18n="browse.filters.fatalNo">None</option>
                   </select>
                 </label>
+                <label class="field-label browse-filter-wide" for="browseAddressQuery">
+                  <span data-i18n="browse.filters.address">Address contains</span>
+                  <input id="browseAddressQuery" class="text-input" type="search" autocomplete="off" spellcheck="false" />
+                </label>
                 <label class="field-label" for="browseMinSeverity">
                   <span data-i18n="browse.filters.minSeverity">Min severity %</span>
                   <input id="browseMinSeverity" class="number-input" type="number" min="0" max="100" step="1" inputmode="decimal" autocomplete="off" />
@@ -86,6 +90,10 @@
               </div>
               <div class="browse-filter-actions">
                 <button id="browseResetFilters" class="secondary-link-button" type="button" data-i18n="browse.filters.reset">Reset filters</button>
+                <div id="browseSearchStatus" class="browse-search-status" role="status" aria-live="polite" hidden>
+                  <span class="browse-search-spinner" aria-hidden="true"></span>
+                  <span id="browseSearchStatusText"></span>
+                </div>
               </div>
             </div>
             <div id="stateHotspotList" class="hotspot-list"></div>
@@ -467,6 +475,6 @@
 
       </main>
     </div>
-    <script src="./assets/app.js?v=ae46af1b42eea399"></script>
+    <script src="./assets/app.js?v=f9572dcef00b0f93"></script>
   </body>
 </html>

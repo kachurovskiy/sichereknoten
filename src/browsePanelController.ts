@@ -7,6 +7,7 @@ import {
   type BrowseFeatureFilter,
   type BrowseIndex
 } from "./browseIndex";
+import type { BrowseFilterProgress } from "./browseFilterWorkerClient";
 import { formatInteger } from "./formatting";
 import { tr, trf } from "./i18n";
 import { clampNumber, round } from "./math";
@@ -18,9 +19,12 @@ export interface BrowsePanelElements {
   roundaboutFilter: HTMLSelectElement;
   trafficSignalFilter: HTMLSelectElement;
   fatalFilter: HTMLSelectElement;
+  addressQuery: HTMLInputElement;
   minSeverity: HTMLInputElement;
   maxSeverity: HTMLInputElement;
   resetFilters: HTMLButtonElement;
+  searchStatus: HTMLElement;
+  searchStatusText: HTMLElement;
   state: HTMLSelectElement;
   regionField: HTMLElement;
   region: HTMLSelectElement;
@@ -56,7 +60,10 @@ export class BrowsePanelController {
         this.updateFilterResults();
       });
     });
+    this.elements.addressQuery.placeholder = tr("browse.filters.addressPlaceholder");
+    this.elements.addressQuery.addEventListener("input", () => this.updateFilterResults());
     this.updateFiltersToggleText();
+    this.setSearchProgress(null);
   }
 
   populateStateOptions(availableStateCodes: Set<string>): void {
@@ -111,9 +118,24 @@ export class BrowsePanelController {
       roundabout: this.readFeatureFilter(this.elements.roundaboutFilter.value),
       trafficSignal: this.readFeatureFilter(this.elements.trafficSignalFilter.value),
       fatal: this.readFatalFilter(this.elements.fatalFilter.value),
+      addressQuery: this.elements.addressQuery.value.trim(),
       minSeverityPercent: this.readOptionalSeverityPercent(this.elements.minSeverity),
       maxSeverityPercent: this.readOptionalSeverityPercent(this.elements.maxSeverity)
     };
+  }
+
+  setSearchProgress(progress: BrowseFilterProgress | null): void {
+    const isSearching = progress !== null;
+    this.elements.resetFilters.hidden = isSearching;
+    this.elements.searchStatus.hidden = !isSearching;
+    if (!progress) {
+      this.elements.searchStatusText.textContent = "";
+      return;
+    }
+    this.elements.searchStatusText.textContent = trf("browse.search.scanned", {
+      current: formatInteger(progress.scannedCount),
+      total: formatInteger(progress.totalCount)
+    });
   }
 
   private setFiltersExpanded(isExpanded: boolean): void {
@@ -126,6 +148,7 @@ export class BrowsePanelController {
     this.elements.roundaboutFilter.value = DEFAULT_BROWSE_CLUSTER_FILTERS.roundabout;
     this.elements.trafficSignalFilter.value = DEFAULT_BROWSE_CLUSTER_FILTERS.trafficSignal;
     this.elements.fatalFilter.value = DEFAULT_BROWSE_CLUSTER_FILTERS.fatal;
+    this.elements.addressQuery.value = DEFAULT_BROWSE_CLUSTER_FILTERS.addressQuery;
     this.elements.minSeverity.value = "";
     this.elements.maxSeverity.value = "";
     this.updateFilterResults();

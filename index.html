@@ -74,6 +74,10 @@
                     <option value="no" data-i18n="browse.filters.fatalNo">None</option>
                   </select>
                 </label>
+                <label class="field-label browse-filter-wide" for="browseAddressQuery">
+                  <span data-i18n="browse.filters.address">Address contains</span>
+                  <input id="browseAddressQuery" class="text-input" type="search" autocomplete="off" spellcheck="false" />
+                </label>
                 <label class="field-label" for="browseMinSeverity">
                   <span data-i18n="browse.filters.minSeverity">Min severity %</span>
                   <input id="browseMinSeverity" class="number-input" type="number" min="0" max="100" step="1" inputmode="decimal" autocomplete="off" />
@@ -85,6 +89,10 @@
               </div>
               <div class="browse-filter-actions">
                 <button id="browseResetFilters" class="secondary-link-button" type="button" data-i18n="browse.filters.reset">Reset filters</button>
+                <div id="browseSearchStatus" class="browse-search-status" role="status" aria-live="polite" hidden>
+                  <span class="browse-search-spinner" aria-hidden="true"></span>
+                  <span id="browseSearchStatusText"></span>
+                </div>
               </div>
             </div>
             <div id="stateHotspotList" class="hotspot-list"></div>

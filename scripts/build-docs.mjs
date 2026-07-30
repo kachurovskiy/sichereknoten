@@ -32,7 +32,8 @@ async function buildDocs() {
     define: {
       __SICHERE_KNOTEN_APP_VERSION__: JSON.stringify(appVersion),
       __SICHERE_KNOTEN_ANALYSIS_CACHE_VERSION__: JSON.stringify(analysisCacheVersion),
-      __SICHERE_KNOTEN_ANALYSIS_WORKER_URL__: JSON.stringify(`./assets/analysis-worker.js?v=${appVersion}`)
+      __SICHERE_KNOTEN_ANALYSIS_WORKER_URL__: JSON.stringify(`./assets/analysis-worker.js?v=${appVersion}`),
+      __SICHERE_KNOTEN_BROWSE_FILTER_WORKER_URL__: JSON.stringify(`./assets/browse-filter-worker.js?v=${appVersion}`)
     }
   });
 
@@ -40,6 +41,17 @@ async function buildDocs() {
     entryPoints: [path.join(root, "src/analysisWorker.ts")],
     bundle: true,
     outfile: path.join(assetsDir, "analysis-worker.js"),
+    format: "iife",
+    target: "es2022",
+    minify: true,
+    sourcemap: false,
+    legalComments: "none"
+  });
+
+  await build({
+    entryPoints: [path.join(root, "src/browseFilterWorker.ts")],
+    bundle: true,
+    outfile: path.join(assetsDir, "browse-filter-worker.js"),
     format: "iife",
     target: "es2022",
     minify: true,
@@ -145,6 +157,7 @@ function isGeneratedAsset(fileName) {
     fileName === "app.js" ||
     fileName === "app.css" ||
     fileName === "analysis-worker.js" ||
+    fileName === "browse-filter-worker.js" ||
     fileName === "csv-parser-worker.js" ||
     fileName === "streets.js" ||
     fileName === "site-version.json" ||

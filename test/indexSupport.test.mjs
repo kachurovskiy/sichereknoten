@@ -81,6 +81,7 @@ test("browse cluster filters apply independent criteria", async () => {
       id: "roundabout-fatal",
       fatalCount: 1,
       severityPercent: 0.35,
+      streetNames: ["Koenigsallee", "Steinstrasse"],
       osmRoundabout: true,
       osmTrafficSignal: false
     }),
@@ -106,6 +107,7 @@ test("browse cluster filters apply independent criteria", async () => {
       roundabout: "yes",
       trafficSignal: "no",
       fatal: "yes",
+      addressQuery: "",
       minSeverityPercent: 20,
       maxSeverityPercent: 40
     }).map((cluster) => cluster.id),
@@ -116,10 +118,23 @@ test("browse cluster filters apply independent criteria", async () => {
       roundabout: "unknown",
       trafficSignal: "unknown",
       fatal: "no",
+      addressQuery: "",
       minSeverityPercent: null,
       maxSeverityPercent: 10
     }).map((cluster) => cluster.id),
     ["unknown-low"]
+  );
+  assert.equal(browseFilterActiveCount({ ...DEFAULT_BROWSE_CLUSTER_FILTERS, addressQuery: " stein " }), 1);
+  assert.deepEqual(
+    filterBrowseClusters(clusters, {
+      roundabout: "any",
+      trafficSignal: "any",
+      fatal: "any",
+      addressQuery: "stein",
+      minSeverityPercent: null,
+      maxSeverityPercent: null
+    }).map((cluster) => cluster.id),
+    ["roundabout-fatal"]
   );
 });
 

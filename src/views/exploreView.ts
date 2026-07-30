@@ -10,6 +10,7 @@ import {
   type BrowseClusterFilters,
   type BrowseIndex
 } from "../browseIndex";
+import type { BrowseFilterProgress } from "../browseFilterWorkerClient";
 import type { AnalysisResult, IntersectionCluster } from "../types";
 
 interface LatLon {
@@ -29,11 +30,25 @@ export interface ExploreViewDependencies {
   getBrowseFilters: () => BrowseClusterFilters;
   browseIndexForCurrentResult: () => BrowseIndex | null;
   updateBrowseRegionOptions: () => void;
+  setBrowseSearchProgress: (progress: BrowseFilterProgress | null) => void;
+  filterBrowseClustersInBackground: (
+    request: {
+      clusters: IntersectionCluster[];
+      stateCode: string;
+      regionKey: string;
+      filters: BrowseClusterFilters;
+      limit: number;
+      totalCount: number;
+    },
+    onUpdate: (clusters: IntersectionCluster[], done: boolean, progress: BrowseFilterProgress) => void
+  ) => Promise<IntersectionCluster[]>;
   selectCluster: (cluster: IntersectionCluster, telemetrySource?: string) => void;
   setView: (view: "map") => void;
 }
 
 export class ExploreView {
+  private stateHotspotRenderToken = 0;
+
   constructor(private readonly deps: ExploreViewDependencies) {}
 
   render(): void {
@@ -43,15 +58,21 @@ export class ExploreView {
   }
 
   renderStateHotspotList(): void {
-    this.deps.stateHotspotList.innerHTML = "";
+    const renderToken = this.nextStateHotspotRenderToken();
     const result = this.deps.getResult();
     if (!result) {
+      this.setStateHotspotBusy(false);
+      this.deps.setBrowseSearchProgress(null);
+      this.deps.stateHotspotList.innerHTML = "";
       this.deps.stateHotspotList.append(this.emptyHotspotMessage(tr("status.stateHotspotsPending")));
       return;
     }
 
     const browseIndex = this.deps.browseIndexForCurrentResult();
     if (!browseIndex) {
+      this.setStateHotspotBusy(false);
+      this.deps.setBrowseSearchProgress(null);
+      this.deps.stateHotspotList.innerHTML = "";
       this.deps.stateHotspotList.append(this.emptyHotspotMessage(tr("status.noAnalysisMatches")));
       return;
     }
@@ -60,19 +81,89 @@ export class ExploreView {
     const regionKey = this.deps.getBrowseRegionValue();
     const filters = this.deps.getBrowseFilters();
     const hasActiveFilters = browseFiltersActive(filters);
-    const sourceClusters = hasActiveFilters
-      ? this.scopedClusters(result, stateCode, regionKey)
-      : stateCode === "all"
+    if (hasActiveFilters) {
+      const totalCount = this.scopedBrowseClusterCount(browseIndex, result, stateCode, regionKey);
+      this.setStateHotspotBusy(true);
+      this.deps.setBrowseSearchProgress({ scannedCount: 0, totalCount });
+      this.renderStateHotspotClusters([], stateCode, true, {
+        showEmpty: false
+      });
+      void this.renderFilteredStateHotspotsInBackground(result.clusters, stateCode, regionKey, filters, totalCount, renderToken);
+      return;
+    }
+
+    const sourceClusters =
+      stateCode === "all"
         ? browseIndex.topClustersByState
         : regionKey === "all"
           ? browseIndex.browseClustersByState.get(stateCode) ?? []
           : browseIndex.browseClustersByRegion.get(regionKey) ?? [];
-    const filteredClusters = hasActiveFilters
-      ? filterBrowseClusters(sourceClusters, filters).slice().sort(compareClusterCoreMetric)
-      : sourceClusters;
-    const clusters = filteredClusters.slice(0, this.deps.maxIntersections);
+    const clusters = sourceClusters.slice(0, this.deps.maxIntersections);
 
+    this.setStateHotspotBusy(false);
+    this.deps.setBrowseSearchProgress(null);
+    this.renderStateHotspotClusters(clusters, stateCode, hasActiveFilters);
+  }
+
+  private async renderFilteredStateHotspotsInBackground(
+    clusters: IntersectionCluster[],
+    stateCode: string,
+    regionKey: string,
+    filters: BrowseClusterFilters,
+    totalCount: number,
+    renderToken: number
+  ): Promise<void> {
+    let renderedFinalResult = false;
+    try {
+      const filteredClusters = await this.deps.filterBrowseClustersInBackground({
+        clusters,
+        stateCode,
+        regionKey,
+        filters,
+        limit: this.deps.maxIntersections,
+        totalCount
+      }, (partialClusters, done, progress) => {
+        if (!this.isCurrentStateHotspotRender(renderToken)) {
+          return;
+        }
+        renderedFinalResult = done;
+        this.setStateHotspotBusy(!done);
+        this.deps.setBrowseSearchProgress(done ? null : progress);
+        this.renderStateHotspotClusters(partialClusters, stateCode, true, {
+          showEmpty: done
+        });
+      });
+      if (!this.isCurrentStateHotspotRender(renderToken) || renderedFinalResult) {
+        return;
+      }
+      this.setStateHotspotBusy(false);
+      this.deps.setBrowseSearchProgress(null);
+      this.renderStateHotspotClusters(filteredClusters, stateCode, true);
+    } catch {
+      if (!this.isCurrentStateHotspotRender(renderToken)) {
+        return;
+      }
+      this.setStateHotspotBusy(false);
+      this.deps.setBrowseSearchProgress(null);
+      const fallbackClusters = filterBrowseClusters(this.scopedClusters(clusters, stateCode, regionKey), filters)
+        .slice()
+        .sort(compareClusterCoreMetric)
+        .slice(0, this.deps.maxIntersections);
+      this.renderStateHotspotClusters(fallbackClusters, stateCode, true);
+    }
+  }
+
+  private renderStateHotspotClusters(
+    clusters: IntersectionCluster[],
+    stateCode: string,
+    hasActiveFilters: boolean,
+    options: { showEmpty?: boolean } = {}
+  ): void {
+    this.deps.stateHotspotList.innerHTML = "";
     if (clusters.length === 0) {
+      if (options.showEmpty === false) {
+        return;
+      }
       this.deps.stateHotspotList.append(
         this.emptyHotspotMessage(tr(hasActiveFilters ? "status.noBrowseFilterMatches" : "status.noAnalysisMatches"))
       );
@@ -89,11 +180,47 @@ export class ExploreView {
     });
   }
 
-  private scopedClusters(result: AnalysisResult, stateCode: string, regionKey: string): IntersectionCluster[] {
+  private nextStateHotspotRenderToken(): number {
+    this.stateHotspotRenderToken += 1;
+    return this.stateHotspotRenderToken;
+  }
+
+  private isCurrentStateHotspotRender(renderToken: number): boolean {
+    return renderToken === this.stateHotspotRenderToken;
+  }
+
+  private setStateHotspotBusy(isBusy: boolean): void {
+    this.deps.stateHotspotList.toggleAttribute("aria-busy", isBusy);
+  }
+
+  refreshHotspotSelectionState(): void {
+    this.refreshHotspotListSelectionState(this.deps.nearbyList);
+    this.refreshHotspotListSelectionState(this.deps.stateHotspotList);
+  }
+
+  private refreshHotspotListSelectionState(container: HTMLElement): void {
+    const selectedClusterId = this.deps.getSelectedCluster()?.id ?? null;
+    container.querySelectorAll<HTMLButtonElement>(".hotspot-button").forEach((button) => {
+      button.classList.toggle("selected", selectedClusterId !== null && button.dataset.clusterId === selectedClusterId);
+    });
+  }
+
+  private scopedBrowseClusterCount(browseIndex: BrowseIndex, result: AnalysisResult, stateCode: string, regionKey: string): number {
     if (stateCode === "all") {
-      return result.clusters;
+      return result.clusters.length;
     }
-    return result.clusters.filter((cluster) => {
+    const regions = browseIndex.regionsByState.get(stateCode) ?? [];
+    if (regionKey === "all") {
+      return regions.reduce((total, region) => total + region.clusterCount, 0);
+    }
+    return regions.find((region) => region.key === regionKey)?.clusterCount ?? 0;
+  }
+
+  private scopedClusters(clusters: IntersectionCluster[], stateCode: string, regionKey: string): IntersectionCluster[] {
+    if (stateCode === "all") {
+      return clusters;
+    }
+    return clusters.filter((cluster) => {
       if (cluster.stateCode !== stateCode) {
         return false;
       }
@@ -150,6 +277,7 @@ export class ExploreView {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "hotspot-button";
+    button.dataset.clusterId = cluster.id;
     button.classList.toggle("selected", this.deps.getSelectedCluster()?.id === cluster.id);
     const metricPlacement = options.metricPlacement ?? "stats";
     const metricStat = `<span class="hotspot-stat hotspot-stat-metric"><strong>${formatSeverityPercent(cluster)}</strong> ${escapeHtml(tr("metric.severity"))}</span>`;

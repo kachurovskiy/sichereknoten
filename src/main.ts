@@ -4,6 +4,7 @@ import { AnalysisCoordinator } from "./analysisCoordinator";
 import { AppState } from "./appState";
 import { AppRouter } from "./appRouter";
 import { BrowseIndexStore, STATE_BROWSE_MAX_INTERSECTIONS, type BrowseIndex } from "./browseIndex";
+import { BrowseFilterWorkerClient } from "./browseFilterWorkerClient";
 import { BrowsePanelController } from "./browsePanelController";
 import { clustersCsv } from "./clusterCsvExport";
 import { ClusterSelectionCoordinator, clusterSeverityKey } from "./clusterSelectionCoordinator";
@@ -115,9 +116,12 @@ const elements = {
   browseRoundaboutFilter: byId<HTMLSelectElement>("browseRoundaboutFilter"),
   browseTrafficSignalFilter: byId<HTMLSelectElement>("browseTrafficSignalFilter"),
   browseFatalFilter: byId<HTMLSelectElement>("browseFatalFilter"),
+  browseAddressQuery: byId<HTMLInputElement>("browseAddressQuery"),
   browseMinSeverity: byId<HTMLInputElement>("browseMinSeverity"),
   browseMaxSeverity: byId<HTMLInputElement>("browseMaxSeverity"),
   browseResetFilters: byId<HTMLButtonElement>("browseResetFilters"),
+  browseSearchStatus: byId<HTMLDivElement>("browseSearchStatus"),
+  browseSearchStatusText: byId<HTMLSpanElement>("browseSearchStatusText"),
   browseState: byId<HTMLSelectElement>("browseState"),
   browseRegionField: byId<HTMLLabelElement>("browseRegionField"),
   browseRegion: byId<HTMLSelectElement>("browseRegion"),
@@ -174,6 +178,7 @@ const dataRepository = new DataRepository();
 const requestGate = new RequestGate();
 const severityRankIndexes = new SeverityRankIndexStore();
 const browseIndexes = new BrowseIndexStore();
+const browseFilterWorker = new BrowseFilterWorkerClient();
 const analysisOptionsForm = new AnalysisOptionsForm(
   {
     analyzeButton: elements.analyzeBtn,
@@ -296,10 +301,10 @@ selectedIntersectionController = new SelectedIntersectionController({
   roadClassSignatureForStreetNames: (streetNames) => similarView.roadClassSignatureForStreetNames(streetNames),
   renderVisibleSimilarView: () => similarView.render(),
   renderBrowseLists: () => {
-    exploreView.render();
+    exploreView.refreshHotspotSelectionState();
     return {
-      stateHotspotCount: elements.stateHotspotList.children.length,
-      nearbyCount: elements.nearbyList.children.length
+      stateHotspotCount: elements.stateHotspotList.querySelectorAll(".hotspot-button").length,
+      nearbyCount: elements.nearbyList.querySelectorAll(".hotspot-button").length
     };
   },
   getActiveView: () => appRouter.activeView,
@@ -390,9 +395,12 @@ const browsePanelController = new BrowsePanelController(
     roundaboutFilter: elements.browseRoundaboutFilter,
     trafficSignalFilter: elements.browseTrafficSignalFilter,
     fatalFilter: elements.browseFatalFilter,
+    addressQuery: elements.browseAddressQuery,
     minSeverity: elements.browseMinSeverity,
     maxSeverity: elements.browseMaxSeverity,
     resetFilters: elements.browseResetFilters,
+    searchStatus: elements.browseSearchStatus,
+    searchStatusText: elements.browseSearchStatusText,
     state: elements.browseState,
     regionField: elements.browseRegionField,
     region: elements.browseRegion
@@ -415,6 +423,8 @@ exploreView = new ExploreView({
   getBrowseFilters: () => browsePanelController.filtersValue(),
   browseIndexForCurrentResult,
   updateBrowseRegionOptions: () => browsePanelController.updateRegionOptions(),
+  setBrowseSearchProgress: (progress) => browsePanelController.setSearchProgress(progress),
+  filterBrowseClustersInBackground: (request, onUpdate) => browseFilterWorker.filter(request, onUpdate),
   selectCluster: (cluster, telemetrySource) => clusterSelectionCoordinator.selectCluster(cluster, telemetrySource),
   setView: (view) => appRouter.setView(view)
 });
@@ -1045,6 +1055,7 @@ function scheduleSelectionSupportPrewarm(): void {
       }
 
       const started = performance.now();
+      browseFilterWorker.prepare(sourceResult.clusters);
       severityRankIndexes.forClusters(sourceResult.clusters, severityRankIndexHooks(null));
       const durationMs = round(performance.now() - started, 2);
       if (durationMs >= 10) {
