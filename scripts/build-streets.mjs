@@ -1,21 +1,37 @@
 import { createHash } from "node:crypto";
 import { mkdir, open, readFile, stat, writeFile } from "node:fs/promises";
+import { availableParallelism } from "node:os";
 import path from "node:path";
+import { isMainThread, parentPort, Worker, workerData } from "node:worker_threads";
 import { inflateSync } from "node:zlib";
 
+// See STREET_LOOKUP_PIPELINE.md for the build flow diagram and stage notes.
 const STREET_LOOKUP_SCHEMA_VERSION = 6;
 const NODE_CAPTURE_RADIUS_METERS = 55;
 const STREET_MATCH_RADIUS_METERS = 30;
 const ROAD_CONTROL_MATCH_RADIUS_METERS = 55;
 const MAX_STREET_NAMES_PER_ACCIDENT = 4;
 const NODE_COORD_SHARD_COUNT = 256;
+const NODE_COORD_INITIAL_SHARD_CAPACITY = 1024;
+const NODE_COORD_MAX_LOAD_NUMERATOR = 4;
+const NODE_COORD_MAX_LOAD_DENOMINATOR = 5;
 const GRID_CELL_METERS = 60;
+const GRID_CELL_KEY_FACTOR = 10_000_000;
+const GRID_CELL_KEY_OFFSET = 1_000_000;
 const COORD_PACK_BASE = 10_000_000;
 const OSM_ROUNDABOUT_MASK = 1;
 const OSM_TRAFFIC_SIGNAL_MASK = 2;
+const STREET_DENSE_NODE_WORKER = "street-dense-node-worker";
+const DEFAULT_DENSE_NODE_WORKER_BATCH_GROUPS = 32;
+const DEFAULT_DENSE_NODE_WORKER_BATCH_BYTES = 4 * 1024 * 1024;
 const textDecoder = new TextDecoder("utf-8");
 const csvDecoder = new TextDecoder("windows-1252");
+const germanBaseCollator = new Intl.Collator("de", { sensitivity: "base" });
 const degreesToRadians = Math.PI / 180;
+
+if (!isMainThread && workerData?.kind === STREET_DENSE_NODE_WORKER) {
+  startDenseNodeWorker(workerData);
+}
 
 export async function buildStreetLookupBundle({ root, sourceDataDir, csvFiles }) {
   if (process.env.SICHERE_KNOTEN_SKIP_STREETS === "1") {
@@ -33,10 +49,14 @@ export async function buildStreetLookupBundle({ root, sourceDataDir, csvFiles })
 
   const signature = await streetLookupSignature(csvFiles, pbfPath, pbfStats);
   const cachePath = path.join(sourceDataDir, "generated", "street-lookup.json");
-  const cached = await readStreetLookupCache(cachePath, signature);
+  const forceRebuild = process.env.SICHERE_KNOTEN_STREET_FORCE_REBUILD === "1";
+  const cached = forceRebuild ? null : await readStreetLookupCache(cachePath, signature);
   if (cached) {
     console.log(`Street lookup loaded from ${path.relative(root, cachePath)}.`);
     return cached;
+  }
+  if (forceRebuild) {
+    console.log("Street lookup cache bypassed by SICHERE_KNOTEN_STREET_FORCE_REBUILD=1.");
   }
 
   const source = await readAccidentSource(csvFiles);
@@ -179,6 +199,23 @@ function parseDelimitedLine(line) {
   return values;
 }
 
+function formatCount(value) {
+  return value.toLocaleString("en-US");
+}
+
+function formatBytes(value) {
+  if (value >= 1024 ** 3) {
+    return `${(value / 1024 ** 3).toFixed(2)} GiB`;
+  }
+  if (value >= 1024 ** 2) {
+    return `${(value / 1024 ** 2).toFixed(2)} MiB`;
+  }
+  if (value >= 1024) {
+    return `${(value / 1024).toFixed(2)} KiB`;
+  }
+  return `${value} B`;
+}
+
 function readCsvField(headers, values, name) {
   const normalized = normalizeFieldName(name);
   const index = headers.findIndex((header) => normalizeFieldName(header) === normalized);
@@ -200,9 +237,13 @@ function parseNumber(value) {
 
 function buildAccidentGrid(accidents) {
   const cells = new Map();
+  const accidentXs = new Float64Array(accidents.length);
+  const accidentYs = new Float64Array(accidents.length);
   for (let index = 0; index < accidents.length; index += 1) {
     const accident = accidents[index];
-    const key = gridKey(Math.floor(accident.x / GRID_CELL_METERS), Math.floor(accident.y / GRID_CELL_METERS));
+    accidentXs[index] = accident.x;
+    accidentYs[index] = accident.y;
+    const key = gridCellKey(Math.floor(accident.x / GRID_CELL_METERS), Math.floor(accident.y / GRID_CELL_METERS));
     let cell = cells.get(key);
     if (!cell) {
       cell = [];
@@ -210,35 +251,434 @@ function buildAccidentGrid(accidents) {
     }
     cell.push(index);
   }
-  return { cells, accidents };
+
+  const cellKeys = Array.from(cells.keys()).sort((a, b) => a - b);
+  const cellOffsets = new Uint32Array(cellKeys.length + 1);
+  let totalIndexes = 0;
+  for (let index = 0; index < cellKeys.length; index += 1) {
+    totalIndexes += cells.get(cellKeys[index]).length;
+    cellOffsets[index + 1] = totalIndexes;
+  }
+
+  const cellAccidentIndexes = new Uint32Array(totalIndexes);
+  const cellLookup = new Map();
+  let writeIndex = 0;
+  for (let cellIndex = 0; cellIndex < cellKeys.length; cellIndex += 1) {
+    const key = cellKeys[cellIndex];
+    cellLookup.set(key, cellIndex);
+    for (const accidentIndex of cells.get(key)) {
+      cellAccidentIndexes[writeIndex] = accidentIndex;
+      writeIndex += 1;
+    }
+  }
+
+  return {
+    accidents,
+    accidentXs,
+    accidentYs,
+    cellKeys: Float64Array.from(cellKeys),
+    cellOffsets,
+    cellAccidentIndexes,
+    cellLookup
+  };
 }
 
 function createNodeCoordStore() {
   return {
     size: 0,
-    shards: Array.from({ length: NODE_COORD_SHARD_COUNT }, () => new Map())
+    shards: Array.from({ length: NODE_COORD_SHARD_COUNT }, () => createNodeCoordHashShard(NODE_COORD_INITIAL_SHARD_CAPACITY))
   };
 }
 
 function setNodeCoord(store, nodeId, packedCoord) {
   const shard = store.shards[nodeCoordShard(nodeId)];
-  if (!shard.has(nodeId)) {
+  if (nodeCoordShardSet(shard, nodeId, packedCoord)) {
     store.size += 1;
   }
-  shard.set(nodeId, packedCoord);
+}
+
+function setNodeCoords(store, nodeIds, packedCoords) {
+  for (let index = 0; index < nodeIds.length; index += 1) {
+    setNodeCoord(store, nodeIds[index], packedCoords[index]);
+  }
 }
 
 function getNodeCoord(store, nodeId) {
-  return store.shards[nodeCoordShard(nodeId)].get(nodeId);
+  return nodeCoordShardGet(store.shards[nodeCoordShard(nodeId)], nodeId);
 }
 
 function nodeCoordShard(nodeId) {
   return Math.abs(nodeId) % NODE_COORD_SHARD_COUNT;
 }
 
+function createNodeCoordHashShard(capacity) {
+  return {
+    size: 0,
+    maxSize: Math.floor((capacity * NODE_COORD_MAX_LOAD_NUMERATOR) / NODE_COORD_MAX_LOAD_DENOMINATOR),
+    keys: new Float64Array(capacity),
+    values: new Float64Array(capacity),
+    used: new Uint8Array(capacity)
+  };
+}
+
+function nodeCoordShardSet(shard, nodeId, packedCoord) {
+  if (shard.size >= shard.maxSize) {
+    growNodeCoordShard(shard);
+  }
+  const slot = nodeCoordSlot(shard, nodeId);
+  if (shard.used[slot]) {
+    shard.values[slot] = packedCoord;
+    return false;
+  }
+  shard.used[slot] = 1;
+  shard.keys[slot] = nodeId;
+  shard.values[slot] = packedCoord;
+  shard.size += 1;
+  return true;
+}
+
+function nodeCoordShardGet(shard, nodeId) {
+  const mask = shard.keys.length - 1;
+  let slot = nodeCoordHash(nodeId) & mask;
+  while (shard.used[slot]) {
+    if (shard.keys[slot] === nodeId) {
+      return shard.values[slot];
+    }
+    slot = (slot + 1) & mask;
+  }
+  return undefined;
+}
+
+function nodeCoordSlot(shard, nodeId) {
+  const mask = shard.keys.length - 1;
+  let slot = nodeCoordHash(nodeId) & mask;
+  while (shard.used[slot] && shard.keys[slot] !== nodeId) {
+    slot = (slot + 1) & mask;
+  }
+  return slot;
+}
+
+function growNodeCoordShard(shard) {
+  const oldKeys = shard.keys;
+  const oldValues = shard.values;
+  const oldUsed = shard.used;
+  const capacity = oldKeys.length * 2;
+  shard.keys = new Float64Array(capacity);
+  shard.values = new Float64Array(capacity);
+  shard.used = new Uint8Array(capacity);
+  shard.maxSize = Math.floor((capacity * NODE_COORD_MAX_LOAD_NUMERATOR) / NODE_COORD_MAX_LOAD_DENOMINATOR);
+  shard.size = 0;
+
+  for (let index = 0; index < oldKeys.length; index += 1) {
+    if (oldUsed[index]) {
+      nodeCoordShardSet(shard, oldKeys[index], oldValues[index]);
+    }
+  }
+}
+
+function nodeCoordHash(nodeId) {
+  let value = Math.trunc(nodeId % 4_294_967_291);
+  value = Math.imul(value ^ (value >>> 16), 0x7feb352d);
+  value = Math.imul(value ^ (value >>> 15), 0x846ca68b);
+  return (value ^ (value >>> 16)) >>> 0;
+}
+
+function createDenseNodeProcessor(accidentGrid, nodeCoords) {
+  const workerCount = denseNodeWorkerCount();
+  if (workerCount <= 0) {
+    return {
+      async process(buffer, blockContext) {
+        try {
+          processDenseNodes(buffer, blockContext, accidentGrid, nodeCoords);
+        } catch {
+          // Some historical PBF writers contain dense-node payloads this minimal reader cannot use.
+        }
+      },
+      async drain() {},
+      async close() {}
+    };
+  }
+
+  const maxBatchGroups = denseNodeWorkerBatchGroups();
+  const maxBatchBytes = denseNodeWorkerBatchBytes();
+  console.log(
+    `Street lookup dense-node workers: ${workerCount.toLocaleString("en-US")}, batch ${maxBatchGroups.toLocaleString("en-US")} groups / ${formatBytes(maxBatchBytes)} (set SICHERE_KNOTEN_STREET_WORKERS=0 to disable).`
+  );
+  const pool = new DenseNodeWorkerPool(workerCount, sharedAccidentGridForWorkers(accidentGrid));
+  const pending = new Set();
+  const maxPending = workerCount * 2;
+  let batchGroups = [];
+  let batchBytes = 0;
+
+  async function waitForOne() {
+    const settled = await Promise.race(pending);
+    if (!settled.ok) {
+      throw settled.error;
+    }
+  }
+
+  async function flushBatch() {
+    if (batchGroups.length === 0) {
+      return;
+    }
+    while (pending.size >= maxPending) {
+      await waitForOne();
+    }
+
+    const groups = batchGroups;
+    batchGroups = [];
+    batchBytes = 0;
+    const task = pool.run({ groups });
+    const tracked = task
+      .then((result) => {
+        applyDenseNodeWorkerResult(result, accidentGrid, nodeCoords);
+        return { ok: true };
+      })
+      .catch((error) => ({ ok: false, error }))
+      .finally(() => {
+        pending.delete(tracked);
+      });
+    pending.add(tracked);
+  }
+
+  async function drain() {
+    await flushBatch();
+    while (pending.size > 0) {
+      await waitForOne();
+    }
+  }
+
+  return {
+    async process(buffer, blockContext) {
+      const taskBuffer = copyToArrayBuffer(buffer);
+      batchGroups.push({ buffer: taskBuffer, blockContext });
+      batchBytes += taskBuffer.byteLength;
+      if (batchGroups.length >= maxBatchGroups || batchBytes >= maxBatchBytes) {
+        await flushBatch();
+      }
+    },
+    drain,
+    async close() {
+      try {
+        await drain();
+      } finally {
+        await pool.close();
+      }
+    }
+  };
+}
+
+function denseNodeWorkerCount() {
+  const raw = process.env.SICHERE_KNOTEN_STREET_WORKERS;
+  if (raw !== undefined) {
+    const parsed = Number.parseInt(raw, 10);
+    return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+  }
+  return Math.min(4, Math.max(1, availableParallelism() - 1));
+}
+
+function denseNodeWorkerBatchGroups() {
+  const raw = process.env.SICHERE_KNOTEN_STREET_WORKER_BATCH_GROUPS;
+  if (raw !== undefined) {
+    const parsed = Number.parseInt(raw, 10);
+    return Number.isFinite(parsed) ? Math.max(1, parsed) : DEFAULT_DENSE_NODE_WORKER_BATCH_GROUPS;
+  }
+  return DEFAULT_DENSE_NODE_WORKER_BATCH_GROUPS;
+}
+
+function denseNodeWorkerBatchBytes() {
+  const raw = process.env.SICHERE_KNOTEN_STREET_WORKER_BATCH_BYTES;
+  if (raw !== undefined) {
+    const parsed = Number.parseInt(raw, 10);
+    return Number.isFinite(parsed) ? Math.max(1024, parsed) : DEFAULT_DENSE_NODE_WORKER_BATCH_BYTES;
+  }
+  return DEFAULT_DENSE_NODE_WORKER_BATCH_BYTES;
+}
+
+function sharedAccidentGridForWorkers(accidentGrid) {
+  return {
+    accidentXs: sharedTypedArray(Float64Array, accidentGrid.accidentXs),
+    accidentYs: sharedTypedArray(Float64Array, accidentGrid.accidentYs),
+    cellKeys: sharedTypedArray(Float64Array, accidentGrid.cellKeys),
+    cellOffsets: sharedTypedArray(Uint32Array, accidentGrid.cellOffsets),
+    cellAccidentIndexes: sharedTypedArray(Uint32Array, accidentGrid.cellAccidentIndexes)
+  };
+}
+
+function sharedTypedArray(TypedArray, source) {
+  const shared = new SharedArrayBuffer(source.byteLength);
+  const copy = new TypedArray(shared);
+  copy.set(source);
+  return copy;
+}
+
+function hydrateAccidentGridLookup(accidentGrid) {
+  if (accidentGrid.cellLookup) {
+    return accidentGrid;
+  }
+  const cellLookup = new Map();
+  for (let index = 0; index < accidentGrid.cellKeys.length; index += 1) {
+    cellLookup.set(accidentGrid.cellKeys[index], index);
+  }
+  return { ...accidentGrid, cellLookup };
+}
+
+function copyToArrayBuffer(buffer) {
+  return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+}
+
+function applyDenseNodeWorkerResult(result, accidentGrid, nodeCoords) {
+  const nodeIds = result.nodeIds;
+  const packedCoords = result.packedCoords;
+  setNodeCoords(nodeCoords, nodeIds, packedCoords);
+
+  const roadControlAccidentIndexes = result.roadControlAccidentIndexes;
+  const roadControlMasks = result.roadControlMasks;
+  for (let index = 0; index < roadControlAccidentIndexes.length; index += 1) {
+    accidentGrid.accidents[roadControlAccidentIndexes[index]].osmRoadControlMask |= roadControlMasks[index];
+  }
+}
+
+class DenseNodeWorkerPool {
+  constructor(workerCount, accidentGrid) {
+    this.idleWorkers = [];
+    this.queuedTasks = [];
+    this.runningTasks = new Map();
+    this.nextTaskId = 1;
+    this.workers = Array.from({ length: workerCount }, () => this.createWorker(accidentGrid));
+  }
+
+  createWorker(accidentGrid) {
+    const worker = new Worker(new URL(import.meta.url), {
+      type: "module",
+      workerData: {
+        kind: STREET_DENSE_NODE_WORKER,
+        accidentGrid
+      }
+    });
+    worker.on("message", (message) => this.finishTask(worker, message));
+    worker.on("error", (error) => this.failWorker(worker, error));
+    worker.on("exit", (code) => {
+      if (code !== 0) {
+        this.failWorker(worker, new Error(`Dense-node worker exited with code ${code}.`));
+      }
+    });
+    this.idleWorkers.push(worker);
+    return worker;
+  }
+
+  run(task) {
+    return new Promise((resolve, reject) => {
+      this.queuedTasks.push({
+        id: this.nextTaskId,
+        task,
+        resolve,
+        reject
+      });
+      this.nextTaskId += 1;
+      this.pump();
+    });
+  }
+
+  pump() {
+    while (this.idleWorkers.length > 0 && this.queuedTasks.length > 0) {
+      const worker = this.idleWorkers.pop();
+      const entry = this.queuedTasks.shift();
+      this.runningTasks.set(entry.id, { ...entry, worker });
+      const transferList = entry.task.groups.map((group) => group.buffer);
+      worker.postMessage(
+        {
+          id: entry.id,
+          groups: entry.task.groups
+        },
+        transferList
+      );
+    }
+  }
+
+  finishTask(worker, message) {
+    const entry = this.runningTasks.get(message.id);
+    if (!entry) {
+      return;
+    }
+    this.runningTasks.delete(message.id);
+    this.idleWorkers.push(worker);
+    if (message.error) {
+      entry.reject(new Error(message.error));
+    } else {
+      entry.resolve(message.result);
+    }
+    this.pump();
+  }
+
+  failWorker(worker, error) {
+    for (const [taskId, entry] of this.runningTasks) {
+      if (entry.worker === worker) {
+        this.runningTasks.delete(taskId);
+        entry.reject(error);
+      }
+    }
+    for (const entry of this.queuedTasks.splice(0)) {
+      entry.reject(error);
+    }
+  }
+
+  async close() {
+    await Promise.all(this.workers.map((worker) => worker.terminate()));
+  }
+}
+
+function startDenseNodeWorker(data) {
+  const accidentGrid = hydrateAccidentGridLookup(data.accidentGrid);
+  parentPort.on("message", (message) => {
+    const collector = {
+      nodeIds: [],
+      packedCoords: [],
+      roadControlAccidentIndexes: [],
+      roadControlMasks: []
+    };
+
+    try {
+      for (const group of message.groups) {
+        try {
+          processDenseNodes(Buffer.from(group.buffer), group.blockContext, accidentGrid, null, collector);
+        } catch {
+        }
+      }
+      const nodeIds = Float64Array.from(collector.nodeIds);
+      const packedCoords = Float64Array.from(collector.packedCoords);
+      const roadControlAccidentIndexes = Uint32Array.from(collector.roadControlAccidentIndexes);
+      const roadControlMasks = Uint8Array.from(collector.roadControlMasks);
+      parentPort.postMessage(
+        {
+          id: message.id,
+          result: {
+            nodeIds,
+            packedCoords,
+            roadControlAccidentIndexes,
+            roadControlMasks
+          }
+        },
+        [nodeIds.buffer, packedCoords.buffer, roadControlAccidentIndexes.buffer, roadControlMasks.buffer]
+      );
+    } catch {
+      parentPort.postMessage({
+        id: message.id,
+        result: {
+          nodeIds: new Float64Array(0),
+          packedCoords: new Float64Array(0),
+          roadControlAccidentIndexes: new Uint32Array(0),
+          roadControlMasks: new Uint8Array(0)
+        }
+      });
+    }
+  });
+}
+
 async function matchStreetsFromPbf(pbfPath, fileSize, accidents, accidentGrid) {
   const file = await open(pbfPath, "r");
   const nodeCoords = createNodeCoordStore();
+  const denseNodeProcessor = createDenseNodeProcessor(accidentGrid, nodeCoords);
   let position = 0;
   let blobIndex = 0;
   let lastProgressTime = Date.now();
@@ -249,14 +689,16 @@ async function matchStreetsFromPbf(pbfPath, fileSize, accidents, accidentGrid) {
       const headerSizeBuffer = await readExactly(file, position, 4);
       position += 4;
       const headerSize = headerSizeBuffer.readUInt32BE(0);
-      const header = parseBlobHeader(await readExactly(file, position, headerSize));
+      const headerBuffer = await readExactly(file, position, headerSize);
+      const header = parseBlobHeader(headerBuffer);
       position += headerSize;
       const blobBuffer = await readExactly(file, position, header.datasize);
       position += header.datasize;
       blobIndex += 1;
 
       if (header.type === "OSMData") {
-        processPrimitiveBlock(blobData(blobBuffer), accidents, accidentGrid, nodeCoords);
+        const data = blobData(blobBuffer);
+        await processPrimitiveBlock(data, accidents, accidentGrid, nodeCoords, denseNodeProcessor);
       }
 
       if (Date.now() - lastProgressTime > 5000) {
@@ -272,6 +714,7 @@ async function matchStreetsFromPbf(pbfPath, fileSize, accidents, accidentGrid) {
       }
     }
   } finally {
+    await denseNodeProcessor.close();
     await file.close();
   }
   return position >= fileSize;
@@ -330,7 +773,7 @@ function blobData(buffer) {
   throw new Error("Unsupported OSM PBF blob compression.");
 }
 
-function processPrimitiveBlock(buffer, accidents, accidentGrid, nodeCoords) {
+async function processPrimitiveBlock(buffer, accidents, accidentGrid, nodeCoords, denseNodeProcessor) {
   const state = { pos: 0 };
   let strings = [];
   const groups = [];
@@ -357,9 +800,16 @@ function processPrimitiveBlock(buffer, accidents, accidentGrid, nodeCoords) {
     }
   }
 
-  const blockContext = { strings, granularity, latOffset, lonOffset };
+  const blockContext = {
+    strings,
+    roadControl: denseNodeRoadControlContext(strings),
+    way: wayStringContext(strings),
+    granularity,
+    latOffset,
+    lonOffset
+  };
   for (const group of groups) {
-    processPrimitiveGroup(group, blockContext, accidents, accidentGrid, nodeCoords);
+    await processPrimitiveGroup(group, blockContext, accidents, accidentGrid, nodeCoords, denseNodeProcessor);
   }
 }
 
@@ -379,21 +829,19 @@ function parseStringTable(buffer) {
   return strings;
 }
 
-function processPrimitiveGroup(buffer, blockContext, accidents, accidentGrid, nodeCoords) {
+async function processPrimitiveGroup(buffer, blockContext, accidents, accidentGrid, nodeCoords, denseNodeProcessor) {
   const state = { pos: 0 };
   while (state.pos < buffer.length) {
     const tag = readVarint(buffer, state);
     const field = Math.floor(tag / 8);
     const wire = tag & 7;
     if (field === 2 && wire === 2) {
-      try {
-        processDenseNodes(readBytes(buffer, state), blockContext, accidentGrid, nodeCoords);
-      } catch {
-        // Some historical PBF writers contain dense-node payloads this minimal reader cannot use.
-      }
+      await denseNodeProcessor.process(readBytes(buffer, state), denseNodeBlockContext(blockContext));
     } else if (field === 3 && wire === 2) {
+      const wayBuffer = readBytes(buffer, state);
+      await denseNodeProcessor.drain();
       try {
-        processWay(readBytes(buffer, state), blockContext.strings, accidents, accidentGrid, nodeCoords);
+        processWay(wayBuffer, blockContext, accidents, accidentGrid, nodeCoords);
       } catch {
         // Ignore a malformed way and continue matching the rest of the PBF.
       }
@@ -403,7 +851,16 @@ function processPrimitiveGroup(buffer, blockContext, accidents, accidentGrid, no
   }
 }
 
-function processDenseNodes(buffer, blockContext, accidentGrid, nodeCoords) {
+function denseNodeBlockContext(blockContext) {
+  return {
+    roadControl: blockContext.roadControl,
+    granularity: blockContext.granularity,
+    latOffset: blockContext.latOffset,
+    lonOffset: blockContext.lonOffset
+  };
+}
+
+function processDenseNodes(buffer, blockContext, accidentGrid, nodeCoords, collector = null) {
   const state = { pos: 0 };
   const ids = [];
   const lats = [];
@@ -440,23 +897,34 @@ function processDenseNodes(buffer, blockContext, accidentGrid, nodeCoords) {
     rawLon += lons[index];
     const lat = (blockContext.latOffset + blockContext.granularity * rawLat) * 1e-9;
     const lon = (blockContext.lonOffset + blockContext.granularity * rawLon) * 1e-9;
-    const roadControlMask = roadControlMaskForDenseNode(keysVals, keysValsIndex, blockContext.strings);
+    const roadControlMask = roadControlMaskForDenseNode(keysVals, keysValsIndex, blockContext.roadControl);
     keysValsIndex = skipDenseNodeTags(keysVals, keysValsIndex);
-    const point = projectLonLat(lon, lat);
-    if (isPointNearAccident(accidentGrid, point)) {
-      setNodeCoord(nodeCoords, id, packCoord(lat, lon));
+    const x = projectX(lon, lat);
+    const y = projectY(lat);
+    if (isPointNearAccidentXY(accidentGrid, x, y)) {
+      const packedCoord = packCoord(lat, lon);
+      if (collector) {
+        collector.nodeIds.push(id);
+        collector.packedCoords.push(packedCoord);
+      } else {
+        setNodeCoord(nodeCoords, id, packedCoord);
+      }
     }
     if (roadControlMask) {
-      matchPointRoadControlToAccidents(point, roadControlMask, accidentGrid);
+      if (collector) {
+        collectPointRoadControlMatches(x, y, roadControlMask, accidentGrid, collector.roadControlAccidentIndexes, collector.roadControlMasks);
+      } else {
+        matchPointRoadControlToAccidentsXY(x, y, roadControlMask, accidentGrid);
+      }
     }
   }
 }
 
-function processWay(buffer, strings, accidents, accidentGrid, nodeCoords) {
+function processWay(buffer, blockContext, accidents, accidentGrid, nodeCoords) {
   const state = { pos: 0 };
   const keys = [];
   const vals = [];
-  const refs = [];
+  const refParts = [];
 
   while (state.pos < buffer.length) {
     const tag = readVarint(buffer, state);
@@ -467,65 +935,116 @@ function processWay(buffer, strings, accidents, accidentGrid, nodeCoords) {
     } else if (field === 3) {
       readPackedValues(buffer, state, wire, false, vals);
     } else if (field === 8) {
-      readPackedValues(buffer, state, wire, true, refs);
+      if (wire === 2) {
+        refParts.push({ kind: "packed", buffer: readBytes(buffer, state) });
+      } else if (wire === 0) {
+        refParts.push({ kind: "single", delta: zigZagDecode(readVarint(buffer, state)) });
+      } else {
+        skipField(buffer, state, wire);
+      }
     } else {
       skipField(buffer, state, wire);
     }
   }
 
-  const metadata = osmMetadataForWay(keys, vals, strings);
-  if ((!metadata.streetName && !metadata.roadControlMask) || refs.length < 2) {
+  const metadata = osmMetadataForWay(keys, vals, blockContext);
+  if ((!metadata.streetName && !metadata.roadControlMask) || refParts.length === 0) {
     return;
   }
 
+  processWayRefs(refParts, metadata, accidents, accidentGrid, nodeCoords);
+}
+
+function processWayRefs(refParts, metadata, accidents, accidentGrid, nodeCoords) {
   let previousNodeId = 0;
-  let previousPoint = null;
-  for (const delta of refs) {
+  let hasPreviousPoint = false;
+  let previousX = 0;
+  let previousY = 0;
+
+  function scanDelta(delta) {
     const nodeId = previousNodeId + delta;
     const packed = getNodeCoord(nodeCoords, nodeId);
-    const currentPoint = packed === undefined ? null : projectPackedCoord(packed);
-    if (previousPoint && currentPoint) {
-      if (metadata.streetName) {
-        matchSegmentToAccidents(previousPoint, currentPoint, metadata.streetName, accidents, accidentGrid);
+    if (packed !== undefined) {
+      const latE5 = Math.floor(packed / COORD_PACK_BASE);
+      const lonE5 = packed - latE5 * COORD_PACK_BASE;
+      const lat = latE5 / 100000;
+      const lon = lonE5 / 100000;
+      const currentX = projectX(lon, lat);
+      const currentY = projectY(lat);
+      if (hasPreviousPoint) {
+        if (metadata.streetName) {
+          matchSegmentToAccidentsXY(previousX, previousY, currentX, currentY, metadata.streetName, accidents, accidentGrid);
+        }
+        if (metadata.roadControlMask) {
+          matchSegmentRoadControlToAccidentsXY(previousX, previousY, currentX, currentY, metadata.roadControlMask, accidentGrid);
+        }
       }
-      if (metadata.roadControlMask) {
-        matchSegmentRoadControlToAccidents(previousPoint, currentPoint, metadata.roadControlMask, accidentGrid);
-      }
+      previousX = currentX;
+      previousY = currentY;
+      hasPreviousPoint = true;
+    } else {
+      hasPreviousPoint = false;
     }
     previousNodeId = nodeId;
-    previousPoint = currentPoint;
+  }
+
+  for (const part of refParts) {
+    if (part.kind === "single") {
+      scanDelta(part.delta);
+    } else {
+      const state = { pos: 0 };
+      while (state.pos < part.buffer.length) {
+        scanDelta(zigZagDecode(readVarint(part.buffer, state)));
+      }
+    }
   }
 }
 
-function osmMetadataForWay(keys, vals, strings) {
-  let highway = "";
-  let junction = "";
-  let name = "";
-  let officialName = "";
-  let ref = "";
+function osmMetadataForWay(keys, vals, blockContext) {
+  const strings = blockContext.strings;
+  const context = blockContext.way;
+  let highwayIndex = 0;
+  let junctionIndex = 0;
+  let nameIndex = 0;
+  let officialNameIndex = 0;
+  let refIndex = 0;
 
   for (let index = 0; index < keys.length; index += 1) {
-    const key = strings[keys[index]];
-    const value = strings[vals[index]];
-    if (key === "highway") {
-      highway = value;
-    } else if (key === "junction") {
-      junction = value;
-    } else if (key === "name") {
-      name = value;
-    } else if (key === "official_name") {
-      officialName = value;
-    } else if (key === "ref") {
-      ref = value;
+    const keyIndex = keys[index];
+    const valueIndex = vals[index];
+    if (keyIndex === context.highwayKey) {
+      highwayIndex = valueIndex;
+    } else if (keyIndex === context.junctionKey) {
+      junctionIndex = valueIndex;
+    } else if (keyIndex === context.nameKey) {
+      nameIndex = valueIndex;
+    } else if (keyIndex === context.officialNameKey) {
+      officialNameIndex = valueIndex;
+    } else if (keyIndex === context.refKey) {
+      refIndex = valueIndex;
     }
   }
 
-  const hasUsableHighway = Boolean(highway && highway !== "construction" && highway !== "proposed");
-  const roadControlMask = hasUsableHighway && junction === "roundabout" ? OSM_ROUNDABOUT_MASK : 0;
-  if (!highway || highway === "construction" || highway === "proposed") {
+  const hasUsableHighway =
+    highwayIndex > 0 && highwayIndex !== context.constructionValue && highwayIndex !== context.proposedValue;
+  const roadControlMask = hasUsableHighway && junctionIndex === context.roundaboutValue ? OSM_ROUNDABOUT_MASK : 0;
+  if (!hasUsableHighway) {
     return { streetName: null, roadControlMask };
   }
-  return { streetName: cleanStreetName(name || officialName || ref), roadControlMask };
+  return { streetName: cleanStreetName(strings[nameIndex] || strings[officialNameIndex] || strings[refIndex]), roadControlMask };
+}
+
+function wayStringContext(strings) {
+  return {
+    highwayKey: strings.indexOf("highway"),
+    junctionKey: strings.indexOf("junction"),
+    nameKey: strings.indexOf("name"),
+    officialNameKey: strings.indexOf("official_name"),
+    refKey: strings.indexOf("ref"),
+    constructionValue: strings.indexOf("construction"),
+    proposedValue: strings.indexOf("proposed"),
+    roundaboutValue: strings.indexOf("roundabout")
+  };
 }
 
 function cleanStreetName(value) {
@@ -533,28 +1052,35 @@ function cleanStreetName(value) {
   return normalized || null;
 }
 
-function isNearAccident(accidentGrid, lon, lat) {
-  return isPointNearAccident(accidentGrid, projectLonLat(lon, lat));
-}
-
-function isPointNearAccident(accidentGrid, point) {
-  const nearby = accidentIndexesInBounds(
+function isPointNearAccidentXY(accidentGrid, x, y) {
+  let found = false;
+  forEachAccidentIndexInBounds(
     accidentGrid,
-    point.x - NODE_CAPTURE_RADIUS_METERS,
-    point.y - NODE_CAPTURE_RADIUS_METERS,
-    point.x + NODE_CAPTURE_RADIUS_METERS,
-    point.y + NODE_CAPTURE_RADIUS_METERS
-  );
-  for (const accidentIndex of nearby) {
-    const accident = accidentGrid.accidents[accidentIndex];
-    if (squaredDistance(point.x, point.y, accident.x, accident.y) <= NODE_CAPTURE_RADIUS_METERS ** 2) {
+    x - NODE_CAPTURE_RADIUS_METERS,
+    y - NODE_CAPTURE_RADIUS_METERS,
+    x + NODE_CAPTURE_RADIUS_METERS,
+    y + NODE_CAPTURE_RADIUS_METERS,
+    (accidentIndex) => {
+      if (squaredDistance(x, y, accidentGrid.accidentXs[accidentIndex], accidentGrid.accidentYs[accidentIndex]) <= NODE_CAPTURE_RADIUS_METERS ** 2) {
+        found = true;
+        return false;
+      }
       return true;
     }
-  }
-  return false;
+  );
+  return found;
 }
 
-function roadControlMaskForDenseNode(keysVals, startIndex, strings) {
+function denseNodeRoadControlContext(strings) {
+  return {
+    highwayKey: strings.indexOf("highway"),
+    crossingKey: strings.indexOf("crossing"),
+    trafficSignalsValue: strings.indexOf("traffic_signals"),
+    miniRoundaboutValue: strings.indexOf("mini_roundabout")
+  };
+}
+
+function roadControlMaskForDenseNode(keysVals, startIndex, context) {
   let mask = 0;
   let index = startIndex;
   while (index < keysVals.length) {
@@ -565,13 +1091,11 @@ function roadControlMaskForDenseNode(keysVals, startIndex, strings) {
     }
     const valueIndex = keysVals[index];
     index += 1;
-    const key = strings[keyIndex];
-    const value = strings[valueIndex];
-    if (key === "highway" && value === "traffic_signals") {
+    if (keyIndex === context.highwayKey && valueIndex === context.trafficSignalsValue) {
       mask |= OSM_TRAFFIC_SIGNAL_MASK;
-    } else if (key === "crossing" && value === "traffic_signals") {
+    } else if (keyIndex === context.crossingKey && valueIndex === context.trafficSignalsValue) {
       mask |= OSM_TRAFFIC_SIGNAL_MASK;
-    } else if (key === "highway" && value === "mini_roundabout") {
+    } else if (keyIndex === context.highwayKey && valueIndex === context.miniRoundaboutValue) {
       mask |= OSM_ROUNDABOUT_MASK;
     }
   }
@@ -591,16 +1115,14 @@ function skipDenseNodeTags(keysVals, startIndex) {
   return index;
 }
 
-function matchSegmentToAccidents(a, b, streetName, accidents, accidentGrid) {
-  const minX = Math.min(a.x, b.x) - STREET_MATCH_RADIUS_METERS;
-  const minY = Math.min(a.y, b.y) - STREET_MATCH_RADIUS_METERS;
-  const maxX = Math.max(a.x, b.x) + STREET_MATCH_RADIUS_METERS;
-  const maxY = Math.max(a.y, b.y) + STREET_MATCH_RADIUS_METERS;
-  const nearby = accidentIndexesInBounds(accidentGrid, minX, minY, maxX, maxY);
-
-  for (const accidentIndex of nearby) {
+function matchSegmentToAccidentsXY(ax, ay, bx, by, streetName, accidents, accidentGrid) {
+  const minX = Math.min(ax, bx) - STREET_MATCH_RADIUS_METERS;
+  const minY = Math.min(ay, by) - STREET_MATCH_RADIUS_METERS;
+  const maxX = Math.max(ax, bx) + STREET_MATCH_RADIUS_METERS;
+  const maxY = Math.max(ay, by) + STREET_MATCH_RADIUS_METERS;
+  forEachAccidentIndexInBounds(accidentGrid, minX, minY, maxX, maxY, (accidentIndex) => {
     const accident = accidents[accidentIndex];
-    const distance = pointSegmentDistance(accident.x, accident.y, a.x, a.y, b.x, b.y);
+    const distance = pointSegmentDistance(accident.x, accident.y, ax, ay, bx, by);
     if (distance <= STREET_MATCH_RADIUS_METERS) {
       if (!accident.streetMatches) {
         accident.streetMatches = new Map();
@@ -610,75 +1132,111 @@ function matchSegmentToAccidents(a, b, streetName, accidents, accidentGrid) {
         accident.streetMatches.set(streetName, distance);
       }
     }
-  }
+    return true;
+  });
 }
 
-function matchPointRoadControlToAccidents(point, mask, accidentGrid) {
-  const nearby = accidentIndexesInBounds(
+function matchPointRoadControlToAccidentsXY(x, y, mask, accidentGrid) {
+  forEachAccidentIndexInBounds(
     accidentGrid,
-    point.x - ROAD_CONTROL_MATCH_RADIUS_METERS,
-    point.y - ROAD_CONTROL_MATCH_RADIUS_METERS,
-    point.x + ROAD_CONTROL_MATCH_RADIUS_METERS,
-    point.y + ROAD_CONTROL_MATCH_RADIUS_METERS
-  );
-
-  for (const accidentIndex of nearby) {
-    const accident = accidentGrid.accidents[accidentIndex];
-    if (squaredDistance(point.x, point.y, accident.x, accident.y) <= ROAD_CONTROL_MATCH_RADIUS_METERS ** 2) {
-      accident.osmRoadControlMask |= mask;
+    x - ROAD_CONTROL_MATCH_RADIUS_METERS,
+    y - ROAD_CONTROL_MATCH_RADIUS_METERS,
+    x + ROAD_CONTROL_MATCH_RADIUS_METERS,
+    y + ROAD_CONTROL_MATCH_RADIUS_METERS,
+    (accidentIndex) => {
+      if (squaredDistance(x, y, accidentGrid.accidentXs[accidentIndex], accidentGrid.accidentYs[accidentIndex]) <= ROAD_CONTROL_MATCH_RADIUS_METERS ** 2) {
+        accidentGrid.accidents[accidentIndex].osmRoadControlMask |= mask;
+      }
+      return true;
     }
-  }
+  );
 }
 
-function matchSegmentRoadControlToAccidents(a, b, mask, accidentGrid) {
-  const minX = Math.min(a.x, b.x) - ROAD_CONTROL_MATCH_RADIUS_METERS;
-  const minY = Math.min(a.y, b.y) - ROAD_CONTROL_MATCH_RADIUS_METERS;
-  const maxX = Math.max(a.x, b.x) + ROAD_CONTROL_MATCH_RADIUS_METERS;
-  const maxY = Math.max(a.y, b.y) + ROAD_CONTROL_MATCH_RADIUS_METERS;
-  const nearby = accidentIndexesInBounds(accidentGrid, minX, minY, maxX, maxY);
+function collectPointRoadControlMatches(x, y, mask, accidentGrid, accidentIndexes, masks) {
+  forEachAccidentIndexInBounds(
+    accidentGrid,
+    x - ROAD_CONTROL_MATCH_RADIUS_METERS,
+    y - ROAD_CONTROL_MATCH_RADIUS_METERS,
+    x + ROAD_CONTROL_MATCH_RADIUS_METERS,
+    y + ROAD_CONTROL_MATCH_RADIUS_METERS,
+    (accidentIndex) => {
+      if (squaredDistance(x, y, accidentGrid.accidentXs[accidentIndex], accidentGrid.accidentYs[accidentIndex]) <= ROAD_CONTROL_MATCH_RADIUS_METERS ** 2) {
+        accidentIndexes.push(accidentIndex);
+        masks.push(mask);
+      }
+      return true;
+    }
+  );
+}
 
-  for (const accidentIndex of nearby) {
+function matchSegmentRoadControlToAccidentsXY(ax, ay, bx, by, mask, accidentGrid) {
+  const minX = Math.min(ax, bx) - ROAD_CONTROL_MATCH_RADIUS_METERS;
+  const minY = Math.min(ay, by) - ROAD_CONTROL_MATCH_RADIUS_METERS;
+  const maxX = Math.max(ax, bx) + ROAD_CONTROL_MATCH_RADIUS_METERS;
+  const maxY = Math.max(ay, by) + ROAD_CONTROL_MATCH_RADIUS_METERS;
+  forEachAccidentIndexInBounds(accidentGrid, minX, minY, maxX, maxY, (accidentIndex) => {
     const accident = accidentGrid.accidents[accidentIndex];
-    const distance = pointSegmentDistance(accident.x, accident.y, a.x, a.y, b.x, b.y);
+    const distance = pointSegmentDistance(accident.x, accident.y, ax, ay, bx, by);
     if (distance <= ROAD_CONTROL_MATCH_RADIUS_METERS) {
       accident.osmRoadControlMask |= mask;
     }
-  }
+    return true;
+  });
 }
 
-function accidentIndexesInBounds(accidentGrid, minX, minY, maxX, maxY) {
+function forEachAccidentIndexInBounds(accidentGrid, minX, minY, maxX, maxY, visit) {
   const minCellX = Math.floor(minX / GRID_CELL_METERS);
   const maxCellX = Math.floor(maxX / GRID_CELL_METERS);
   const minCellY = Math.floor(minY / GRID_CELL_METERS);
   const maxCellY = Math.floor(maxY / GRID_CELL_METERS);
-  const indexes = [];
 
   for (let cellX = minCellX; cellX <= maxCellX; cellX += 1) {
     for (let cellY = minCellY; cellY <= maxCellY; cellY += 1) {
-      const cell = accidentGrid.cells.get(gridKey(cellX, cellY));
-      if (cell) {
-        indexes.push(...cell);
+      const cellIndex = accidentGrid.cellLookup.get(gridCellKey(cellX, cellY));
+      if (cellIndex === undefined) {
+        continue;
+      }
+      const start = accidentGrid.cellOffsets[cellIndex];
+      const end = accidentGrid.cellOffsets[cellIndex + 1];
+      for (let index = start; index < end; index += 1) {
+        if (visit(accidentGrid.cellAccidentIndexes[index]) === false) {
+          return false;
+        }
       }
     }
   }
 
-  return indexes;
+  return true;
 }
 
 function finalizeStreetLookup(version, source) {
-  const names = Array.from(new Set(source.accidents.flatMap((accident) => streetNamesForAccident(accident)))).sort((a, b) =>
-    a.localeCompare(b, "de", { sensitivity: "base" })
-  );
+  const accidentStreetNames = new Array(source.accidents.length);
+  const nameSet = new Set();
+
+  for (let index = 0; index < source.accidents.length; index += 1) {
+    const names = topStreetNamesForAccident(source.accidents[index]);
+    accidentStreetNames[index] = names;
+    for (const name of names) {
+      nameSet.add(name);
+    }
+  }
+
+  const names = Array.from(nameSet).sort((a, b) => germanBaseCollator.compare(a, b));
   const indexesByName = new Map(names.map((name, index) => [name, index + 1]));
 
-  for (const accident of source.accidents) {
-    const streetIndexes = streetNamesForAccident(accident)
-      .map((name) => indexesByName.get(name) ?? 0)
-      .filter((index) => index > 0);
-    if (streetIndexes.length > 0) {
-      source.files[accident.fileIndex].indexes[accident.rowIndex - 1] =
-        streetIndexes.length === 1 ? streetIndexes[0] : streetIndexes;
+  for (let index = 0; index < source.accidents.length; index += 1) {
+    const accident = source.accidents[index];
+    const streetNames = accidentStreetNames[index];
+    if (streetNames.length === 0) {
+      source.files[accident.fileIndex].osmRoadControlMasks[accident.rowIndex - 1] = accident.osmRoadControlMask;
+      continue;
     }
+    const streetIndexes = new Array(streetNames.length);
+    for (let streetIndex = 0; streetIndex < streetNames.length; streetIndex += 1) {
+      streetIndexes[streetIndex] = indexesByName.get(streetNames[streetIndex]) ?? 0;
+    }
+    source.files[accident.fileIndex].indexes[accident.rowIndex - 1] =
+      streetIndexes.length === 1 ? streetIndexes[0] : streetIndexes;
     source.files[accident.fileIndex].osmRoadControlMasks[accident.rowIndex - 1] = accident.osmRoadControlMask;
   }
 
@@ -689,14 +1247,40 @@ function finalizeStreetLookup(version, source) {
   };
 }
 
-function streetNamesForAccident(accident) {
+function topStreetNamesForAccident(accident) {
   if (!accident.streetMatches) {
     return [];
   }
-  return Array.from(accident.streetMatches.entries())
-    .sort((a, b) => a[1] - b[1] || a[0].localeCompare(b[0], "de", { sensitivity: "base" }))
-    .slice(0, MAX_STREET_NAMES_PER_ACCIDENT)
-    .map(([name]) => name);
+  if (accident.streetMatches.size === 1) {
+    return [accident.streetMatches.keys().next().value];
+  }
+
+  const names = [];
+  const distances = [];
+  for (const [name, distance] of accident.streetMatches) {
+    let insertAt = names.length;
+    while (insertAt > 0 && compareStreetMatch(name, distance, names[insertAt - 1], distances[insertAt - 1]) < 0) {
+      insertAt -= 1;
+    }
+    if (insertAt < MAX_STREET_NAMES_PER_ACCIDENT) {
+      const end = Math.min(names.length, MAX_STREET_NAMES_PER_ACCIDENT - 1);
+      for (let index = end; index > insertAt; index -= 1) {
+        names[index] = names[index - 1];
+        distances[index] = distances[index - 1];
+      }
+      names[insertAt] = name;
+      distances[insertAt] = distance;
+      if (names.length > MAX_STREET_NAMES_PER_ACCIDENT) {
+        names.length = MAX_STREET_NAMES_PER_ACCIDENT;
+        distances.length = MAX_STREET_NAMES_PER_ACCIDENT;
+      }
+    }
+  }
+  return names;
+}
+
+function compareStreetMatch(nameA, distanceA, nameB, distanceB) {
+  return distanceA - distanceB || germanBaseCollator.compare(nameA, nameB);
 }
 
 function matchedAccidentCount(accidents) {
@@ -775,23 +1359,23 @@ function packCoord(lat, lon) {
   return Math.round(lat * 100000) * COORD_PACK_BASE + Math.round(lon * 100000);
 }
 
-function projectPackedCoord(packed) {
-  const latE5 = Math.floor(packed / COORD_PACK_BASE);
-  const lonE5 = packed - latE5 * COORD_PACK_BASE;
-  const lat = latE5 / 100000;
-  const lon = lonE5 / 100000;
-  return projectLonLat(lon, lat);
-}
-
 function projectLonLat(lon, lat) {
   return {
-    x: lon * 111320 * Math.cos(lat * degreesToRadians),
-    y: lat * 110540
+    x: projectX(lon, lat),
+    y: projectY(lat)
   };
 }
 
-function gridKey(cellX, cellY) {
-  return `${cellX}:${cellY}`;
+function projectX(lon, lat) {
+  return lon * 111320 * Math.cos(lat * degreesToRadians);
+}
+
+function projectY(lat) {
+  return lat * 110540;
+}
+
+function gridCellKey(cellX, cellY) {
+  return (cellX + GRID_CELL_KEY_OFFSET) * GRID_CELL_KEY_FACTOR + cellY + GRID_CELL_KEY_OFFSET;
 }
 
 function squaredDistance(ax, ay, bx, by) {
