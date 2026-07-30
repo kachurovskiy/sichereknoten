@@ -43,7 +43,7 @@ Each accident state shard is a custom binary `AccidentRecord[]` payload compress
 
 The default all-Germany analysis is precomputed at build time. Hosted pages load it as a custom gzip-compressed binary asset with `fetch()` to avoid parsing a very large JavaScript data assignment or JSON payload in Chrome.
 
-When the local PBF exists, `scripts/build-streets.mjs` streams it during build and creates a compact OSM lookup bundle used while normalizing accident records. The bundle uses one global street-name dictionary and per-CSV-row integer street indexes instead of repeating street names for every accident. Rows near multiple named streets store a short integer list so intersection incidents can keep more than one nearby street name. The same lookup stores a small per-row bitmask for nearby OSM road-control tags: `junction=roundabout`/`highway=mini_roundabout` for roundabouts and `highway=traffic_signals`/`crossing=traffic_signals` for traffic lights. A local rebuild cache is written to `data/generated/street-lookup.json` and ignored by Git. The runtime app does not ship or load this lookup because normalized accident shards already contain the street names and OSM road-control flags needed by the UI.
+When the local PBF exists, `scripts/build-streets.mjs` streams it during build and creates a compact OSM lookup bundle used while normalizing accident records. The bundle uses one global street-name dictionary and per-CSV-row integer street indexes instead of repeating street names for every accident. Rows near multiple named streets store a short integer list so intersection incidents can keep more than one nearby street name. The same lookup stores a small per-row bitmask for nearby OSM road-control tags: `highway=traffic_signals`/`crossing=traffic_signals` for traffic lights, plus a per-row roundabout geometry index for rows matched to `junction=roundabout` ways or `highway=mini_roundabout` nodes. Way roundabouts are converted into approximate center/radius geometries and match accidents inside `radius + 20 m`; mini roundabouts use radius `0` and therefore a `20 m` match radius. A local rebuild cache is written to `data/generated/street-lookup.json` and ignored by Git. The runtime app does not ship or load this lookup because normalized accident shards already contain the street names, OSM road-control flags, and roundabout geometry metadata needed by the UI.
 
 See `STREET_LOOKUP_PIPELINE.md` for the street lookup flow diagram, stage table, and test flags.
 
@@ -119,6 +119,7 @@ Mapped accident fields:
 - `streetName`: primary nearest named OSM highway resolved from the generated build-time street lookup when available.
 - `streetNames`: all nearby named OSM highways retained for the accident, usually one street and up to a few streets at intersections.
 - `osmRoundabout`, `osmTrafficSignal`: nullable booleans derived from the build-time OSM lookup. `null` means the normalized bundle was built without this OSM metadata.
+- `osmRoundaboutId`, `osmRoundaboutLon`, `osmRoundaboutLat`, `osmRoundaboutRadiusMeters`, `osmRoundaboutMatchRadiusMeters`: nullable geometry metadata for accidents assigned to a specific OSM roundabout.
 
 Injury outcomes from `UKATEGORIE`:
 
@@ -136,12 +137,18 @@ The app does not derive real road-topology intersections from a road network. It
 The clustering algorithm:
 
 1. Filters accidents by selected years and Bundesland.
-2. Converts lon/lat to an approximate meter grid with `lonLatToMeterPoint()`.
-3. Uses grid buckets sized by the selected cluster radius.
-4. For each accident, searches neighboring buckets for the nearest cluster centroid within the radius.
-5. Adds the accident to that cluster or creates a new cluster.
-6. Updates the cluster centroid and bucket when the centroid moves.
-7. Drops clusters below the selected minimum accident count.
+2. Groups accidents with roundabout geometry by OSM roundabout id.
+3. Promotes a roundabout group to a fixed-center intersection only when it has at least `max(2, selected minimum accident count)` accidents after the current filters.
+4. Places promoted roundabout intersections at the OSM roundabout center and stores the OSM radius plus the `20 m` match buffer.
+5. Removes promoted roundabout accidents from the normal clustering pass.
+6. Converts remaining lon/lat points to an approximate meter grid with `lonLatToMeterPoint()`.
+7. Uses grid buckets sized by the selected cluster radius.
+8. For each remaining accident, searches neighboring buckets for the nearest cluster centroid within the radius.
+9. Adds the accident to that cluster or creates a new cluster.
+10. Updates the cluster centroid and bucket when the centroid moves.
+11. Drops clusters below the selected minimum accident count.
+
+Roundabout accidents whose geometry-centered group is below the selected minimum remain eligible for normal clustering, but their roundabout flag is ignored in that normal cluster. This prevents a nearby fallback centroid from being marked as a roundabout when the actual roundabout-centered intersection no longer meets the minimum accident requirement. Traffic-light metadata is still counted normally.
 
 The default cluster radius is 60 meters.
 

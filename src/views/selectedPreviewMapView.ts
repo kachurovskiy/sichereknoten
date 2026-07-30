@@ -188,7 +188,7 @@ export class SelectedPreviewMapView {
     height: number
   ): number {
     const offsets = incidentPoints.map((point) => localMeterOffset(cluster, point));
-    const baseRadiusMeters = Math.max(55, this.deps.clusterRadiusMeters());
+    const baseRadiusMeters = Math.max(55, cluster.osmRoundaboutMatchRadiusMeters ?? this.deps.clusterRadiusMeters());
     const radiusMeters = maxAbsoluteOffset(baseRadiusMeters, offsets) + 24;
     const usableWidth = Math.max(120, width - 36);
     const usableHeight = Math.max(80, height - 36);

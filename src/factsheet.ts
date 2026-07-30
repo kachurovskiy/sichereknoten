@@ -844,7 +844,7 @@ function drawFactsheetMapAttribution(context: CanvasRenderingContext2D, x: numbe
 
 function chooseFactsheetMapZoom(cluster: IntersectionCluster, records: FactsheetAccidentRecord[], width: number, height: number): number {
   const offsets = records.map(({ accident }) => localMeterOffset(cluster, accident));
-  const radiusMeters = maxAbsoluteOffset(90, offsets) + 70;
+  const radiusMeters = maxAbsoluteOffset(Math.max(90, cluster.osmRoundaboutMatchRadiusMeters ?? 90), offsets) + 70;
   for (let zoom = 19; zoom >= 10; zoom -= 1) {
     const metersPerPixel = (156_543.03392 * Math.cos(radians(cluster.lat))) / 2 ** zoom;
     if (width * metersPerPixel >= radiusMeters * 2 && height * metersPerPixel >= radiusMeters * 2) {

@@ -4,16 +4,30 @@ interface StreetLookupFile {
   name: string;
   indexes: StreetLookupIndexEntry[];
   osmRoadControlMasks?: number[];
+  osmRoundaboutIndexes?: number[];
+}
+
+interface StreetLookupRoundabout {
+  lon: number;
+  lat: number;
+  radiusMeters: number;
+  matchRadiusMeters: number;
 }
 
 interface StreetLookupBundle {
   version: string;
   names: string[];
+  roundabouts?: StreetLookupRoundabout[];
   files: StreetLookupFile[];
 }
 
 interface OsmRoadMetadata {
   roundabout: boolean | null;
+  roundaboutId: number | null;
+  roundaboutLon: number | null;
+  roundaboutLat: number | null;
+  roundaboutRadiusMeters: number | null;
+  roundaboutMatchRadiusMeters: number | null;
   trafficSignal: boolean | null;
 }
 
@@ -51,26 +65,66 @@ export function osmRoadMetadataForAccident(source: string, rowIndex: number): Os
   }
 
   const file = streetLookupFile(bundle, source);
-  if (!file?.osmRoadControlMasks) {
+  if (!file) {
     return unknownOsmRoadMetadata();
   }
 
-  const mask = file.osmRoadControlMasks[rowIndex - 1] ?? 0;
+  const hasRoadControlMasks = Array.isArray(file.osmRoadControlMasks);
+  const mask = hasRoadControlMasks ? file.osmRoadControlMasks?.[rowIndex - 1] ?? 0 : 0;
+  const roundaboutIndex = file.osmRoundaboutIndexes?.[rowIndex - 1] ?? 0;
+  const roundabout = roundaboutForIndex(bundle, roundaboutIndex);
+  if (!hasRoadControlMasks && !roundabout) {
+    return unknownOsmRoadMetadata();
+  }
+
   return {
-    roundabout: Boolean(mask & OSM_ROUNDABOUT_MASK),
-    trafficSignal: Boolean(mask & OSM_TRAFFIC_SIGNAL_MASK)
+    roundabout: Boolean(roundabout) || Boolean(mask & OSM_ROUNDABOUT_MASK),
+    roundaboutId: roundabout ? roundaboutIndex : null,
+    roundaboutLon: roundabout?.lon ?? null,
+    roundaboutLat: roundabout?.lat ?? null,
+    roundaboutRadiusMeters: roundabout?.radiusMeters ?? null,
+    roundaboutMatchRadiusMeters: roundabout?.matchRadiusMeters ?? null,
+    trafficSignal: hasRoadControlMasks ? Boolean(mask & OSM_TRAFFIC_SIGNAL_MASK) : null
   };
 }
 
 function unknownOsmRoadMetadata(): OsmRoadMetadata {
   return {
     roundabout: null,
+    roundaboutId: null,
+    roundaboutLon: null,
+    roundaboutLat: null,
+    roundaboutRadiusMeters: null,
+    roundaboutMatchRadiusMeters: null,
     trafficSignal: null
   };
 }
 
 function streetNameForIndex(bundle: StreetLookupBundle, streetIndex: number): string | null {
   return streetIndex > 0 ? bundle.names[streetIndex - 1] ?? null : null;
+}
+
+function roundaboutForIndex(bundle: StreetLookupBundle, roundaboutIndex: number): StreetLookupRoundabout | null {
+  if (roundaboutIndex <= 0 || !Array.isArray(bundle.roundabouts)) {
+    return null;
+  }
+  const roundabout = bundle.roundabouts[roundaboutIndex - 1];
+  return isRoundaboutGeometry(roundabout) ? roundabout : null;
+}
+
+function isRoundaboutGeometry(value: StreetLookupRoundabout | undefined): value is StreetLookupRoundabout {
+  return (
+    typeof value?.lon === "number" &&
+    Number.isFinite(value.lon) &&
+    typeof value.lat === "number" &&
+    Number.isFinite(value.lat) &&
+    typeof value.radiusMeters === "number" &&
+    Number.isFinite(value.radiusMeters) &&
+    value.radiusMeters >= 0 &&
+    typeof value.matchRadiusMeters === "number" &&
+    Number.isFinite(value.matchRadiusMeters) &&
+    value.matchRadiusMeters >= value.radiusMeters
+  );
 }
 
 function streetLookupFile(bundle: StreetLookupBundle, source: string): StreetLookupFile | null {

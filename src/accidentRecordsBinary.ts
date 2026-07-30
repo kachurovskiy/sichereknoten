@@ -17,8 +17,9 @@ import {
 import { stateNameFor } from "./states";
 import type { AccidentRecord } from "./types";
 
-export const ACCIDENT_RECORDS_BINARY_MAGIC = "SKACC01";
+export const ACCIDENT_RECORDS_BINARY_MAGIC = "SKACC02";
 export const ACCIDENT_LINREF_SCALE = 100;
+export const ACCIDENT_ROUNDABOUT_COORDINATE_SCALE = 10_000_000;
 
 const ACCIDENT_SOURCE_TYPES: readonly AccidentRecord["sourceType"][] = ["csv", "dbf"];
 const ACCIDENT_SOURCE_TYPE_IDS = new Map<AccidentRecord["sourceType"], number>(
@@ -151,6 +152,21 @@ function writeAccidentRecord(writer: BinaryWriter, stringIds: Map<string, number
   for (const field of ACCIDENT_NULLABLE_BOOLEAN_FIELDS) {
     writer.writeByte(nullableBooleanId(record[field]));
   }
+  writeNullableUint(writer, record.osmRoundaboutId ?? null, "osmRoundaboutId");
+  writeNullableScaledSigned(
+    writer,
+    record.osmRoundaboutLon ?? null,
+    ACCIDENT_ROUNDABOUT_COORDINATE_SCALE,
+    "osmRoundaboutLon"
+  );
+  writeNullableScaledSigned(
+    writer,
+    record.osmRoundaboutLat ?? null,
+    ACCIDENT_ROUNDABOUT_COORDINATE_SCALE,
+    "osmRoundaboutLat"
+  );
+  writeNullableUint(writer, record.osmRoundaboutRadiusMeters ?? null, "osmRoundaboutRadiusMeters");
+  writeNullableUint(writer, record.osmRoundaboutMatchRadiusMeters ?? null, "osmRoundaboutMatchRadiusMeters");
 }
 
 function readAccidentRecord(reader: BinaryReader, strings: string[]): AccidentRecord {
@@ -190,6 +206,11 @@ function readAccidentRecord(reader: BinaryReader, strings: string[]): AccidentRe
   const involvesOther = readNullableBoolean(reader);
   const osmRoundabout = readNullableBoolean(reader);
   const osmTrafficSignal = readNullableBoolean(reader);
+  const osmRoundaboutId = readNullableUint(reader);
+  const osmRoundaboutLon = readNullableScaledSigned(reader, ACCIDENT_ROUNDABOUT_COORDINATE_SCALE);
+  const osmRoundaboutLat = readNullableScaledSigned(reader, ACCIDENT_ROUNDABOUT_COORDINATE_SCALE);
+  const osmRoundaboutRadiusMeters = readNullableUint(reader);
+  const osmRoundaboutMatchRadiusMeters = readNullableUint(reader);
   const record: AccidentRecord = {
     id,
     serialNumber,
@@ -198,6 +219,11 @@ function readAccidentRecord(reader: BinaryReader, strings: string[]): AccidentRe
     streetName: streetNames[0] ?? null,
     streetNames,
     osmRoundabout,
+    osmRoundaboutId,
+    osmRoundaboutLon,
+    osmRoundaboutLat,
+    osmRoundaboutRadiusMeters,
+    osmRoundaboutMatchRadiusMeters,
     osmTrafficSignal,
     stateCode,
     stateName: stateNameFor(stateCode),

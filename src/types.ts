@@ -15,6 +15,11 @@ export interface AccidentRecord {
   streetName: string | null;
   streetNames: string[];
   osmRoundabout: boolean | null;
+  osmRoundaboutId: number | null;
+  osmRoundaboutLon: number | null;
+  osmRoundaboutLat: number | null;
+  osmRoundaboutRadiusMeters: number | null;
+  osmRoundaboutMatchRadiusMeters: number | null;
   osmTrafficSignal: boolean | null;
   stateCode: string;
   stateName: string;
@@ -109,6 +114,8 @@ export interface IntersectionCluster {
   vulnerableCount: number;
   streetNames: string[];
   osmRoundabout: boolean | null;
+  osmRoundaboutRadiusMeters: number | null;
+  osmRoundaboutMatchRadiusMeters: number | null;
   osmTrafficSignal: boolean | null;
   osmRoundaboutCount: number;
   osmTrafficSignalCount: number;

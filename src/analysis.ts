@@ -27,6 +27,7 @@ interface ClusterYearAccumulator {
 interface ClusterAccumulator {
   id: string;
   bucketKey: string;
+  fixedCenter: boolean;
   lon: number;
   lat: number;
   x: number;
@@ -38,6 +39,8 @@ interface ClusterAccumulator {
   vulnerableCount: number;
   osmMetadataKnownCount: number;
   osmRoundaboutCount: number;
+  osmRoundaboutRadiusMeters: number | null;
+  osmRoundaboutMatchRadiusMeters: number | null;
   osmTrafficSignalCount: number;
   accidentIndexes: number[];
   accidentKeys: string[];
@@ -51,6 +54,31 @@ interface ClusterAccumulator {
   districtCounts: Map<string, number>;
   municipalityCodeCounts: Map<string, number>;
   municipalityCounts: Map<string, number>;
+}
+
+interface BuildClusterOptions {
+  startIndex?: number;
+  includeRoundaboutMetadata?: boolean;
+}
+
+interface AddAccidentOptions {
+  includeRoundaboutMetadata?: boolean;
+}
+
+interface RoundaboutClusterBuildResult {
+  clusters: ClusterAccumulator[];
+  accidents: Set<AccidentRecord>;
+}
+
+interface RoundaboutClusterGroup {
+  id: number;
+  lon: number;
+  lat: number;
+  x: number;
+  y: number;
+  radiusMeters: number;
+  matchRadiusMeters: number;
+  entries: Array<{ accident: AccidentRecord; projected: { x: number; y: number } }>;
 }
 
 interface StateSummaryAccumulator extends StateSummary {
@@ -75,7 +103,7 @@ export function analyzeDangerousIntersections(accidents: AccidentRecord[], optio
       ? Array.from(options.years).sort((a, b) => a - b)
       : Array.from(new Set(filtered.map((accident) => accident.year))).sort((a, b) => a - b);
 
-  const clusters = buildClusters(filtered, options.clusterRadiusMeters)
+  const clusters = buildAnalysisClusters(filtered, options)
     .filter((cluster) => cluster.accidentCount >= options.minAccidents)
     .map((cluster) => finalizeCluster(cluster, analysisYears, options.severityPercent))
     .sort(compareSeverityMetric);
@@ -125,9 +153,124 @@ export function combineAnalysisResults(results: AnalysisResult[]): AnalysisResul
   };
 }
 
-function buildClusters(accidents: AccidentRecord[], radiusMeters: number): ClusterAccumulator[] {
+function buildAnalysisClusters(accidents: AccidentRecord[], options: AnalysisOptions): ClusterAccumulator[] {
+  const roundaboutBuild = buildQualifyingRoundaboutClusters(accidents, options.minAccidents);
+  const remainingAccidents =
+    roundaboutBuild.accidents.size === 0
+      ? accidents
+      : accidents.filter((accident) => !roundaboutBuild.accidents.has(accident));
+  return [
+    ...roundaboutBuild.clusters,
+    ...buildClusters(remainingAccidents, options.clusterRadiusMeters, {
+      startIndex: roundaboutBuild.clusters.length,
+      includeRoundaboutMetadata: false
+    })
+  ];
+}
+
+function buildQualifyingRoundaboutClusters(accidents: AccidentRecord[], minAccidents: number): RoundaboutClusterBuildResult {
+  const groups = new Map<number, RoundaboutClusterGroup>();
+  for (const accident of accidents) {
+    const metadata = roundaboutMetadataForAccident(accident);
+    if (!metadata) {
+      continue;
+    }
+    const projected = lonLatToMeterPoint(accident);
+    const distance = Math.hypot(projected.x - metadata.x, projected.y - metadata.y);
+    if (distance > metadata.matchRadiusMeters) {
+      continue;
+    }
+    const group =
+      groups.get(metadata.id) ??
+      ({
+        id: metadata.id,
+        lon: metadata.lon,
+        lat: metadata.lat,
+        x: metadata.x,
+        y: metadata.y,
+        radiusMeters: metadata.radiusMeters,
+        matchRadiusMeters: metadata.matchRadiusMeters,
+        entries: []
+      } satisfies RoundaboutClusterGroup);
+    group.entries.push({ accident, projected });
+    groups.set(metadata.id, group);
+  }
+
+  const threshold = Math.max(2, minAccidents);
+  const clusters: ClusterAccumulator[] = [];
+  const clusteredAccidents = new Set<AccidentRecord>();
+  const sortedGroups = Array.from(groups.values()).sort((a, b) => a.id - b.id);
+  for (const group of sortedGroups) {
+    if (group.entries.length < threshold) {
+      continue;
+    }
+    const cluster = createClusterAccumulator(
+      `c-${clusters.length + 1}`,
+      `roundabout:${group.id}`,
+      group.lon,
+      group.lat,
+      group.x,
+      group.y,
+      true
+    );
+    cluster.osmRoundaboutRadiusMeters = Math.round(group.radiusMeters);
+    cluster.osmRoundaboutMatchRadiusMeters = Math.round(group.matchRadiusMeters);
+    for (const entry of group.entries) {
+      addAccidentToCluster(cluster, entry.accident, entry.projected, { includeRoundaboutMetadata: true });
+      clusteredAccidents.add(entry.accident);
+    }
+    clusters.push(cluster);
+  }
+
+  return { clusters, accidents: clusteredAccidents };
+}
+
+function roundaboutMetadataForAccident(accident: AccidentRecord): RoundaboutClusterGroup | null {
+  if (
+    accident.osmRoundabout !== true ||
+    accident.osmRoundaboutId === null ||
+    accident.osmRoundaboutLon === null ||
+    accident.osmRoundaboutLat === null ||
+    accident.osmRoundaboutRadiusMeters === null ||
+    accident.osmRoundaboutMatchRadiusMeters === null
+  ) {
+    return null;
+  }
+  const id = accident.osmRoundaboutId;
+  const lon = accident.osmRoundaboutLon;
+  const lat = accident.osmRoundaboutLat;
+  const radiusMeters = accident.osmRoundaboutRadiusMeters;
+  const matchRadiusMeters = accident.osmRoundaboutMatchRadiusMeters;
+  if (
+    !Number.isInteger(id) ||
+    id <= 0 ||
+    !Number.isFinite(lon) ||
+    !Number.isFinite(lat) ||
+    !Number.isFinite(radiusMeters) ||
+    radiusMeters < 0 ||
+    !Number.isFinite(matchRadiusMeters) ||
+    matchRadiusMeters < radiusMeters
+  ) {
+    return null;
+  }
+  const center = lonLatToMeterPoint({ lon, lat });
+  return {
+    id,
+    lon,
+    lat,
+    x: center.x,
+    y: center.y,
+    radiusMeters,
+    matchRadiusMeters,
+    entries: []
+  };
+}
+
+function buildClusters(accidents: AccidentRecord[], radiusMeters: number, options: BuildClusterOptions = {}): ClusterAccumulator[] {
   const clusters: ClusterAccumulator[] = [];
   const buckets = new Map<string, ClusterAccumulator[]>();
+  const startIndex = options.startIndex ?? 0;
+  const includeRoundaboutMetadata = options.includeRoundaboutMetadata ?? true;
 
   for (const accident of accidents) {
     const projected = lonLatToMeterPoint(accident);
@@ -154,34 +297,7 @@ function buildClusters(accidents: AccidentRecord[], radiusMeters: number): Clust
 
     if (!nearest) {
       const bucketKey = key(cx, cy);
-      nearest = {
-        id: `c-${clusters.length + 1}`,
-        bucketKey,
-        lon: accident.lon,
-        lat: accident.lat,
-        x: projected.x,
-        y: projected.y,
-        accidentCount: 0,
-        fatalCount: 0,
-        seriousCount: 0,
-        lightCount: 0,
-        vulnerableCount: 0,
-        osmMetadataKnownCount: 0,
-        osmRoundaboutCount: 0,
-        osmTrafficSignalCount: 0,
-        accidentIndexes: [],
-        accidentKeys: [],
-        streetNameCounts: new Map(),
-        yearSet: new Set(),
-        yearStats: new Map(),
-        stateCounts: new Map(),
-        administrativeRegionCodeCounts: new Map(),
-        administrativeRegionCounts: new Map(),
-        districtCodeCounts: new Map(),
-        districtCounts: new Map(),
-        municipalityCodeCounts: new Map(),
-        municipalityCounts: new Map()
-      };
+      nearest = createClusterAccumulator(`c-${startIndex + clusters.length + 1}`, bucketKey, accident.lon, accident.lat, projected.x, projected.y);
       clusters.push(nearest);
       const bucket = buckets.get(bucketKey);
       if (bucket) {
@@ -191,20 +307,69 @@ function buildClusters(accidents: AccidentRecord[], radiusMeters: number): Clust
       }
     }
 
-    addAccidentToCluster(nearest, accident, projected);
+    addAccidentToCluster(nearest, accident, projected, { includeRoundaboutMetadata });
     updateClusterBucket(nearest, buckets, radiusMeters);
   }
 
   return clusters;
 }
 
-function addAccidentToCluster(cluster: ClusterAccumulator, accident: AccidentRecord, projected: { x: number; y: number }): void {
+function createClusterAccumulator(
+  id: string,
+  bucketKey: string,
+  lon: number,
+  lat: number,
+  x: number,
+  y: number,
+  fixedCenter = false
+): ClusterAccumulator {
+  return {
+    id,
+    bucketKey,
+    fixedCenter,
+    lon,
+    lat,
+    x,
+    y,
+    accidentCount: 0,
+    fatalCount: 0,
+    seriousCount: 0,
+    lightCount: 0,
+    vulnerableCount: 0,
+    osmMetadataKnownCount: 0,
+    osmRoundaboutCount: 0,
+    osmRoundaboutRadiusMeters: null,
+    osmRoundaboutMatchRadiusMeters: null,
+    osmTrafficSignalCount: 0,
+    accidentIndexes: [],
+    accidentKeys: [],
+    streetNameCounts: new Map(),
+    yearSet: new Set(),
+    yearStats: new Map(),
+    stateCounts: new Map(),
+    administrativeRegionCodeCounts: new Map(),
+    administrativeRegionCounts: new Map(),
+    districtCodeCounts: new Map(),
+    districtCounts: new Map(),
+    municipalityCodeCounts: new Map(),
+    municipalityCounts: new Map()
+  };
+}
+
+function addAccidentToCluster(
+  cluster: ClusterAccumulator,
+  accident: AccidentRecord,
+  projected: { x: number; y: number },
+  options: AddAccidentOptions = {}
+): void {
   const previousCount = cluster.accidentCount;
   cluster.accidentCount += 1;
-  cluster.lon = (cluster.lon * previousCount + accident.lon) / cluster.accidentCount;
-  cluster.lat = (cluster.lat * previousCount + accident.lat) / cluster.accidentCount;
-  cluster.x = (cluster.x * previousCount + projected.x) / cluster.accidentCount;
-  cluster.y = (cluster.y * previousCount + projected.y) / cluster.accidentCount;
+  if (!cluster.fixedCenter) {
+    cluster.lon = (cluster.lon * previousCount + accident.lon) / cluster.accidentCount;
+    cluster.lat = (cluster.lat * previousCount + accident.lat) / cluster.accidentCount;
+    cluster.x = (cluster.x * previousCount + projected.x) / cluster.accidentCount;
+    cluster.y = (cluster.y * previousCount + projected.y) / cluster.accidentCount;
+  }
   if (typeof accident.recordIndex === "number") {
     cluster.accidentIndexes.push(accident.recordIndex);
   }
@@ -248,7 +413,7 @@ function addAccidentToCluster(cluster: ClusterAccumulator, accident: AccidentRec
 
   if (hasOsmRoadMetadata(accident)) {
     cluster.osmMetadataKnownCount += 1;
-    if (accident.osmRoundabout) {
+    if ((options.includeRoundaboutMetadata ?? true) && accident.osmRoundabout) {
       cluster.osmRoundaboutCount += 1;
     }
     if (accident.osmTrafficSignal) {
@@ -296,6 +461,9 @@ function updateClusterBucket(
   buckets: Map<string, ClusterAccumulator[]>,
   radiusMeters: number
 ): void {
+  if (cluster.fixedCenter) {
+    return;
+  }
   const cx = Math.floor(cluster.x / radiusMeters);
   const cy = Math.floor(cluster.y / radiusMeters);
   const nextKey = key(cx, cy);
@@ -336,6 +504,7 @@ function finalizeCluster(
     .sort((a, b) => a.year - b.year)
     .map(toClusterYearStat);
   const accidentTrend = calculateAccidentTrend(cluster.yearStats, trendAnalysisYears(analysisYears, severityPercentOptions));
+  const osmRoundabout = cluster.osmMetadataKnownCount > 0 ? cluster.osmRoundaboutCount > 0 : null;
 
   return {
     id: cluster.id,
@@ -358,7 +527,9 @@ function finalizeCluster(
     lightCount: cluster.lightCount,
     vulnerableCount: cluster.vulnerableCount,
     streetNames: clusterStreetNames(cluster.streetNameCounts),
-    osmRoundabout: cluster.osmMetadataKnownCount > 0 ? cluster.osmRoundaboutCount > 0 : null,
+    osmRoundabout,
+    osmRoundaboutRadiusMeters: osmRoundabout === true ? cluster.osmRoundaboutRadiusMeters : null,
+    osmRoundaboutMatchRadiusMeters: osmRoundabout === true ? cluster.osmRoundaboutMatchRadiusMeters : null,
     osmTrafficSignal: cluster.osmMetadataKnownCount > 0 ? cluster.osmTrafficSignalCount > 0 : null,
     osmRoundaboutCount: cluster.osmRoundaboutCount,
     osmTrafficSignalCount: cluster.osmTrafficSignalCount,

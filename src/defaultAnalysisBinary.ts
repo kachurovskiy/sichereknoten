@@ -24,7 +24,7 @@ import type {
   StateSummary
 } from "./types";
 
-const DEFAULT_ANALYSIS_BINARY_MAGIC = "SKABIN02";
+const DEFAULT_ANALYSIS_BINARY_MAGIC = "SKABIN03";
 const DEFAULT_ANALYSIS_COORDINATE_SCALE = 10_000_000;
 const DEFAULT_ANALYSIS_SEVERITY_SCALE = 10_000;
 const DEFAULT_ANALYSIS_TREND_SCALE = 10_000;
@@ -153,6 +153,8 @@ function writeAnalysisCluster(writer: BinaryWriter, stringIds: Map<string, numbe
   writer.writeByte(nullableBooleanId(cluster.osmTrafficSignal));
   writer.writeVarUint(cluster.osmRoundaboutCount);
   writer.writeVarUint(cluster.osmTrafficSignalCount);
+  writeNullableUint(writer, cluster.osmRoundaboutRadiusMeters ?? null, "default analysis osmRoundaboutRadiusMeters");
+  writeNullableUint(writer, cluster.osmRoundaboutMatchRadiusMeters ?? null, "default analysis osmRoundaboutMatchRadiusMeters");
   writer.writeVarUint(Math.round(cluster.severityPercent * DEFAULT_ANALYSIS_SEVERITY_SCALE));
   writeVarUintArray(writer, cluster.years);
   writer.writeVarUint(cluster.yearlyStats.length);
@@ -252,6 +254,8 @@ function readAnalysisCluster(reader: BinaryReader, strings: string[]): Intersect
     vulnerableCount: reader.readVarUint(),
     streetNames: [],
     osmRoundabout: null,
+    osmRoundaboutRadiusMeters: null,
+    osmRoundaboutMatchRadiusMeters: null,
     osmTrafficSignal: null,
     osmRoundaboutCount: 0,
     osmTrafficSignalCount: 0,
@@ -273,6 +277,8 @@ function readAnalysisCluster(reader: BinaryReader, strings: string[]): Intersect
   cluster.osmTrafficSignal = readNullableBoolean(reader);
   cluster.osmRoundaboutCount = reader.readVarUint();
   cluster.osmTrafficSignalCount = reader.readVarUint();
+  cluster.osmRoundaboutRadiusMeters = readNullableUint(reader);
+  cluster.osmRoundaboutMatchRadiusMeters = readNullableUint(reader);
   cluster.severityPercent = reader.readVarUint() / DEFAULT_ANALYSIS_SEVERITY_SCALE;
   cluster.years = readVarUintArray(reader);
   cluster.yearlyStats = readClusterYearStats(reader);

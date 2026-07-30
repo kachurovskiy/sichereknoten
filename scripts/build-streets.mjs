@@ -6,10 +6,11 @@ import { isMainThread, parentPort, Worker, workerData } from "node:worker_thread
 import { inflateSync } from "node:zlib";
 
 // See STREET_LOOKUP_PIPELINE.md for the build flow diagram and stage notes.
-const STREET_LOOKUP_SCHEMA_VERSION = 6;
+const STREET_LOOKUP_SCHEMA_VERSION = 7;
 const NODE_CAPTURE_RADIUS_METERS = 55;
 const STREET_MATCH_RADIUS_METERS = 30;
 const ROAD_CONTROL_MATCH_RADIUS_METERS = 55;
+const ROUNDABOUT_CLUSTER_BUFFER_METERS = 20;
 const MAX_STREET_NAMES_PER_ACCIDENT = 4;
 const NODE_COORD_SHARD_COUNT = 256;
 const NODE_COORD_INITIAL_SHARD_CAPACITY = 1024;
@@ -64,14 +65,20 @@ export async function buildStreetLookupBundle({ root, sourceDataDir, csvFiles })
     return {
       version: signature,
       names: [],
-      files: source.files.map((file) => ({ name: file.name, indexes: file.indexes, osmRoadControlMasks: file.osmRoadControlMasks }))
+      roundabouts: [],
+      files: source.files.map((file) => ({
+        name: file.name,
+        indexes: file.indexes,
+        osmRoadControlMasks: file.osmRoadControlMasks,
+        osmRoundaboutIndexes: file.osmRoundaboutIndexes
+      }))
     };
   }
 
   console.log(`Building street lookup from ${path.relative(root, pbfPath)} for ${source.accidents.length.toLocaleString()} accidents.`);
   const grid = buildAccidentGrid(source.accidents);
-  const completed = await matchStreetsFromPbf(pbfPath, pbfStats.size, source.accidents, grid);
-  const bundle = finalizeStreetLookup(signature, source);
+  const { completed, roundabouts } = await matchStreetsFromPbf(pbfPath, pbfStats.size, source.accidents, grid);
+  const bundle = finalizeStreetLookup(signature, source, roundabouts);
   if (completed) {
     await writeStreetLookupCache(cachePath, bundle);
   } else {
@@ -117,7 +124,12 @@ async function streetLookupSignature(csvFiles, pbfPath, pbfStats) {
 async function readStreetLookupCache(cachePath, signature) {
   try {
     const cached = JSON.parse(await readFile(cachePath, "utf8"));
-    return cached?.version === signature && Array.isArray(cached.names) && Array.isArray(cached.files) ? cached : null;
+    return cached?.version === signature &&
+      Array.isArray(cached.names) &&
+      Array.isArray(cached.roundabouts) &&
+      Array.isArray(cached.files)
+      ? cached
+      : null;
   } catch {
     return null;
   }
@@ -139,6 +151,7 @@ async function readAccidentSource(csvFiles) {
     const headers = parseDelimitedLine(lines.shift() ?? "");
     const indexes = [];
     const osmRoadControlMasks = [];
+    const osmRoundaboutIndexes = [];
     let rowIndex = 0;
 
     for (const line of lines) {
@@ -148,6 +161,7 @@ async function readAccidentSource(csvFiles) {
       rowIndex += 1;
       indexes.push(0);
       osmRoadControlMasks.push(0);
+      osmRoundaboutIndexes.push(0);
       const values = parseDelimitedLine(line);
       const lon = parseNumber(readCsvField(headers, values, "XGCSWGS84"));
       const lat = parseNumber(readCsvField(headers, values, "YGCSWGS84"));
@@ -163,11 +177,12 @@ async function readAccidentSource(csvFiles) {
         x: point.x,
         y: point.y,
         streetMatches: null,
-        osmRoadControlMask: 0
+        osmRoadControlMask: 0,
+        osmRoundaboutIndex: 0
       });
     }
 
-    files.push({ name: path.basename(file.publicPath), indexes, osmRoadControlMasks });
+    files.push({ name: path.basename(file.publicPath), indexes, osmRoadControlMasks, osmRoundaboutIndexes });
   }
 
   return { files, accidents };
@@ -383,13 +398,13 @@ function nodeCoordHash(nodeId) {
   return (value ^ (value >>> 16)) >>> 0;
 }
 
-function createDenseNodeProcessor(accidentGrid, nodeCoords) {
+function createDenseNodeProcessor(accidentGrid, nodeCoords, roundaboutCollector) {
   const workerCount = denseNodeWorkerCount();
   if (workerCount <= 0) {
     return {
       async process(buffer, blockContext) {
         try {
-          processDenseNodes(buffer, blockContext, accidentGrid, nodeCoords);
+          processDenseNodes(buffer, blockContext, accidentGrid, nodeCoords, null, roundaboutCollector);
         } catch {
           // Some historical PBF writers contain dense-node payloads this minimal reader cannot use.
         }
@@ -431,7 +446,7 @@ function createDenseNodeProcessor(accidentGrid, nodeCoords) {
     const task = pool.run({ groups });
     const tracked = task
       .then((result) => {
-        applyDenseNodeWorkerResult(result, accidentGrid, nodeCoords);
+        applyDenseNodeWorkerResult(result, accidentGrid, nodeCoords, roundaboutCollector);
         return { ok: true };
       })
       .catch((error) => ({ ok: false, error }))
@@ -527,7 +542,7 @@ function copyToArrayBuffer(buffer) {
   return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
 }
 
-function applyDenseNodeWorkerResult(result, accidentGrid, nodeCoords) {
+function applyDenseNodeWorkerResult(result, accidentGrid, nodeCoords, roundaboutCollector) {
   const nodeIds = result.nodeIds;
   const packedCoords = result.packedCoords;
   setNodeCoords(nodeCoords, nodeIds, packedCoords);
@@ -536,6 +551,13 @@ function applyDenseNodeWorkerResult(result, accidentGrid, nodeCoords) {
   const roadControlMasks = result.roadControlMasks;
   for (let index = 0; index < roadControlAccidentIndexes.length; index += 1) {
     accidentGrid.accidents[roadControlAccidentIndexes[index]].osmRoadControlMask |= roadControlMasks[index];
+  }
+
+  const miniRoundaboutIds = result.miniRoundaboutIds;
+  const miniRoundaboutLons = result.miniRoundaboutLons;
+  const miniRoundaboutLats = result.miniRoundaboutLats;
+  for (let index = 0; index < miniRoundaboutIds.length; index += 1) {
+    addMiniRoundabout(roundaboutCollector, miniRoundaboutIds[index], miniRoundaboutLons[index], miniRoundaboutLats[index]);
   }
 }
 
@@ -635,7 +657,10 @@ function startDenseNodeWorker(data) {
       nodeIds: [],
       packedCoords: [],
       roadControlAccidentIndexes: [],
-      roadControlMasks: []
+      roadControlMasks: [],
+      miniRoundaboutIds: [],
+      miniRoundaboutLons: [],
+      miniRoundaboutLats: []
     };
 
     try {
@@ -649,6 +674,9 @@ function startDenseNodeWorker(data) {
       const packedCoords = Float64Array.from(collector.packedCoords);
       const roadControlAccidentIndexes = Uint32Array.from(collector.roadControlAccidentIndexes);
       const roadControlMasks = Uint8Array.from(collector.roadControlMasks);
+      const miniRoundaboutIds = Float64Array.from(collector.miniRoundaboutIds);
+      const miniRoundaboutLons = Float64Array.from(collector.miniRoundaboutLons);
+      const miniRoundaboutLats = Float64Array.from(collector.miniRoundaboutLats);
       parentPort.postMessage(
         {
           id: message.id,
@@ -656,10 +684,21 @@ function startDenseNodeWorker(data) {
             nodeIds,
             packedCoords,
             roadControlAccidentIndexes,
-            roadControlMasks
+            roadControlMasks,
+            miniRoundaboutIds,
+            miniRoundaboutLons,
+            miniRoundaboutLats
           }
         },
-        [nodeIds.buffer, packedCoords.buffer, roadControlAccidentIndexes.buffer, roadControlMasks.buffer]
+        [
+          nodeIds.buffer,
+          packedCoords.buffer,
+          roadControlAccidentIndexes.buffer,
+          roadControlMasks.buffer,
+          miniRoundaboutIds.buffer,
+          miniRoundaboutLons.buffer,
+          miniRoundaboutLats.buffer
+        ]
       );
     } catch {
       parentPort.postMessage({
@@ -668,17 +707,368 @@ function startDenseNodeWorker(data) {
           nodeIds: new Float64Array(0),
           packedCoords: new Float64Array(0),
           roadControlAccidentIndexes: new Uint32Array(0),
-          roadControlMasks: new Uint8Array(0)
+          roadControlMasks: new Uint8Array(0),
+          miniRoundaboutIds: new Float64Array(0),
+          miniRoundaboutLons: new Float64Array(0),
+          miniRoundaboutLats: new Float64Array(0)
         }
       });
     }
   });
 }
 
+function createRoundaboutCollector() {
+  return {
+    ways: [],
+    miniRoundabouts: [],
+    miniRoundaboutNodeIds: new Set()
+  };
+}
+
+function addMiniRoundabout(collector, nodeId, lon, lat) {
+  if (!collector || collector.miniRoundaboutNodeIds.has(nodeId)) {
+    return;
+  }
+  collector.miniRoundaboutNodeIds.add(nodeId);
+  collector.miniRoundabouts.push({ nodeId, lon, lat });
+}
+
+function addRoundaboutWay(collector, wayId, nodeIds) {
+  if (!collector || nodeIds.length < 2) {
+    return;
+  }
+  collector.ways.push({
+    id: wayId || collector.ways.length + 1,
+    nodeIds
+  });
+}
+
+async function resolveAndApplyRoundaboutsFromPbf(pbfPath, fileSize, accidents, accidentGrid, roundaboutCollector) {
+  const requiredNodeIds = roundaboutNodeIdSet(roundaboutCollector.ways);
+  const resolvedNodeCoords =
+    requiredNodeIds.size > 0 ? await readRoundaboutNodeCoordsFromPbf(pbfPath, fileSize, requiredNodeIds) : new Map();
+  const roundabouts = buildRoundaboutGeometries(roundaboutCollector, resolvedNodeCoords);
+  return applyRoundaboutMatches(accidents, accidentGrid, roundabouts);
+}
+
+function roundaboutNodeIdSet(ways) {
+  const nodeIds = new Set();
+  for (const way of ways) {
+    for (const nodeId of way.nodeIds) {
+      nodeIds.add(nodeId);
+    }
+  }
+  return nodeIds;
+}
+
+async function readRoundaboutNodeCoordsFromPbf(pbfPath, fileSize, requiredNodeIds) {
+  console.log(
+    `Resolving ${formatCount(requiredNodeIds.size)} roundabout way nodes from ${path.basename(pbfPath)} for geometry-centered clustering.`
+  );
+  const remainingNodeIds = new Set(requiredNodeIds);
+  const nodeCoords = new Map();
+  const file = await open(pbfPath, "r");
+  let position = 0;
+  let lastProgressTime = Date.now();
+
+  try {
+    while (position < fileSize && remainingNodeIds.size > 0) {
+      const headerSizeBuffer = await readExactly(file, position, 4);
+      position += 4;
+      const headerSize = headerSizeBuffer.readUInt32BE(0);
+      const header = parseBlobHeader(await readExactly(file, position, headerSize));
+      position += headerSize;
+      const blobBuffer = await readExactly(file, position, header.datasize);
+      position += header.datasize;
+
+      if (header.type === "OSMData") {
+        processPrimitiveBlockForRoundaboutCoords(blobData(blobBuffer), remainingNodeIds, nodeCoords);
+      }
+
+      if (Date.now() - lastProgressTime > 5000) {
+        lastProgressTime = Date.now();
+        console.log(
+          `Roundabout geometry ${formatCount(nodeCoords.size)} / ${formatCount(requiredNodeIds.size)} nodes resolved.`
+        );
+      }
+    }
+  } finally {
+    await file.close();
+  }
+
+  if (remainingNodeIds.size > 0) {
+    console.warn(`Roundabout geometry skipped ${formatCount(remainingNodeIds.size)} unresolved way nodes.`);
+  }
+  return nodeCoords;
+}
+
+function processPrimitiveBlockForRoundaboutCoords(buffer, requiredNodeIds, nodeCoords) {
+  const state = { pos: 0 };
+  const groups = [];
+  let granularity = 100;
+  let latOffset = 0;
+  let lonOffset = 0;
+
+  while (state.pos < buffer.length) {
+    const tag = readVarint(buffer, state);
+    const field = Math.floor(tag / 8);
+    const wire = tag & 7;
+    if (field === 2 && wire === 2) {
+      groups.push(readBytes(buffer, state));
+    } else if (field === 17 && wire === 0) {
+      granularity = readVarint(buffer, state);
+    } else if (field === 19 && wire === 0) {
+      latOffset = readVarint(buffer, state);
+    } else if (field === 20 && wire === 0) {
+      lonOffset = readVarint(buffer, state);
+    } else {
+      skipField(buffer, state, wire);
+    }
+  }
+
+  const blockContext = { granularity, latOffset, lonOffset };
+  for (const group of groups) {
+    processPrimitiveGroupForRoundaboutCoords(group, blockContext, requiredNodeIds, nodeCoords);
+  }
+}
+
+function processPrimitiveGroupForRoundaboutCoords(buffer, blockContext, requiredNodeIds, nodeCoords) {
+  const state = { pos: 0 };
+  while (state.pos < buffer.length && requiredNodeIds.size > 0) {
+    const tag = readVarint(buffer, state);
+    const field = Math.floor(tag / 8);
+    const wire = tag & 7;
+    if (field === 2 && wire === 2) {
+      processDenseNodesForRoundaboutCoords(readBytes(buffer, state), blockContext, requiredNodeIds, nodeCoords);
+    } else {
+      skipField(buffer, state, wire);
+    }
+  }
+}
+
+function processDenseNodesForRoundaboutCoords(buffer, blockContext, requiredNodeIds, nodeCoords) {
+  const state = { pos: 0 };
+  const ids = [];
+  const lats = [];
+  const lons = [];
+
+  while (state.pos < buffer.length) {
+    const tag = readVarint(buffer, state);
+    const field = Math.floor(tag / 8);
+    const wire = tag & 7;
+    if (field === 1) {
+      readPackedValues(buffer, state, wire, true, ids);
+    } else if (field === 8) {
+      readPackedValues(buffer, state, wire, true, lats);
+    } else if (field === 9) {
+      readPackedValues(buffer, state, wire, true, lons);
+    } else if (wire === 3 || wire === 6) {
+      return;
+    } else {
+      skipField(buffer, state, wire);
+    }
+  }
+
+  let id = 0;
+  let rawLat = 0;
+  let rawLon = 0;
+  const count = Math.min(ids.length, lats.length, lons.length);
+  for (let index = 0; index < count && requiredNodeIds.size > 0; index += 1) {
+    id += ids[index];
+    rawLat += lats[index];
+    rawLon += lons[index];
+    if (!requiredNodeIds.has(id)) {
+      continue;
+    }
+    const lat = (blockContext.latOffset + blockContext.granularity * rawLat) * 1e-9;
+    const lon = (blockContext.lonOffset + blockContext.granularity * rawLon) * 1e-9;
+    nodeCoords.set(id, packCoord(lat, lon));
+    requiredNodeIds.delete(id);
+  }
+}
+
+function buildRoundaboutGeometries(roundaboutCollector, resolvedNodeCoords) {
+  const miniRoundabouts = roundaboutCollector.miniRoundabouts.map((roundabout) => {
+    const x = projectX(roundabout.lon, roundabout.lat);
+    const y = projectY(roundabout.lat);
+    return {
+      sourceId: `mini:${roundabout.nodeId}`,
+      lon: roundabout.lon,
+      lat: roundabout.lat,
+      x,
+      y,
+      radiusMeters: 0,
+      matchRadiusMeters: ROUNDABOUT_CLUSTER_BUFFER_METERS
+    };
+  });
+
+  const wayRoundabouts = buildRoundaboutWayComponentGeometries(roundaboutCollector.ways, resolvedNodeCoords);
+  const roundabouts = [...wayRoundabouts, ...miniRoundabouts];
+  console.log(`Resolved ${formatCount(roundabouts.length)} roundabout geometries near accident data.`);
+  return roundabouts;
+}
+
+function buildRoundaboutWayComponentGeometries(wayEntries, resolvedNodeCoords) {
+  const ways = [];
+  for (const way of wayEntries) {
+    const points = [];
+    for (const nodeId of way.nodeIds) {
+      const packed = resolvedNodeCoords.get(nodeId);
+      if (packed !== undefined) {
+        points.push({ nodeId, ...unpackPackedCoordPoint(packed) });
+      }
+    }
+    if (points.length >= 2) {
+      ways.push({ id: way.id, points });
+    }
+  }
+
+  if (ways.length === 0) {
+    return [];
+  }
+
+  const parent = Array.from({ length: ways.length }, (_value, index) => index);
+  const find = (index) => {
+    let current = index;
+    while (parent[current] !== current) {
+      parent[current] = parent[parent[current]];
+      current = parent[current];
+    }
+    return current;
+  };
+  const union = (a, b) => {
+    const rootA = find(a);
+    const rootB = find(b);
+    if (rootA !== rootB) {
+      parent[rootB] = rootA;
+    }
+  };
+
+  const wayByNodeId = new Map();
+  for (let wayIndex = 0; wayIndex < ways.length; wayIndex += 1) {
+    for (const point of ways[wayIndex].points) {
+      const previousWayIndex = wayByNodeId.get(point.nodeId);
+      if (previousWayIndex === undefined) {
+        wayByNodeId.set(point.nodeId, wayIndex);
+      } else {
+        union(wayIndex, previousWayIndex);
+      }
+    }
+  }
+
+  const groups = new Map();
+  for (let wayIndex = 0; wayIndex < ways.length; wayIndex += 1) {
+    const root = find(wayIndex);
+    let group = groups.get(root);
+    if (!group) {
+      group = [];
+      groups.set(root, group);
+    }
+    group.push(ways[wayIndex]);
+  }
+
+  const roundabouts = [];
+  for (const group of groups.values()) {
+    const geometry = roundaboutGeometryForWayGroup(group);
+    if (geometry) {
+      roundabouts.push(geometry);
+    }
+  }
+  return roundabouts.sort((a, b) => String(a.sourceId).localeCompare(String(b.sourceId)));
+}
+
+function roundaboutGeometryForWayGroup(ways) {
+  const pointByNodeId = new Map();
+  const wayIds = [];
+  for (const way of ways) {
+    wayIds.push(way.id);
+    for (const point of way.points) {
+      pointByNodeId.set(point.nodeId, point);
+    }
+  }
+
+  const points = Array.from(pointByNodeId.values());
+  if (points.length < 3) {
+    return null;
+  }
+
+  const centerX = points.reduce((total, point) => total + point.x, 0) / points.length;
+  const centerY = points.reduce((total, point) => total + point.y, 0) / points.length;
+  const lat = centerY / 110540;
+  const lon = centerX / (111320 * Math.cos(lat * degreesToRadians));
+  const radiusMeters = Math.max(...points.map((point) => Math.sqrt(squaredDistance(centerX, centerY, point.x, point.y))));
+  if (!Number.isFinite(radiusMeters)) {
+    return null;
+  }
+
+  wayIds.sort((a, b) => a - b);
+  return {
+    sourceId: `way:${wayIds.join("+")}`,
+    lon,
+    lat,
+    x: centerX,
+    y: centerY,
+    radiusMeters,
+    matchRadiusMeters: radiusMeters + ROUNDABOUT_CLUSTER_BUFFER_METERS
+  };
+}
+
+function applyRoundaboutMatches(accidents, accidentGrid, roundabouts) {
+  if (roundabouts.length === 0) {
+    return [];
+  }
+
+  const bestMatches = new Array(accidents.length);
+  for (let roundaboutIndex = 0; roundaboutIndex < roundabouts.length; roundaboutIndex += 1) {
+    const roundabout = roundabouts[roundaboutIndex];
+    forEachAccidentIndexInBounds(
+      accidentGrid,
+      roundabout.x - roundabout.matchRadiusMeters,
+      roundabout.y - roundabout.matchRadiusMeters,
+      roundabout.x + roundabout.matchRadiusMeters,
+      roundabout.y + roundabout.matchRadiusMeters,
+      (accidentIndex) => {
+        const distance = Math.sqrt(
+          squaredDistance(roundabout.x, roundabout.y, accidentGrid.accidentXs[accidentIndex], accidentGrid.accidentYs[accidentIndex])
+        );
+        if (distance <= roundabout.matchRadiusMeters) {
+          const score = Math.max(0, distance - roundabout.radiusMeters);
+          const previous = bestMatches[accidentIndex];
+          if (!previous || score < previous.score || (score === previous.score && distance < previous.distance)) {
+            bestMatches[accidentIndex] = { roundaboutIndex, score, distance };
+          }
+        }
+        return true;
+      }
+    );
+  }
+
+  const compactRoundabouts = [];
+  const compactIndexByRoundaboutIndex = new Map();
+  for (let accidentIndex = 0; accidentIndex < accidents.length; accidentIndex += 1) {
+    const match = bestMatches[accidentIndex];
+    if (!match) {
+      continue;
+    }
+    let compactIndex = compactIndexByRoundaboutIndex.get(match.roundaboutIndex);
+    if (compactIndex === undefined) {
+      compactIndex = compactRoundabouts.length + 1;
+      compactIndexByRoundaboutIndex.set(match.roundaboutIndex, compactIndex);
+      compactRoundabouts.push(roundabouts[match.roundaboutIndex]);
+    }
+    accidents[accidentIndex].osmRoundaboutIndex = compactIndex;
+    accidents[accidentIndex].osmRoadControlMask |= OSM_ROUNDABOUT_MASK;
+  }
+
+  console.log(`Street lookup assigned ${formatCount(compactRoundabouts.length)} roundabouts to nearby accident rows.`);
+  return compactRoundabouts;
+}
+
 async function matchStreetsFromPbf(pbfPath, fileSize, accidents, accidentGrid) {
   const file = await open(pbfPath, "r");
   const nodeCoords = createNodeCoordStore();
-  const denseNodeProcessor = createDenseNodeProcessor(accidentGrid, nodeCoords);
+  const roundaboutCollector = createRoundaboutCollector();
+  const denseNodeProcessor = createDenseNodeProcessor(accidentGrid, nodeCoords, roundaboutCollector);
   let position = 0;
   let blobIndex = 0;
   let lastProgressTime = Date.now();
@@ -698,7 +1088,7 @@ async function matchStreetsFromPbf(pbfPath, fileSize, accidents, accidentGrid) {
 
       if (header.type === "OSMData") {
         const data = blobData(blobBuffer);
-        await processPrimitiveBlock(data, accidents, accidentGrid, nodeCoords, denseNodeProcessor);
+        await processPrimitiveBlock(data, accidents, accidentGrid, nodeCoords, denseNodeProcessor, roundaboutCollector);
       }
 
       if (Date.now() - lastProgressTime > 5000) {
@@ -717,7 +1107,12 @@ async function matchStreetsFromPbf(pbfPath, fileSize, accidents, accidentGrid) {
     await denseNodeProcessor.close();
     await file.close();
   }
-  return position >= fileSize;
+
+  const completed = position >= fileSize;
+  const roundabouts = completed
+    ? await resolveAndApplyRoundaboutsFromPbf(pbfPath, fileSize, accidents, accidentGrid, roundaboutCollector)
+    : [];
+  return { completed, roundabouts };
 }
 
 async function readExactly(file, position, length) {
@@ -773,7 +1168,7 @@ function blobData(buffer) {
   throw new Error("Unsupported OSM PBF blob compression.");
 }
 
-async function processPrimitiveBlock(buffer, accidents, accidentGrid, nodeCoords, denseNodeProcessor) {
+async function processPrimitiveBlock(buffer, accidents, accidentGrid, nodeCoords, denseNodeProcessor, roundaboutCollector) {
   const state = { pos: 0 };
   let strings = [];
   const groups = [];
@@ -809,7 +1204,7 @@ async function processPrimitiveBlock(buffer, accidents, accidentGrid, nodeCoords
     lonOffset
   };
   for (const group of groups) {
-    await processPrimitiveGroup(group, blockContext, accidents, accidentGrid, nodeCoords, denseNodeProcessor);
+    await processPrimitiveGroup(group, blockContext, accidents, accidentGrid, nodeCoords, denseNodeProcessor, roundaboutCollector);
   }
 }
 
@@ -829,7 +1224,7 @@ function parseStringTable(buffer) {
   return strings;
 }
 
-async function processPrimitiveGroup(buffer, blockContext, accidents, accidentGrid, nodeCoords, denseNodeProcessor) {
+async function processPrimitiveGroup(buffer, blockContext, accidents, accidentGrid, nodeCoords, denseNodeProcessor, roundaboutCollector) {
   const state = { pos: 0 };
   while (state.pos < buffer.length) {
     const tag = readVarint(buffer, state);
@@ -841,7 +1236,7 @@ async function processPrimitiveGroup(buffer, blockContext, accidents, accidentGr
       const wayBuffer = readBytes(buffer, state);
       await denseNodeProcessor.drain();
       try {
-        processWay(wayBuffer, blockContext, accidents, accidentGrid, nodeCoords);
+        processWay(wayBuffer, blockContext, accidents, accidentGrid, nodeCoords, roundaboutCollector);
       } catch {
         // Ignore a malformed way and continue matching the rest of the PBF.
       }
@@ -860,7 +1255,7 @@ function denseNodeBlockContext(blockContext) {
   };
 }
 
-function processDenseNodes(buffer, blockContext, accidentGrid, nodeCoords, collector = null) {
+function processDenseNodes(buffer, blockContext, accidentGrid, nodeCoords, collector = null, roundaboutCollector = null) {
   const state = { pos: 0 };
   const ids = [];
   const lats = [];
@@ -910,18 +1305,28 @@ function processDenseNodes(buffer, blockContext, accidentGrid, nodeCoords, colle
         setNodeCoord(nodeCoords, id, packedCoord);
       }
     }
-    if (roadControlMask) {
+    if (roadControlMask & OSM_TRAFFIC_SIGNAL_MASK) {
       if (collector) {
-        collectPointRoadControlMatches(x, y, roadControlMask, accidentGrid, collector.roadControlAccidentIndexes, collector.roadControlMasks);
+        collectPointRoadControlMatches(x, y, OSM_TRAFFIC_SIGNAL_MASK, accidentGrid, collector.roadControlAccidentIndexes, collector.roadControlMasks);
       } else {
-        matchPointRoadControlToAccidentsXY(x, y, roadControlMask, accidentGrid);
+        matchPointRoadControlToAccidentsXY(x, y, OSM_TRAFFIC_SIGNAL_MASK, accidentGrid);
+      }
+    }
+    if (roadControlMask & OSM_ROUNDABOUT_MASK) {
+      if (collector) {
+        collector.miniRoundaboutIds.push(id);
+        collector.miniRoundaboutLons.push(lon);
+        collector.miniRoundaboutLats.push(lat);
+      } else {
+        addMiniRoundabout(roundaboutCollector, id, lon, lat);
       }
     }
   }
 }
 
-function processWay(buffer, blockContext, accidents, accidentGrid, nodeCoords) {
+function processWay(buffer, blockContext, accidents, accidentGrid, nodeCoords, roundaboutCollector) {
   const state = { pos: 0 };
+  let wayId = 0;
   const keys = [];
   const vals = [];
   const refParts = [];
@@ -930,7 +1335,9 @@ function processWay(buffer, blockContext, accidents, accidentGrid, nodeCoords) {
     const tag = readVarint(buffer, state);
     const field = Math.floor(tag / 8);
     const wire = tag & 7;
-    if (field === 2) {
+    if (field === 1 && wire === 0) {
+      wayId = readVarint(buffer, state);
+    } else if (field === 2) {
       readPackedValues(buffer, state, wire, false, keys);
     } else if (field === 3) {
       readPackedValues(buffer, state, wire, false, vals);
@@ -952,35 +1359,31 @@ function processWay(buffer, blockContext, accidents, accidentGrid, nodeCoords) {
     return;
   }
 
-  processWayRefs(refParts, metadata, accidents, accidentGrid, nodeCoords);
+  processWayRefs(refParts, metadata, accidents, accidentGrid, nodeCoords, roundaboutCollector, wayId);
 }
 
-function processWayRefs(refParts, metadata, accidents, accidentGrid, nodeCoords) {
+function processWayRefs(refParts, metadata, accidents, accidentGrid, nodeCoords, roundaboutCollector, wayId) {
   let previousNodeId = 0;
   let hasPreviousPoint = false;
   let previousX = 0;
   let previousY = 0;
+  const roundaboutNodeIds = metadata.roadControlMask & OSM_ROUNDABOUT_MASK ? [] : null;
 
   function scanDelta(delta) {
     const nodeId = previousNodeId + delta;
+    if (roundaboutNodeIds) {
+      roundaboutNodeIds.push(nodeId);
+    }
     const packed = getNodeCoord(nodeCoords, nodeId);
     if (packed !== undefined) {
-      const latE5 = Math.floor(packed / COORD_PACK_BASE);
-      const lonE5 = packed - latE5 * COORD_PACK_BASE;
-      const lat = latE5 / 100000;
-      const lon = lonE5 / 100000;
-      const currentX = projectX(lon, lat);
-      const currentY = projectY(lat);
+      const point = unpackPackedCoordPoint(packed);
       if (hasPreviousPoint) {
         if (metadata.streetName) {
-          matchSegmentToAccidentsXY(previousX, previousY, currentX, currentY, metadata.streetName, accidents, accidentGrid);
-        }
-        if (metadata.roadControlMask) {
-          matchSegmentRoadControlToAccidentsXY(previousX, previousY, currentX, currentY, metadata.roadControlMask, accidentGrid);
+          matchSegmentToAccidentsXY(previousX, previousY, point.x, point.y, metadata.streetName, accidents, accidentGrid);
         }
       }
-      previousX = currentX;
-      previousY = currentY;
+      previousX = point.x;
+      previousY = point.y;
       hasPreviousPoint = true;
     } else {
       hasPreviousPoint = false;
@@ -997,6 +1400,10 @@ function processWayRefs(refParts, metadata, accidents, accidentGrid, nodeCoords)
         scanDelta(zigZagDecode(readVarint(part.buffer, state)));
       }
     }
+  }
+
+  if (roundaboutNodeIds?.length >= 2) {
+    addRoundaboutWay(roundaboutCollector, wayId, roundaboutNodeIds);
   }
 }
 
@@ -1209,7 +1616,7 @@ function forEachAccidentIndexInBounds(accidentGrid, minX, minY, maxX, maxY, visi
   return true;
 }
 
-function finalizeStreetLookup(version, source) {
+function finalizeStreetLookup(version, source, roundabouts) {
   const accidentStreetNames = new Array(source.accidents.length);
   const nameSet = new Set();
 
@@ -1227,6 +1634,7 @@ function finalizeStreetLookup(version, source) {
   for (let index = 0; index < source.accidents.length; index += 1) {
     const accident = source.accidents[index];
     const streetNames = accidentStreetNames[index];
+    source.files[accident.fileIndex].osmRoundaboutIndexes[accident.rowIndex - 1] = accident.osmRoundaboutIndex;
     if (streetNames.length === 0) {
       source.files[accident.fileIndex].osmRoadControlMasks[accident.rowIndex - 1] = accident.osmRoadControlMask;
       continue;
@@ -1243,7 +1651,22 @@ function finalizeStreetLookup(version, source) {
   return {
     version,
     names,
-    files: source.files.map((file) => ({ name: file.name, indexes: file.indexes, osmRoadControlMasks: file.osmRoadControlMasks }))
+    roundabouts: roundabouts.map(compactRoundaboutGeometry),
+    files: source.files.map((file) => ({
+      name: file.name,
+      indexes: file.indexes,
+      osmRoadControlMasks: file.osmRoadControlMasks,
+      osmRoundaboutIndexes: file.osmRoundaboutIndexes
+    }))
+  };
+}
+
+function compactRoundaboutGeometry(roundabout) {
+  return {
+    lon: round(roundabout.lon, 7),
+    lat: round(roundabout.lat, 7),
+    radiusMeters: Math.round(roundabout.radiusMeters),
+    matchRadiusMeters: Math.round(roundabout.matchRadiusMeters)
   };
 }
 
@@ -1359,6 +1782,19 @@ function packCoord(lat, lon) {
   return Math.round(lat * 100000) * COORD_PACK_BASE + Math.round(lon * 100000);
 }
 
+function unpackPackedCoordPoint(packed) {
+  const latE5 = Math.floor(packed / COORD_PACK_BASE);
+  const lonE5 = packed - latE5 * COORD_PACK_BASE;
+  const lat = latE5 / 100000;
+  const lon = lonE5 / 100000;
+  return {
+    lat,
+    lon,
+    x: projectX(lon, lat),
+    y: projectY(lat)
+  };
+}
+
 function projectLonLat(lon, lat) {
   return {
     x: projectX(lon, lat),
@@ -1393,4 +1829,9 @@ function pointSegmentDistance(px, py, ax, ay, bx, by) {
   const x = ax + t * dx;
   const y = ay + t * dy;
   return Math.sqrt(squaredDistance(px, py, x, y));
+}
+
+function round(value, decimals) {
+  const factor = 10 ** decimals;
+  return Math.round(value * factor) / factor;
 }
