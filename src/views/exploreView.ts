@@ -3,7 +3,13 @@ import { formatDistance, formatInteger, formatSeverityPercent } from "../formatt
 import { distanceMeters } from "../geo";
 import { escapeHtml } from "../html";
 import { tr, trf } from "../i18n";
-import type { BrowseIndex } from "../browseIndex";
+import {
+  browseFiltersActive,
+  clusterBrowseRegionKey,
+  filterBrowseClusters,
+  type BrowseClusterFilters,
+  type BrowseIndex
+} from "../browseIndex";
 import type { AnalysisResult, IntersectionCluster } from "../types";
 
 interface LatLon {
@@ -20,6 +26,7 @@ export interface ExploreViewDependencies {
   getSelectedCluster: () => IntersectionCluster | null;
   getBrowseStateValue: () => string;
   getBrowseRegionValue: () => string;
+  getBrowseFilters: () => BrowseClusterFilters;
   browseIndexForCurrentResult: () => BrowseIndex | null;
   updateBrowseRegionOptions: () => void;
   selectCluster: (cluster: IntersectionCluster, telemetrySource?: string) => void;
@@ -37,7 +44,8 @@ export class ExploreView {
 
   renderStateHotspotList(): void {
     this.deps.stateHotspotList.innerHTML = "";
-    if (!this.deps.getResult()) {
+    const result = this.deps.getResult();
+    if (!result) {
       this.deps.stateHotspotList.append(this.emptyHotspotMessage(tr("status.stateHotspotsPending")));
       return;
     }
@@ -50,27 +58,54 @@ export class ExploreView {
 
     const stateCode = this.deps.getBrowseStateValue();
     const regionKey = this.deps.getBrowseRegionValue();
-    const sourceClusters =
-      stateCode === "all"
+    const filters = this.deps.getBrowseFilters();
+    const hasActiveFilters = browseFiltersActive(filters);
+    const sourceClusters = hasActiveFilters
+      ? this.scopedClusters(result, stateCode, regionKey)
+      : stateCode === "all"
         ? browseIndex.topClustersByState
         : regionKey === "all"
           ? browseIndex.browseClustersByState.get(stateCode) ?? []
           : browseIndex.browseClustersByRegion.get(regionKey) ?? [];
-    const clusters = sourceClusters.slice(0, this.deps.maxIntersections);
+    const filteredClusters = hasActiveFilters
+      ? filterBrowseClusters(sourceClusters, filters).slice().sort(compareClusterCoreMetric)
+      : sourceClusters;
+    const clusters = filteredClusters.slice(0, this.deps.maxIntersections);
 
     if (clusters.length === 0) {
-      this.deps.stateHotspotList.append(this.emptyHotspotMessage(tr("status.noAnalysisMatches")));
+      this.deps.stateHotspotList.append(
+        this.emptyHotspotMessage(tr(hasActiveFilters ? "status.noBrowseFilterMatches" : "status.noAnalysisMatches"))
+      );
       return;
     }
 
     clusters.forEach((cluster) => {
       this.deps.stateHotspotList.append(
-        this.hotspotButton(cluster, stateCode === "all" ? cluster.stateName : clusterLocationText(cluster), {
+        this.hotspotButton(cluster, this.browseClusterLabel(cluster, stateCode, hasActiveFilters), {
           metricPlacement: "header",
           telemetrySource: "state hotspot"
         })
       );
     });
+  }
+
+  private scopedClusters(result: AnalysisResult, stateCode: string, regionKey: string): IntersectionCluster[] {
+    if (stateCode === "all") {
+      return result.clusters;
+    }
+    return result.clusters.filter((cluster) => {
+      if (cluster.stateCode !== stateCode) {
+        return false;
+      }
+      return regionKey === "all" || clusterBrowseRegionKey(cluster) === regionKey;
+    });
+  }
+
+  private browseClusterLabel(cluster: IntersectionCluster, stateCode: string, hasActiveFilters: boolean): string {
+    if (stateCode !== "all") {
+      return clusterLocationText(cluster);
+    }
+    return hasActiveFilters ? `${cluster.stateName} - ${clusterLocationText(cluster)}` : cluster.stateName;
   }
 
   selectNearestCluster(): { cluster: IntersectionCluster; distanceMeters: number } | null {

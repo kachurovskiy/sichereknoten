@@ -74,6 +74,55 @@ test("browse index store reuses indexes by cluster array identity", async () => 
   assert.notEqual(store.forClusters(clusters), first);
 });
 
+test("browse cluster filters apply independent criteria", async () => {
+  const { DEFAULT_BROWSE_CLUSTER_FILTERS, browseFilterActiveCount, filterBrowseClusters } = await supportModule;
+  const clusters = [
+    sampleCluster({
+      id: "roundabout-fatal",
+      fatalCount: 1,
+      severityPercent: 0.35,
+      osmRoundabout: true,
+      osmTrafficSignal: false
+    }),
+    sampleCluster({
+      id: "signal-serious",
+      fatalCount: 0,
+      severityPercent: 0.45,
+      osmRoundabout: false,
+      osmTrafficSignal: true
+    }),
+    sampleCluster({
+      id: "unknown-low",
+      fatalCount: 0,
+      severityPercent: 0.05,
+      osmRoundabout: null,
+      osmTrafficSignal: null
+    })
+  ];
+
+  assert.equal(browseFilterActiveCount(DEFAULT_BROWSE_CLUSTER_FILTERS), 0);
+  assert.deepEqual(
+    filterBrowseClusters(clusters, {
+      roundabout: "yes",
+      trafficSignal: "no",
+      fatal: "yes",
+      minSeverityPercent: 20,
+      maxSeverityPercent: 40
+    }).map((cluster) => cluster.id),
+    ["roundabout-fatal"]
+  );
+  assert.deepEqual(
+    filterBrowseClusters(clusters, {
+      roundabout: "unknown",
+      trafficSignal: "unknown",
+      fatal: "no",
+      minSeverityPercent: null,
+      maxSeverityPercent: 10
+    }).map((cluster) => cluster.id),
+    ["unknown-low"]
+  );
+});
+
 test("severity rank index reports state and Germany rank contexts", async () => {
   const { buildSeverityRankIndex, severityRankContextForCluster } = await supportModule;
   const clusters = [

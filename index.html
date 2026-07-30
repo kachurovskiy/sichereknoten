@@ -33,7 +33,10 @@
           </section>
 
           <section class="panel-section">
-            <h2 data-i18n="browse.title">Browse by state</h2>
+            <div class="panel-section-header">
+              <h2 data-i18n="browse.title">Browse by state</h2>
+              <button id="browseFiltersToggle" class="secondary-link-button" type="button" aria-expanded="false" aria-controls="browseFilters" data-i18n="browse.filters.show">More filters</button>
+            </div>
             <select id="browseState" aria-label="Bundesland" data-i18n-aria-label="field.state">
               <option value="all" data-i18n="option.allStates">All Bundeslaender</option>
             </select>
@@ -43,6 +46,47 @@
                 <option value="all" data-i18n="option.allRegions">All regions</option>
               </select>
             </label>
+            <div id="browseFilters" class="browse-filters" hidden>
+              <div class="browse-filter-grid">
+                <label class="field-label" for="browseRoundaboutFilter">
+                  <span data-i18n="browse.filters.roundabout">Roundabout</span>
+                  <select id="browseRoundaboutFilter">
+                    <option value="any" data-i18n="option.any">Any</option>
+                    <option value="yes" data-i18n="option.yes">Yes</option>
+                    <option value="no" data-i18n="option.no">No</option>
+                    <option value="unknown" data-i18n="option.unknown">Unknown</option>
+                  </select>
+                </label>
+                <label class="field-label" for="browseTrafficSignalFilter">
+                  <span data-i18n="browse.filters.trafficSignal">Traffic light</span>
+                  <select id="browseTrafficSignalFilter">
+                    <option value="any" data-i18n="option.any">Any</option>
+                    <option value="yes" data-i18n="option.yes">Yes</option>
+                    <option value="no" data-i18n="option.no">No</option>
+                    <option value="unknown" data-i18n="option.unknown">Unknown</option>
+                  </select>
+                </label>
+                <label class="field-label" for="browseFatalFilter">
+                  <span data-i18n="browse.filters.fatal">Fatal accidents</span>
+                  <select id="browseFatalFilter">
+                    <option value="any" data-i18n="option.any">Any</option>
+                    <option value="yes" data-i18n="browse.filters.fatalYes">Present</option>
+                    <option value="no" data-i18n="browse.filters.fatalNo">None</option>
+                  </select>
+                </label>
+                <label class="field-label" for="browseMinSeverity">
+                  <span data-i18n="browse.filters.minSeverity">Min severity %</span>
+                  <input id="browseMinSeverity" class="number-input" type="number" min="0" max="100" step="1" inputmode="decimal" autocomplete="off" />
+                </label>
+                <label class="field-label" for="browseMaxSeverity">
+                  <span data-i18n="browse.filters.maxSeverity">Max severity %</span>
+                  <input id="browseMaxSeverity" class="number-input" type="number" min="0" max="100" step="1" inputmode="decimal" autocomplete="off" />
+                </label>
+              </div>
+              <div class="browse-filter-actions">
+                <button id="browseResetFilters" class="secondary-link-button" type="button" data-i18n="browse.filters.reset">Reset filters</button>
+              </div>
+            </div>
             <div id="stateHotspotList" class="hotspot-list"></div>
           </section>
 

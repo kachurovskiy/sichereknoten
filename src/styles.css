@@ -106,6 +106,14 @@ button {
   font-size: 0.95rem;
 }
 
+.panel-section-header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
 .nearby-section {
   gap: 8px;
 }
@@ -225,6 +233,24 @@ select {
   color: #1d2d34;
 }
 
+.secondary-link-button {
+  min-height: 28px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #166b6d;
+  font-size: 0.84rem;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.secondary-link-button:hover,
+.secondary-link-button:focus-visible {
+  color: #0f4f52;
+  outline: none;
+}
+
 .danger-button {
   background: #f8e9e7;
   border-color: #e3b3ab;
@@ -269,6 +295,42 @@ select {
   border: 1px solid #cbd4ce;
   border-radius: 6px;
   background: #f8faf7;
+}
+
+.browse-filters {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid #e1e5df;
+  border-radius: 7px;
+  background: #f8faf7;
+}
+
+.browse-filters[hidden] {
+  display: none;
+}
+
+.browse-filter-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.browse-filter-grid .field-label {
+  min-width: 0;
+  font-size: 0.78rem;
+}
+
+.browse-filter-grid select,
+.browse-filter-grid .number-input {
+  min-height: 34px;
+  padding: 6px 8px;
+  background: #ffffff;
+}
+
+.browse-filter-actions {
+  display: flex;
+  justify-content: flex-end;
 }
 
 .hotspot-list {

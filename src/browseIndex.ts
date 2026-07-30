@@ -5,6 +5,25 @@ import type { IntersectionCluster } from "./types";
 const STATE_BROWSE_MIN_SEVERITY_PERCENT = 0.1;
 export const STATE_BROWSE_MAX_INTERSECTIONS = 100;
 
+export type BrowseFeatureFilter = "any" | "yes" | "no" | "unknown";
+export type BrowseFatalFilter = "any" | "yes" | "no";
+
+export interface BrowseClusterFilters {
+  roundabout: BrowseFeatureFilter;
+  trafficSignal: BrowseFeatureFilter;
+  fatal: BrowseFatalFilter;
+  minSeverityPercent: number | null;
+  maxSeverityPercent: number | null;
+}
+
+export const DEFAULT_BROWSE_CLUSTER_FILTERS: BrowseClusterFilters = {
+  roundabout: "any",
+  trafficSignal: "any",
+  fatal: "any",
+  minSeverityPercent: null,
+  maxSeverityPercent: null
+};
+
 export interface BrowseIndex {
   clusters: IntersectionCluster[];
   regionSummaries: RegionSummary[];
@@ -60,7 +79,7 @@ export function buildBrowseIndex(clusters: IntersectionCluster[]): BrowseIndex {
 
   for (const cluster of clusters) {
     const regionName = clusterRegionName(cluster);
-    const key = clusterRegionKey(cluster);
+    const key = clusterBrowseRegionKey(cluster);
     const summary =
       byRegion.get(key) ??
       ({
@@ -140,6 +159,58 @@ export function regionOptionLabel(region: RegionSummary): string {
   return region.population === null ? region.regionName : `${region.regionName} (${formatCompactPopulation(region.population)})`;
 }
 
+export function browseFiltersActive(filters: BrowseClusterFilters): boolean {
+  return (
+    filters.roundabout !== DEFAULT_BROWSE_CLUSTER_FILTERS.roundabout ||
+    filters.trafficSignal !== DEFAULT_BROWSE_CLUSTER_FILTERS.trafficSignal ||
+    filters.fatal !== DEFAULT_BROWSE_CLUSTER_FILTERS.fatal ||
+    filters.minSeverityPercent !== DEFAULT_BROWSE_CLUSTER_FILTERS.minSeverityPercent ||
+    filters.maxSeverityPercent !== DEFAULT_BROWSE_CLUSTER_FILTERS.maxSeverityPercent
+  );
+}
+
+export function browseFilterActiveCount(filters: BrowseClusterFilters): number {
+  let count = 0;
+  if (filters.roundabout !== DEFAULT_BROWSE_CLUSTER_FILTERS.roundabout) {
+    count += 1;
+  }
+  if (filters.trafficSignal !== DEFAULT_BROWSE_CLUSTER_FILTERS.trafficSignal) {
+    count += 1;
+  }
+  if (filters.fatal !== DEFAULT_BROWSE_CLUSTER_FILTERS.fatal) {
+    count += 1;
+  }
+  if (filters.minSeverityPercent !== DEFAULT_BROWSE_CLUSTER_FILTERS.minSeverityPercent) {
+    count += 1;
+  }
+  if (filters.maxSeverityPercent !== DEFAULT_BROWSE_CLUSTER_FILTERS.maxSeverityPercent) {
+    count += 1;
+  }
+  return count;
+}
+
+export function filterBrowseClusters(clusters: IntersectionCluster[], filters: BrowseClusterFilters): IntersectionCluster[] {
+  if (!browseFiltersActive(filters)) {
+    return clusters;
+  }
+  return clusters.filter((cluster) => browseClusterMatchesFilters(cluster, filters));
+}
+
+export function browseClusterMatchesFilters(cluster: IntersectionCluster, filters: BrowseClusterFilters): boolean {
+  const severityPercent = cluster.severityPercent * 100;
+  return (
+    nullableBooleanMatches(cluster.osmRoundabout, filters.roundabout) &&
+    nullableBooleanMatches(cluster.osmTrafficSignal, filters.trafficSignal) &&
+    fatalCountMatches(cluster.fatalCount, filters.fatal) &&
+    (filters.minSeverityPercent === null || severityPercent >= filters.minSeverityPercent) &&
+    (filters.maxSeverityPercent === null || severityPercent <= filters.maxSeverityPercent)
+  );
+}
+
+export function clusterBrowseRegionKey(cluster: IntersectionCluster): string {
+  return `${cluster.stateCode}:${cluster.administrativeRegionCode ?? "state"}`;
+}
+
 function appendMapListItem<K, V>(map: Map<K, V[]>, key: K, item: V): void {
   const items = map.get(key);
   if (items) {
@@ -178,10 +249,6 @@ function clusterRegionName(cluster: IntersectionCluster): string {
   return cleanAreaNameForDisplay(cluster.administrativeRegionName ?? cluster.stateName);
 }
 
-function clusterRegionKey(cluster: IntersectionCluster): string {
-  return `${cluster.stateCode}:${cluster.administrativeRegionCode ?? "state"}`;
-}
-
 function insertSortedCluster(
   selected: IntersectionCluster[],
   cluster: IntersectionCluster,
@@ -199,5 +266,29 @@ function insertSortedCluster(
   selected.splice(index, 0, cluster);
   if (selected.length > limit) {
     selected.length = limit;
+  }
+}
+
+function nullableBooleanMatches(value: boolean | null, filter: BrowseFeatureFilter): boolean {
+  switch (filter) {
+    case "yes":
+      return value === true;
+    case "no":
+      return value === false;
+    case "unknown":
+      return value === null;
+    default:
+      return true;
+  }
+}
+
+function fatalCountMatches(fatalCount: number, filter: BrowseFatalFilter): boolean {
+  switch (filter) {
+    case "yes":
+      return fatalCount > 0;
+    case "no":
+      return fatalCount === 0;
+    default:
+      return true;
   }
 }

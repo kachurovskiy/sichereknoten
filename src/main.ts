@@ -3,7 +3,8 @@ import { AnalysisOptionsForm, analysisOptionsEqual } from "./analysisOptionsForm
 import { AnalysisCoordinator } from "./analysisCoordinator";
 import { AppState } from "./appState";
 import { AppRouter } from "./appRouter";
-import { BrowseIndexStore, regionOptionLabel, STATE_BROWSE_MAX_INTERSECTIONS, type BrowseIndex } from "./browseIndex";
+import { BrowseIndexStore, STATE_BROWSE_MAX_INTERSECTIONS, type BrowseIndex } from "./browseIndex";
+import { BrowsePanelController } from "./browsePanelController";
 import { clustersCsv } from "./clusterCsvExport";
 import { ClusterSelectionCoordinator, clusterSeverityKey } from "./clusterSelectionCoordinator";
 import { DataRepository } from "./dataRepository";
@@ -109,6 +110,14 @@ const elements = {
   selectionDetails: byId<HTMLDivElement>("selectionDetails"),
   findNearbyBtn: byId<HTMLButtonElement>("findNearbyBtn"),
   nearbyList: byId<HTMLDivElement>("nearbyList"),
+  browseFiltersToggle: byId<HTMLButtonElement>("browseFiltersToggle"),
+  browseFilters: byId<HTMLDivElement>("browseFilters"),
+  browseRoundaboutFilter: byId<HTMLSelectElement>("browseRoundaboutFilter"),
+  browseTrafficSignalFilter: byId<HTMLSelectElement>("browseTrafficSignalFilter"),
+  browseFatalFilter: byId<HTMLSelectElement>("browseFatalFilter"),
+  browseMinSeverity: byId<HTMLInputElement>("browseMinSeverity"),
+  browseMaxSeverity: byId<HTMLInputElement>("browseMaxSeverity"),
+  browseResetFilters: byId<HTMLButtonElement>("browseResetFilters"),
   browseState: byId<HTMLSelectElement>("browseState"),
   browseRegionField: byId<HTMLLabelElement>("browseRegionField"),
   browseRegion: byId<HTMLSelectElement>("browseRegion"),
@@ -374,6 +383,26 @@ const stateRegionView = new StateRegionView({
   getResult: () => appState.result,
   getRegionSummaries: () => browseIndexForCurrentResult()?.regionSummaries ?? []
 });
+const browsePanelController = new BrowsePanelController(
+  {
+    filtersToggle: elements.browseFiltersToggle,
+    filters: elements.browseFilters,
+    roundaboutFilter: elements.browseRoundaboutFilter,
+    trafficSignalFilter: elements.browseTrafficSignalFilter,
+    fatalFilter: elements.browseFatalFilter,
+    minSeverity: elements.browseMinSeverity,
+    maxSeverity: elements.browseMaxSeverity,
+    resetFilters: elements.browseResetFilters,
+    state: elements.browseState,
+    regionField: elements.browseRegionField,
+    region: elements.browseRegion
+  },
+  {
+    hasResult: () => Boolean(appState.result),
+    browseIndex: browseIndexForCurrentResult,
+    onBrowseChange: () => exploreView.renderStateHotspotList()
+  }
+);
 exploreView = new ExploreView({
   nearbyList: elements.nearbyList,
   stateHotspotList: elements.stateHotspotList,
@@ -381,10 +410,11 @@ exploreView = new ExploreView({
   getResult: () => appState.result,
   getUserLocation: () => appState.userLocation,
   getSelectedCluster: () => selectedIntersectionController.selectedCluster,
-  getBrowseStateValue: () => elements.browseState.value,
-  getBrowseRegionValue: () => elements.browseRegion.value,
+  getBrowseStateValue: () => browsePanelController.stateValue(),
+  getBrowseRegionValue: () => browsePanelController.regionValue(),
+  getBrowseFilters: () => browsePanelController.filtersValue(),
   browseIndexForCurrentResult,
-  updateBrowseRegionOptions,
+  updateBrowseRegionOptions: () => browsePanelController.updateRegionOptions(),
   selectCluster: (cluster, telemetrySource) => clusterSelectionCoordinator.selectCluster(cluster, telemetrySource),
   setView: (view) => appRouter.setView(view)
 });
@@ -429,11 +459,7 @@ function wireMapControlEvents(): void {
   });
   elements.locateMeBtn.addEventListener("click", () => locateUser({ selectNearest: false }));
   elements.findNearbyBtn.addEventListener("click", () => locateUser({ selectNearest: true }));
-  elements.browseState.addEventListener("change", () => {
-    updateBrowseRegionOptions();
-    exploreView.renderStateHotspotList();
-  });
-  elements.browseRegion.addEventListener("change", () => exploreView.renderStateHotspotList());
+  browsePanelController.bindEvents();
 }
 
 function wireNavigationEvents(): void {
@@ -649,45 +675,10 @@ function invalidateRenderedAnalysisViews(): void {
 }
 
 function populateFilters(): void {
-  const selectedBrowseState = elements.browseState.value;
-  const selectedBrowseRegion = elements.browseRegion.value;
   const availableStateCodes = stateCodesForFilters();
 
   analysisOptionsForm.populateFilters(availableStateCodes, yearsForFilters());
-
-  elements.browseState.replaceChildren(new Option(tr("option.allStates"), "all"));
-  const stateOptions = Object.entries(STATE_NAMES).sort((a, b) => a[1].localeCompare(b[1], "de", { sensitivity: "base" }));
-  for (const [code, name] of stateOptions) {
-    if (availableStateCodes.has(code)) {
-      elements.browseState.append(new Option(name, code));
-    }
-  }
-  elements.browseState.value = [...elements.browseState.options].some((option) => option.value === selectedBrowseState)
-    ? selectedBrowseState
-    : "all";
-  updateBrowseRegionOptions(selectedBrowseRegion);
-}
-
-function updateBrowseRegionOptions(preferredRegion = elements.browseRegion.value): void {
-  const stateCode = elements.browseState.value;
-  const shouldShow = Boolean(appState.result) && stateCode !== "all";
-  elements.browseRegionField.hidden = !shouldShow;
-  elements.browseRegion.disabled = !shouldShow;
-
-  if (!shouldShow) {
-    elements.browseRegion.replaceChildren(new Option(tr("option.allRegions"), "all"));
-    elements.browseRegion.value = "all";
-    return;
-  }
-
-  const regions = browseIndexForCurrentResult()?.regionsByState.get(stateCode) ?? [];
-  elements.browseRegion.replaceChildren(new Option(tr("option.allRegions"), "all"));
-  for (const region of regions) {
-    elements.browseRegion.append(new Option(regionOptionLabel(region), region.key));
-  }
-  elements.browseRegion.value = [...elements.browseRegion.options].some((option) => option.value === preferredRegion)
-    ? preferredRegion
-    : "all";
+  browsePanelController.populateStateOptions(availableStateCodes);
 }
 
 function stateCodesForFilters(): Set<string> {
