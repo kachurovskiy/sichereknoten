@@ -31,7 +31,6 @@ export interface AppRouterElements {
 
 export interface AppRouterDependencies {
   canOpenDetails: () => boolean;
-  canOpenSimilar: () => boolean;
   setStatus: (message: string, progress: number) => void;
   onViewChanged: (view: AppViewKey) => void;
   scheduleMapRefresh: () => void;
@@ -85,10 +84,6 @@ export class AppRouter {
     let view = requestedView;
     if (view === "details" && !this.deps.canOpenDetails()) {
       this.deps.setStatus(tr("details.selectFirst"), 100);
-      view = "map";
-    }
-    if (view === "similar" && !this.deps.canOpenSimilar()) {
-      this.deps.setStatus(this.deps.canOpenDetails() ? tr("similar.selectComparable") : tr("details.selectFirst"), 100);
       view = "map";
     }
 

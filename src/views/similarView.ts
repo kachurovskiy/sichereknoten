@@ -23,6 +23,10 @@ interface RoadClassToken {
   label: string;
 }
 
+interface RoadClassOption extends RoadClassSignature {
+  clusterCount: number;
+}
+
 type SimilarIntersectionFeatureGroupKey = (typeof SIMILAR_INTERSECTION_FEATURE_GROUPS)[number]["id"];
 
 interface SimilarIntersectionGroupRow extends IntersectionFeatureSummaryRow {
@@ -36,9 +40,7 @@ interface SimilarIntersectionGroupAccumulator extends SimilarIntersectionGroupRo
 }
 
 interface SimilarIntersectionComparison {
-  selected: IntersectionCluster;
   signature: RoadClassSignature;
-  selectedFeatureGroup: SimilarIntersectionFeatureGroupKey | null;
   groups: SimilarIntersectionGroupRow[];
   matchedClusterCount: number;
   omittedCount: number;
@@ -54,6 +56,7 @@ export interface SimilarViewDependencies {
 }
 
 const SIMILAR_INTERSECTION_PREVIEW_LIMIT = 8;
+const SIMILAR_INTERSECTION_MIN_COMPARISON_CLUSTER_COUNT = 10;
 const SIMILAR_INTERSECTION_FEATURE_GROUPS = [
   { id: "plain", labelKey: "similar.group.plain", sortOrder: 0 },
   { id: "roundabout", labelKey: "similar.group.roundabout", sortOrder: 1 },
@@ -62,10 +65,14 @@ const SIMILAR_INTERSECTION_FEATURE_GROUPS = [
 const STREET_NAME_SEPARATOR = " \u00d7 ";
 
 export class SimilarView {
+  private selectedRoadClassKey: string | null = null;
+  private autoSelectedClusterId: string | null = null;
+
   constructor(private readonly deps: SimilarViewDependencies) {}
 
   bindEvents(): void {
     this.deps.container.addEventListener("click", (event) => this.handleClick(event));
+    this.deps.container.addEventListener("change", (event) => this.handleChange(event));
   }
 
   renderIfVisible(): void {
@@ -77,20 +84,24 @@ export class SimilarView {
 
   render(): void {
     const result = this.deps.getResult();
+    if (!result) {
+      this.deps.container.innerHTML = `<p class="population-rate-empty">${escapeHtml(tr("similar.noData"))}</p>`;
+      return;
+    }
+
+    const roadClassOptions = this.roadClassOptionsForClusters(result.clusters);
+    if (roadClassOptions.length === 0) {
+      this.deps.container.innerHTML = `<p class="population-rate-empty">${escapeHtml(
+        trf("similar.noRoadClasses", { count: formatInteger(SIMILAR_INTERSECTION_MIN_COMPARISON_CLUSTER_COUNT) })
+      )}</p>`;
+      return;
+    }
+
     const selected = this.deps.getSelectedCluster();
-    if (!result || !selected) {
-      this.deps.container.innerHTML = `<p class="population-rate-empty">${escapeHtml(tr("similar.empty"))}</p>`;
-      return;
-    }
-
-    const signature = this.deps.getSelectedRoadClassSignature();
-    if (!signature) {
-      this.deps.container.innerHTML = `<p class="population-rate-empty">${escapeHtml(tr("similar.noClass"))}</p>`;
-      return;
-    }
-
+    const signature = this.pickRoadClassSignatureForRender(selected, roadClassOptions);
     this.deps.container.innerHTML = this.renderSimilarIntersectionComparison(
-      this.buildSimilarIntersectionComparison(selected, signature, result.clusters)
+      this.buildSimilarIntersectionComparison(signature, result.clusters),
+      roadClassOptions
     );
   }
 
@@ -105,6 +116,15 @@ export class SimilarView {
       key: sortedTokens.map((token) => token.key).join("|"),
       label: sortedTokens.map((token) => token.label).join(STREET_NAME_SEPARATOR)
     };
+  }
+
+  private handleChange(event: Event): void {
+    const target = event.target;
+    if (!(target instanceof HTMLSelectElement) || target.dataset.similarRoadClass !== "true") {
+      return;
+    }
+    this.selectedRoadClassKey = target.value || null;
+    this.render();
   }
 
   private handleClick(event: MouseEvent): void {
@@ -127,7 +147,6 @@ export class SimilarView {
   }
 
   private buildSimilarIntersectionComparison(
-    selected: IntersectionCluster,
     signature: RoadClassSignature,
     clusters: IntersectionCluster[]
   ): SimilarIntersectionComparison {
@@ -139,10 +158,6 @@ export class SimilarView {
     let matchedClusterCount = 0;
     let omittedCount = 0;
     for (const cluster of clusters) {
-      if (cluster.id === selected.id) {
-        continue;
-      }
-
       const clusterSignature = this.roadClassSignatureForCluster(cluster);
       if (clusterSignature?.key !== signature.key) {
         continue;
@@ -158,9 +173,7 @@ export class SimilarView {
     }
 
     return {
-      selected,
       signature,
-      selectedFeatureGroup: this.similarIntersectionFeatureGroup(selected),
       groups: this.finalizeSimilarIntersectionGroups(Array.from(accumulators.values())),
       matchedClusterCount,
       omittedCount
@@ -203,6 +216,7 @@ export class SimilarView {
 
   private finalizeSimilarIntersectionGroups(accumulators: SimilarIntersectionGroupAccumulator[]): SimilarIntersectionGroupRow[] {
     return accumulators
+      .filter((group) => group.clusterCount >= SIMILAR_INTERSECTION_MIN_COMPARISON_CLUSTER_COUNT)
       .map((group) => ({
         ...group,
         severityPercent: group.accidentCount > 0 ? group.weightedSeverityPercent / group.accidentCount : 0,
@@ -211,20 +225,16 @@ export class SimilarView {
       .sort((a, b) => a.sortOrder - b.sortOrder);
   }
 
-  private renderSimilarIntersectionComparison(comparison: SimilarIntersectionComparison): string {
-    const selectedFeatureLabel = this.similarIntersectionFeatureGroupLabel(comparison.selectedFeatureGroup);
+  private renderSimilarIntersectionComparison(comparison: SimilarIntersectionComparison, roadClassOptions: RoadClassOption[]): string {
     const overview = `
       <div class="similar-overview">
-        <div class="similar-overview-item">
-          <span>${escapeHtml(tr("similar.class"))}</span>
-          <strong>${escapeHtml(comparison.signature.label)}</strong>
-        </div>
-        <div class="similar-overview-item">
-          <span>${escapeHtml(tr("similar.selectedFeatures"))}</span>
-          <strong>${escapeHtml(selectedFeatureLabel)}</strong>
-        </div>
-        <div class="similar-overview-item">
-          <span>${escapeHtml(trf("similar.otherMatches", { count: formatInteger(comparison.matchedClusterCount) }))}</span>
+        <div class="similar-overview-item similar-overview-control">
+          <label class="similar-road-class-field" for="similarRoadClassSelect">
+            <span>${escapeHtml(tr("similar.class"))}:</span>
+            <select id="similarRoadClassSelect" data-similar-road-class="true">
+              ${roadClassOptions.map((option) => this.renderRoadClassOption(option, comparison.signature)).join("")}
+            </select>
+          </label>
         </div>
       </div>
     `;
@@ -242,10 +252,22 @@ export class SimilarView {
 
     return `
       ${overview}
-      ${renderIntersectionFeatureSection(comparison.groups)}
+      ${comparison.groups.length > 0 ? renderIntersectionFeatureSection(comparison.groups) : this.renderMinimumGroupEmptyState()}
       ${omittedNote}
-      ${this.renderSimilarClusterGroups(comparison.groups)}
+      ${comparison.groups.length > 0 ? this.renderSimilarClusterGroups(comparison.groups) : ""}
     `;
+  }
+
+  private renderMinimumGroupEmptyState(): string {
+    return `<p class="population-rate-empty">${escapeHtml(
+      trf("similar.noLargeGroups", { count: formatInteger(SIMILAR_INTERSECTION_MIN_COMPARISON_CLUSTER_COUNT) })
+    )}</p>`;
+  }
+
+  private renderRoadClassOption(option: RoadClassOption, selected: RoadClassSignature): string {
+    return `<option value="${escapeHtml(option.key)}" ${option.key === selected.key ? "selected" : ""}>${escapeHtml(
+      `${option.label} (${formatInteger(option.clusterCount)})`
+    )}</option>`;
   }
 
   private renderSimilarClusterGroups(groups: SimilarIntersectionGroupRow[]): string {
@@ -319,6 +341,51 @@ export class SimilarView {
     return this.roadClassSignatureForStreetNames(clusterStreetNamesForDisplay(cluster));
   }
 
+  private roadClassOptionsForClusters(clusters: IntersectionCluster[]): RoadClassOption[] {
+    const options = new Map<string, RoadClassOption>();
+    for (const cluster of clusters) {
+      const signature = this.roadClassSignatureForCluster(cluster);
+      if (!signature) {
+        continue;
+      }
+      const current = options.get(signature.key);
+      if (current) {
+        current.clusterCount += 1;
+      } else {
+        options.set(signature.key, { ...signature, clusterCount: 1 });
+      }
+    }
+    return Array.from(options.values())
+      .filter((option) => option.clusterCount >= SIMILAR_INTERSECTION_MIN_COMPARISON_CLUSTER_COUNT)
+      .sort((a, b) => this.compareRoadClassSignatures(a, b));
+  }
+
+  private pickRoadClassSignatureForRender(
+    selected: IntersectionCluster | null,
+    roadClassOptions: RoadClassOption[]
+  ): RoadClassSignature {
+    const selectedClusterId = selected?.id ?? null;
+    const selectedSignature = this.deps.getSelectedRoadClassSignature();
+    if (selectedClusterId !== this.autoSelectedClusterId) {
+      this.autoSelectedClusterId = selectedClusterId;
+      if (selectedSignature && roadClassOptions.some((option) => option.key === selectedSignature.key)) {
+        this.selectedRoadClassKey = selectedSignature.key;
+      }
+    }
+
+    const manuallySelected = roadClassOptions.find((option) => option.key === this.selectedRoadClassKey);
+    if (manuallySelected) {
+      return manuallySelected;
+    }
+
+    const autoSelected = selectedSignature
+      ? roadClassOptions.find((option) => option.key === selectedSignature.key) ?? null
+      : null;
+    const fallback = autoSelected ?? roadClassOptions[0];
+    this.selectedRoadClassKey = fallback.key;
+    return fallback;
+  }
+
   private isKnownRoadClassToken(token: RoadClassToken): boolean {
     return token.key !== "other";
   }
@@ -335,6 +402,25 @@ export class SimilarView {
 
   private compareRoadClassTokens(a: RoadClassToken, b: RoadClassToken): number {
     return this.roadClassSortValue(a.key) - this.roadClassSortValue(b.key) || a.label.localeCompare(b.label, "de", { sensitivity: "base" });
+  }
+
+  private compareRoadClassSignatures(a: RoadClassSignature, b: RoadClassSignature): number {
+    const aTokens = a.key.split("|");
+    const bTokens = b.key.split("|");
+    const length = Math.max(aTokens.length, bTokens.length);
+    for (let index = 0; index < length; index += 1) {
+      const aToken = aTokens[index] ?? "";
+      const bToken = bTokens[index] ?? "";
+      const order = this.roadClassSortValue(aToken) - this.roadClassSortValue(bToken);
+      if (order !== 0) {
+        return order;
+      }
+      const keyOrder = aToken.localeCompare(bToken, "en", { sensitivity: "base" });
+      if (keyOrder !== 0) {
+        return keyOrder;
+      }
+    }
+    return a.label.localeCompare(b.label, "de", { sensitivity: "base" });
   }
 
   private roadClassSortValue(key: string): number {
@@ -354,10 +440,5 @@ export class SimilarView {
       return "trafficSignal";
     }
     return null;
-  }
-
-  private similarIntersectionFeatureGroupLabel(group: SimilarIntersectionFeatureGroupKey | null): string {
-    const definition = group ? SIMILAR_INTERSECTION_FEATURE_GROUPS.find((candidate) => candidate.id === group) : null;
-    return definition ? tr(definition.labelKey) : tr("similar.group.excluded");
   }
 }

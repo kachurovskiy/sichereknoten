@@ -182,10 +182,9 @@ export class SelectedIntersectionController {
 
   updateContextTabs(): void {
     const hasSelection = this.selectedClusterValue !== null;
-    const canCompareSimilar = this.canCompareSimilar;
     this.deps.elements.detailsTab.disabled = !hasSelection;
-    this.deps.elements.similarTab.hidden = !canCompareSimilar;
-    this.deps.elements.similarTab.disabled = !canCompareSimilar;
+    this.deps.elements.similarTab.hidden = false;
+    this.deps.elements.similarTab.disabled = false;
   }
 
   updateStreetViewPanel(): void {
@@ -248,9 +247,12 @@ export class SelectedIntersectionController {
     this.deps.previewMapView.clear();
     this.deps.map.setSelectedIncidentPoints([]);
     this.updateContextTabs();
-    if (this.deps.getActiveView() === "details" || this.deps.getActiveView() === "similar") {
+    if (this.deps.getActiveView() === "details") {
       this.deps.setView("map");
     } else {
+      if (this.deps.getActiveView() === "similar") {
+        this.deps.renderVisibleSimilarView();
+      }
       this.updateStreetViewPanel();
     }
   }
@@ -342,11 +344,7 @@ export class SelectedIntersectionController {
     this.deps.measureStep("render selected panel", cluster.id, () => this.deps.panelView.render(viewModel.panel));
     this.deps.measureStep("update details tabs", cluster.id, () => this.updateContextTabs());
     if (this.deps.getActiveView() === "similar") {
-      if (!viewModel.roadClassSignature) {
-        this.deps.measureStep("fallback from unavailable comparison", cluster.id, () => this.deps.setView("map"));
-      } else {
-        this.deps.measureStep("render visible comparison", cluster.id, this.deps.renderVisibleSimilarView);
-      }
+      this.deps.measureStep("render visible comparison", cluster.id, this.deps.renderVisibleSimilarView);
     }
     this.deps.measureStep("update street view panel", cluster.id, () => this.updateStreetViewPanel(), () => ({
       streetViewOpen: this.isStreetViewOpen

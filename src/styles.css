@@ -1920,7 +1920,6 @@ button.map-service-link {
   background: #ffffff;
 }
 
-.similar-header,
 .similar-group-heading {
   display: flex;
   flex-wrap: wrap;
@@ -1929,21 +1928,12 @@ button.map-service-link {
   justify-content: space-between;
 }
 
-.similar-header h2,
 .similar-group-heading h3 {
   margin: 0;
   color: #172126;
-}
-
-.similar-header h2 {
-  font-size: 1rem;
-}
-
-.similar-group-heading h3 {
   font-size: 0.94rem;
 }
 
-.similar-header span,
 .similar-group-heading span,
 .similar-note,
 .similar-list-note {
@@ -1958,19 +1948,15 @@ button.map-service-link {
 }
 
 .similar-overview {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  display: flex;
+  flex-wrap: wrap;
   gap: 8px;
+  align-items: center;
   min-width: 0;
 }
 
 .similar-overview-item {
-  display: grid;
-  gap: 4px;
   min-width: 0;
-  padding: 10px 12px;
-  border-left: 3px solid #166b6d;
-  background: #f8faf7;
 }
 
 .similar-overview-item span {
@@ -1978,12 +1964,22 @@ button.map-service-link {
   font-size: 0.78rem;
 }
 
-.similar-overview-item strong {
+.similar-road-class-field {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  align-items: center;
   min-width: 0;
-  color: #172126;
-  font-size: 0.96rem;
-  line-height: 1.2;
-  overflow-wrap: anywhere;
+}
+
+.similar-road-class-field select {
+  width: auto;
+  min-width: 160px;
+  max-width: min(340px, 100%);
+  min-height: 34px;
+  padding: 6px 8px;
+  background: #ffffff;
+  font-weight: 700;
 }
 
 .similar-note,
@@ -2954,10 +2950,6 @@ tbody tr:focus {
 
   .similar-panel {
     padding: 12px;
-  }
-
-  .similar-overview {
-    grid-template-columns: minmax(0, 1fr);
   }
 
   #tableView.active .table-shell {

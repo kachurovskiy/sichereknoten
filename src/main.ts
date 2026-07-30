@@ -342,7 +342,6 @@ appRouter = new AppRouter(
   },
   {
     canOpenDetails: () => selectedIntersectionController.hasSelection,
-    canOpenSimilar: () => selectedIntersectionController.canCompareSimilar,
     setStatus,
     onViewChanged: () => {
       selectedIntersectionController.updateContextTabs();
