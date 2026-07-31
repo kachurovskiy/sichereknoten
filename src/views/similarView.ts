@@ -10,7 +10,7 @@ import {
 } from "../clusterDisplay";
 import { formatInteger, formatSeverityPercent } from "../formatting";
 import { escapeHtml } from "../html";
-import { tr, trf } from "../i18n";
+import { currentLocale, tr, trf } from "../i18n";
 import type { AnalysisResult, IntersectionCluster } from "../types";
 
 export interface RoadClassSignature {
@@ -46,6 +46,26 @@ interface SimilarIntersectionComparison {
   omittedCount: number;
 }
 
+interface SimilarIntersectionBucket {
+  signature: RoadClassSignature;
+  clusterCount: number;
+  clusters: IntersectionCluster[];
+  comparison: SimilarIntersectionComparison | null;
+}
+
+interface SimilarIntersectionIndex {
+  result: AnalysisResult;
+  locale: string;
+  roadClassOptions: RoadClassOption[];
+  bucketsByRoadClassKey: Map<string, SimilarIntersectionBucket>;
+}
+
+interface SimilarRenderedState {
+  result: AnalysisResult | null;
+  stateKey: string;
+  locale: string;
+}
+
 export interface SimilarViewDependencies {
   container: HTMLElement;
   getResult: () => AnalysisResult | null;
@@ -67,6 +87,8 @@ const STREET_NAME_SEPARATOR = " \u00d7 ";
 export class SimilarView {
   private selectedRoadClassKey: string | null = null;
   private autoSelectedClusterId: string | null = null;
+  private cachedIndex: SimilarIntersectionIndex | null = null;
+  private renderedState: SimilarRenderedState | null = null;
 
   constructor(private readonly deps: SimilarViewDependencies) {}
 
@@ -85,23 +107,38 @@ export class SimilarView {
   render(): void {
     const result = this.deps.getResult();
     if (!result) {
-      this.deps.container.innerHTML = `<p class="population-rate-empty">${escapeHtml(tr("similar.noData"))}</p>`;
+      this.renderHtmlIfChanged(
+        null,
+        "no-result",
+        () => `<p class="population-rate-empty">${escapeHtml(tr("similar.noData"))}</p>`
+      );
       return;
     }
 
-    const roadClassOptions = this.roadClassOptionsForClusters(result.clusters);
-    if (roadClassOptions.length === 0) {
-      this.deps.container.innerHTML = `<p class="population-rate-empty">${escapeHtml(
-        trf("similar.noRoadClasses", { count: formatInteger(SIMILAR_INTERSECTION_MIN_COMPARISON_CLUSTER_COUNT) })
-      )}</p>`;
+    const index = this.similarIntersectionIndexForResult(result);
+    if (index.roadClassOptions.length === 0) {
+      this.renderHtmlIfChanged(
+        result,
+        "no-road-classes",
+        () =>
+          `<p class="population-rate-empty">${escapeHtml(
+            trf("similar.noRoadClasses", { count: formatInteger(SIMILAR_INTERSECTION_MIN_COMPARISON_CLUSTER_COUNT) })
+          )}</p>`
+      );
       return;
     }
 
     const selected = this.deps.getSelectedCluster();
-    const signature = this.pickRoadClassSignatureForRender(selected, roadClassOptions);
-    this.deps.container.innerHTML = this.renderSimilarIntersectionComparison(
-      this.buildSimilarIntersectionComparison(signature, result.clusters),
-      roadClassOptions
+    const signature = this.pickRoadClassSignatureForRender(selected, index.roadClassOptions);
+    const bucket = index.bucketsByRoadClassKey.get(signature.key);
+    if (!bucket) {
+      return;
+    }
+
+    this.renderHtmlIfChanged(
+      result,
+      `road-class:${signature.key}`,
+      () => this.renderSimilarIntersectionComparison(this.comparisonForBucket(bucket), index.roadClassOptions)
     );
   }
 
@@ -147,23 +184,15 @@ export class SimilarView {
   }
 
   private buildSimilarIntersectionComparison(
-    signature: RoadClassSignature,
-    clusters: IntersectionCluster[]
+    bucket: SimilarIntersectionBucket
   ): SimilarIntersectionComparison {
     const accumulators = new Map<SimilarIntersectionFeatureGroupKey, SimilarIntersectionGroupAccumulator>();
     SIMILAR_INTERSECTION_FEATURE_GROUPS.forEach((group) => {
       accumulators.set(group.id, this.createSimilarIntersectionGroupAccumulator(group.id, tr(group.labelKey), group.sortOrder));
     });
 
-    let matchedClusterCount = 0;
     let omittedCount = 0;
-    for (const cluster of clusters) {
-      const clusterSignature = this.roadClassSignatureForCluster(cluster);
-      if (clusterSignature?.key !== signature.key) {
-        continue;
-      }
-
-      matchedClusterCount += 1;
+    for (const cluster of bucket.clusters) {
       const group = this.similarIntersectionFeatureGroup(cluster);
       if (!group) {
         omittedCount += 1;
@@ -173,9 +202,9 @@ export class SimilarView {
     }
 
     return {
-      signature,
+      signature: bucket.signature,
       groups: this.finalizeSimilarIntersectionGroups(Array.from(accumulators.values())),
-      matchedClusterCount,
+      matchedClusterCount: bucket.clusterCount,
       omittedCount
     };
   }
@@ -341,23 +370,59 @@ export class SimilarView {
     return this.roadClassSignatureForStreetNames(clusterStreetNamesForDisplay(cluster));
   }
 
-  private roadClassOptionsForClusters(clusters: IntersectionCluster[]): RoadClassOption[] {
-    const options = new Map<string, RoadClassOption>();
-    for (const cluster of clusters) {
+  private similarIntersectionIndexForResult(result: AnalysisResult): SimilarIntersectionIndex {
+    const locale = currentLocale();
+    if (this.cachedIndex?.result === result && this.cachedIndex.locale === locale) {
+      return this.cachedIndex;
+    }
+
+    const buckets = new Map<string, SimilarIntersectionBucket>();
+    for (const cluster of result.clusters) {
       const signature = this.roadClassSignatureForCluster(cluster);
       if (!signature) {
         continue;
       }
-      const current = options.get(signature.key);
+      const current = buckets.get(signature.key);
       if (current) {
         current.clusterCount += 1;
+        current.clusters.push(cluster);
       } else {
-        options.set(signature.key, { ...signature, clusterCount: 1 });
+        buckets.set(signature.key, { signature, clusterCount: 1, clusters: [cluster], comparison: null });
       }
     }
-    return Array.from(options.values())
-      .filter((option) => option.clusterCount >= SIMILAR_INTERSECTION_MIN_COMPARISON_CLUSTER_COUNT)
+
+    const eligibleBuckets = Array.from(buckets.values()).filter(
+      (bucket) => bucket.clusterCount >= SIMILAR_INTERSECTION_MIN_COMPARISON_CLUSTER_COUNT
+    );
+    const bucketsByRoadClassKey = new Map<string, SimilarIntersectionBucket>(
+      eligibleBuckets.map((bucket) => [bucket.signature.key, bucket])
+    );
+    const roadClassOptions = eligibleBuckets
+      .map((bucket) => ({ ...bucket.signature, clusterCount: bucket.clusterCount }))
       .sort((a, b) => this.compareRoadClassSignatures(a, b));
+    this.cachedIndex = { result, locale, roadClassOptions, bucketsByRoadClassKey };
+    this.renderedState = null;
+    return this.cachedIndex;
+  }
+
+  private comparisonForBucket(bucket: SimilarIntersectionBucket): SimilarIntersectionComparison {
+    if (!bucket.comparison) {
+      bucket.comparison = this.buildSimilarIntersectionComparison(bucket);
+    }
+    return bucket.comparison;
+  }
+
+  private renderHtmlIfChanged(result: AnalysisResult | null, stateKey: string, html: () => string): void {
+    const locale = currentLocale();
+    if (
+      this.renderedState?.result === result &&
+      this.renderedState.stateKey === stateKey &&
+      this.renderedState.locale === locale
+    ) {
+      return;
+    }
+    this.deps.container.innerHTML = html();
+    this.renderedState = { result, stateKey, locale };
   }
 
   private pickRoadClassSignatureForRender(

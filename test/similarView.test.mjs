@@ -72,6 +72,32 @@ test("similar view auto-picks the selected intersection road class when selectio
   assert.doesNotMatch(container.innerHTML, /similar\.matches/);
 });
 
+test("similar view reuses rendered output when the result and road class are unchanged", async () => {
+  const { SimilarView } = await similarModule;
+  const container = fakeContainer();
+  const clusters = Array.from({ length: 10 }, (_value, index) =>
+    sampleCluster({ id: `a-road-${index}`, streetNames: ["A 1"], osmRoundabout: false, osmTrafficSignal: false })
+  );
+  const result = sampleResult(clusters);
+  const view = new SimilarView({
+    container,
+    getResult: () => result,
+    getSelectedCluster: () => null,
+    getSelectedRoadClassSignature: () => null,
+    getActiveView: () => "similar",
+    selectCluster: () => {}
+  });
+
+  view.render();
+  const renderedHtml = container.innerHTML;
+  const writeCount = container.innerHTMLWriteCount();
+
+  view.render();
+
+  assert.equal(container.innerHTML, renderedHtml);
+  assert.equal(container.innerHTMLWriteCount(), writeCount);
+});
+
 test("similar view hides road classes with fewer than ten intersections", async () => {
   const { SimilarView } = await similarModule;
   const container = fakeContainer();
@@ -165,8 +191,19 @@ async function loadSimilarModule() {
 }
 
 function fakeContainer() {
+  let innerHTML = "";
+  let writeCount = 0;
   return {
-    innerHTML: "",
+    get innerHTML() {
+      return innerHTML;
+    },
+    set innerHTML(value) {
+      innerHTML = value;
+      writeCount += 1;
+    },
+    innerHTMLWriteCount() {
+      return writeCount;
+    },
     addEventListener() {}
   };
 }

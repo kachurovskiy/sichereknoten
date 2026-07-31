@@ -98,7 +98,7 @@ export class AppRouter {
   }
 
   shouldRefreshMap(): boolean {
-    return !this.mobileLayout.matches || this.activeViewValue === "map";
+    return this.activeViewValue === "map" || this.activeViewValue === "details";
   }
 
   private readViewFromUrl(): AppViewKey | null {
