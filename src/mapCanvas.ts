@@ -36,7 +36,7 @@ interface SeverityFilters {
 
 type ClusterSeverity = keyof SeverityFilters;
 
-type SelectionReason = "auto" | "program" | "user";
+type SelectionReason = "auto" | "program" | "user" | "history";
 type SelectionCallback = (cluster: IntersectionCluster | null, reason: SelectionReason) => void;
 type IncidentSelectionCallback = (accident: AccidentRecord) => void;
 type IncidentViewportCallback = (request: MapIncidentViewportRequest) => void;

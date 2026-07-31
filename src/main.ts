@@ -74,6 +74,7 @@ configureI18n(ACTIVE_LOCALE, TRANSLATIONS);
 configureNumberLocale(ACTIVE_LOCALE);
 
 const appState = new AppState();
+type SelectionUrlHistoryMode = "push" | "replace" | "none";
 let loadingFactFallbackIndex = 0;
 let pendingUrlIntersectionSelection: IntersectionUrlSelection | null = readIntersectionSelectionFromUrl();
 
@@ -309,7 +310,7 @@ selectedIntersectionController = new SelectedIntersectionController({
   },
   getActiveView: () => appRouter.activeView,
   isMobileLayout: () => appRouter.isMobileLayout,
-  setView: (view) => appRouter.setView(view),
+  setView: (view, options) => appRouter.setView(view, options),
   setStatus,
   updateIntersectionSelectionUrl,
   scheduleMapRefresh,
@@ -435,7 +436,7 @@ function startApp(): void {
   showNextLoadingFact();
   analysisOptionsForm.resetToDefaults();
   wireEvents();
-  appRouter.setView(appRouter.initialView());
+  appRouter.setView(appRouter.initialView(), { history: "replace" });
   renderAll();
   void checkForFreshDeploymentHtml();
   void analysisCoordinator.loadBundledData();
@@ -473,6 +474,7 @@ function wireMapControlEvents(): void {
 
 function wireNavigationEvents(): void {
   appRouter.bindEvents();
+  window.addEventListener("popstate", restoreIntersectionSelectionFromUrl);
 }
 
 function wireRankChartEvents(): void {
@@ -744,7 +746,7 @@ function applyPendingUrlIntersectionSelection(): void {
     return;
   }
 
-  clusterSelectionCoordinator.selectCluster(nearest.cluster, "intersection URL", selection.zoomLevel);
+  map.select(nearest.cluster, true, "history", selection.zoomLevel);
 }
 
 function nearestClusterTo(point: LatLon): { cluster: IntersectionCluster; distanceMeters: number } | null {
@@ -766,13 +768,42 @@ function readIntersectionSelectionFromUrl(): IntersectionUrlSelection | null {
   return readIntersectionUrlSelection(window.location.search);
 }
 
-function updateIntersectionSelectionUrl(cluster: IntersectionCluster): void {
+function updateIntersectionSelectionUrl(cluster: IntersectionCluster, historyMode: SelectionUrlHistoryMode = "replace"): void {
+  if (historyMode === "none") {
+    return;
+  }
+
   const nextHref = intersectionSelectionHref(window.location.href, cluster, map.zoomLevel());
   if (!nextHref) {
     return;
   }
 
-  window.history.replaceState(window.history.state, "", nextHref);
+  if (historyMode === "push") {
+    window.history.pushState(window.history.state, "", nextHref);
+  } else {
+    window.history.replaceState(window.history.state, "", nextHref);
+  }
+}
+
+function restoreIntersectionSelectionFromUrl(): void {
+  const selection = readIntersectionSelectionFromUrl();
+  if (!appState.result) {
+    pendingUrlIntersectionSelection = selection;
+    return;
+  }
+
+  if (!selection) {
+    map.select(null, false, "history");
+    return;
+  }
+
+  const nearest = nearestClusterTo(selection);
+  if (!nearest || nearest.distanceMeters > INTERSECTION_URL_MATCH_MAX_DISTANCE_METERS) {
+    map.select(null, false, "history");
+    return;
+  }
+
+  map.select(nearest.cluster, true, "history", selection.zoomLevel);
 }
 
 function applySeverityFilter(): void {
@@ -797,7 +828,7 @@ function updateMapLegendVisibility(): void {
 function handleMapZoomChange(): void {
   const selectedCluster = selectedIntersectionController.selectedCluster;
   if (selectedCluster) {
-    updateIntersectionSelectionUrl(selectedCluster);
+    updateIntersectionSelectionUrl(selectedCluster, "replace");
   }
 }
 

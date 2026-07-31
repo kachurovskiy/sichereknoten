@@ -2,8 +2,14 @@ import { tr } from "./i18n";
 
 const MOBILE_LAYOUT_QUERY = "(max-width: 640px)";
 const VIEW_URL_PARAM = "view";
+const HISTORY_STATE_KEY = "sichereKnotenView";
 
 export type AppViewKey = "explore" | "map" | "details" | "state" | "region" | "similar" | "table" | "settings";
+type ViewHistoryMode = "push" | "replace" | "none";
+
+export interface SetViewOptions {
+  history?: ViewHistoryMode;
+}
 
 export interface AppRouterElements {
   app: HTMLElement;
@@ -69,6 +75,7 @@ export class AppRouter {
     this.elements.mobileSettingsTab.addEventListener("click", () => this.setView("settings"));
     document.addEventListener("click", (event) => this.closeMobileMoreMenuOnOutsideClick(event));
     document.addEventListener("keydown", (event) => this.closeMobileMoreMenuOnEscape(event));
+    window.addEventListener("popstate", () => this.restoreViewFromHistory());
     this.mobileLayout.addEventListener("change", () => this.handleLayoutChange());
   }
 
@@ -80,7 +87,7 @@ export class AppRouter {
     return this.mobileLayout.matches ? "explore" : "map";
   }
 
-  setView(requestedView: AppViewKey): void {
+  setView(requestedView: AppViewKey, options: SetViewOptions = {}): void {
     let view = requestedView;
     if (view === "details" && !this.deps.canOpenDetails()) {
       this.deps.setStatus(tr("details.selectFirst"), 100);
@@ -89,7 +96,7 @@ export class AppRouter {
 
     this.activeViewValue = view;
     this.elements.app.dataset.activeView = view;
-    this.updateViewUrl(view);
+    this.updateViewUrl(view, options.history ?? "push");
     this.updateTabs(view);
     this.updateViews(view);
     this.deps.onViewChanged(view);
@@ -135,23 +142,47 @@ export class AppRouter {
     return view === "table" ? "intersections" : view;
   }
 
-  private updateViewUrl(view: AppViewKey): void {
-    const url = new URL(window.location.href);
-    if (view === "map") {
-      if (!url.searchParams.has(VIEW_URL_PARAM)) {
-        return;
-      }
-      url.searchParams.delete(VIEW_URL_PARAM);
-      window.history.replaceState(window.history.state, "", url.toString());
+  private updateViewUrl(view: AppViewKey, historyMode: ViewHistoryMode): void {
+    if (historyMode === "none") {
       return;
     }
 
-    const urlValue = this.urlViewValue(view);
-    if (url.searchParams.get(VIEW_URL_PARAM) === urlValue) {
+    const url = new URL(window.location.href);
+    if (view === "map") {
+      url.searchParams.delete(VIEW_URL_PARAM);
+    } else {
+      url.searchParams.set(VIEW_URL_PARAM, this.urlViewValue(view));
+    }
+
+    const nextHref = url.toString();
+    const state = this.historyState(view);
+    const currentStateView = this.viewFromHistoryState(window.history.state);
+    if (historyMode === "push" && nextHref === window.location.href && currentStateView === view) {
       return;
     }
-    url.searchParams.set(VIEW_URL_PARAM, urlValue);
-    window.history.replaceState(window.history.state, "", url.toString());
+
+    if (historyMode === "replace") {
+      window.history.replaceState(state, "", nextHref);
+    } else {
+      window.history.pushState(state, "", nextHref);
+    }
+  }
+
+  private restoreViewFromHistory(): void {
+    const view = this.viewFromHistoryState(window.history.state) ?? this.readViewFromUrl() ?? "map";
+    this.setView(view, { history: "none" });
+  }
+
+  private historyState(view: AppViewKey): Record<string, unknown> {
+    const currentState = isObject(window.history.state) ? window.history.state : {};
+    return { ...currentState, [HISTORY_STATE_KEY]: view };
+  }
+
+  private viewFromHistoryState(state: unknown): AppViewKey | null {
+    if (!isObject(state)) {
+      return null;
+    }
+    return this.parseUrlView(typeof state[HISTORY_STATE_KEY] === "string" ? state[HISTORY_STATE_KEY] : null);
   }
 
   private updateTabs(view: AppViewKey): void {
@@ -228,10 +259,14 @@ export class AppRouter {
 
   private handleLayoutChange(): void {
     if (!this.mobileLayout.matches && this.isMobilePaneView(this.activeViewValue)) {
-      this.setView("map");
+      this.setView("map", { history: "replace" });
       return;
     }
     this.setMobileMoreMenuOpen(false);
     this.deps.scheduleMapRefresh();
   }
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }

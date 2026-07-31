@@ -7,6 +7,7 @@ import type { LoadingStatusKind } from "./loadingStatusPresenter";
 import { RequestGate } from "./requestGate";
 import { errorMessage, type TelemetryMetadata } from "./telemetry";
 import type { AccidentRecord, AnalysisOptions, AnalysisResult, ClusterYearStat, IntersectionCluster } from "./types";
+import type { SetViewOptions } from "./appRouter";
 import {
   googleStreetViewEmbedUrl,
   mapUrlsForCluster,
@@ -22,7 +23,8 @@ import type { MapCanvas } from "./mapCanvas";
 const STREET_VIEW_OPEN_STORAGE_KEY = "sichere-knoten:street-view-open";
 
 type SelectedIntersectionViewKey = "map" | "details" | "similar";
-type SelectionReason = "auto" | "program" | "user";
+type SelectionReason = "auto" | "program" | "user" | "history";
+type SelectionUrlHistoryMode = "push" | "replace" | "none";
 
 interface SelectedIntersectionViewModel {
   cluster: IntersectionCluster;
@@ -79,9 +81,9 @@ export interface SelectedIntersectionControllerDependencies {
   renderBrowseLists: () => SelectedIntersectionBrowseRenderResult;
   getActiveView: () => string;
   isMobileLayout: () => boolean;
-  setView: (view: SelectedIntersectionViewKey) => void;
+  setView: (view: SelectedIntersectionViewKey, options?: SetViewOptions) => void;
   setStatus: (message: string, progress: number, kind?: LoadingStatusKind) => void;
-  updateIntersectionSelectionUrl: (cluster: IntersectionCluster) => void;
+  updateIntersectionSelectionUrl: (cluster: IntersectionCluster, historyMode?: SelectionUrlHistoryMode) => void;
   scheduleMapRefresh: () => void;
   measureStep: MeasureSelectedIntersectionStep;
 }
@@ -139,7 +141,7 @@ export class SelectedIntersectionController {
       this.selectedRoadClassSignatureValue = null;
     });
     if (cluster) {
-      this.deps.updateIntersectionSelectionUrl(cluster);
+      this.deps.updateIntersectionSelectionUrl(cluster, this.selectionUrlHistoryMode(previousClusterId, cluster.id, reason));
     }
     if (previousClusterId !== (cluster?.id ?? null)) {
       this.deps.requestGate.cancel("selectedAccidentRecords");
@@ -148,7 +150,7 @@ export class SelectedIntersectionController {
     this.deps.measureStep(
       "render selected intersection panel",
       cluster?.id ?? null,
-      () => this.renderSelection(cluster),
+      () => this.renderSelection(cluster, reason),
       () => ({
         selected: Boolean(cluster),
         accidentCount: cluster?.accidentCount ?? 0
@@ -207,7 +209,7 @@ export class SelectedIntersectionController {
 
     const streetViewUrl = googleStreetViewEmbedUrl(cluster);
     if (elements.streetViewFrame.dataset.src !== streetViewUrl) {
-      elements.streetViewFrame.src = streetViewUrl;
+      this.replaceStreetViewFrameUrl(streetViewUrl);
       elements.streetViewFrame.dataset.src = streetViewUrl;
     }
     elements.streetViewFrame.title = trf("streetView.near", { lat: cluster.lat.toFixed(5), lon: cluster.lon.toFixed(5) });
@@ -226,9 +228,9 @@ export class SelectedIntersectionController {
     }
   }
 
-  private renderSelection(cluster: IntersectionCluster | null): void {
+  private renderSelection(cluster: IntersectionCluster | null, reason: SelectionReason): void {
     if (!cluster) {
-      this.renderEmptySelection();
+      this.renderEmptySelection(reason);
       return;
     }
 
@@ -239,7 +241,7 @@ export class SelectedIntersectionController {
     }
   }
 
-  private renderEmptySelection(): void {
+  private renderEmptySelection(reason: SelectionReason): void {
     const { elements } = this.deps;
     elements.selectedAside.hidden = true;
     elements.mapView.classList.remove("has-selection");
@@ -248,7 +250,7 @@ export class SelectedIntersectionController {
     this.deps.map.setSelectedIncidentPoints([]);
     this.updateContextTabs();
     if (this.deps.getActiveView() === "details") {
-      this.deps.setView("map");
+      this.deps.setView("map", { history: reason === "history" || reason === "auto" ? "none" : "replace" });
     } else {
       if (this.deps.getActiveView() === "similar") {
         this.deps.renderVisibleSimilarView();
@@ -360,8 +362,23 @@ export class SelectedIntersectionController {
   private clearStreetViewFrame(): void {
     const { streetViewFrame } = this.deps.elements;
     streetViewFrame.hidden = true;
-    streetViewFrame.removeAttribute("src");
-    delete streetViewFrame.dataset.src;
+    if (streetViewFrame.dataset.src) {
+      this.replaceStreetViewFrameUrl("about:blank");
+      delete streetViewFrame.dataset.src;
+    }
+  }
+
+  private replaceStreetViewFrameUrl(url: string): void {
+    const { streetViewFrame } = this.deps.elements;
+    try {
+      if (streetViewFrame.contentWindow) {
+        streetViewFrame.contentWindow.location.replace(url);
+      } else {
+        streetViewFrame.src = url;
+      }
+    } catch {
+      streetViewFrame.src = url;
+    }
   }
 
   private closeUnclusteredIncidentDialog(): void {
@@ -405,7 +422,7 @@ export class SelectedIntersectionController {
         if (this.selectedClusterValue?.id !== cluster.id || !this.deps.requestGate.isCurrent(requestToken)) {
           return;
         }
-        this.renderSelection(cluster);
+        this.renderSelection(cluster, "program");
       })
       .catch((error) => {
         if (this.selectedClusterValue?.id === cluster.id && this.deps.requestGate.isCurrent(requestToken)) {
@@ -503,7 +520,7 @@ export class SelectedIntersectionController {
       return;
     }
 
-    this.deps.updateIntersectionSelectionUrl(cluster);
+    this.deps.updateIntersectionSelectionUrl(cluster, "replace");
     const permalink = window.location.href;
     this.deps.elements.selectedPermalinkBtn.disabled = true;
     try {
@@ -543,6 +560,17 @@ export class SelectedIntersectionController {
         pressUrl: pressSearchUrlForAccident(accident)
       }))
     };
+  }
+
+  private selectionUrlHistoryMode(
+    previousClusterId: string | null,
+    clusterId: string,
+    reason: SelectionReason
+  ): SelectionUrlHistoryMode {
+    if (reason === "history" || reason === "auto") {
+      return "none";
+    }
+    return previousClusterId === clusterId ? "replace" : "push";
   }
 }
 
