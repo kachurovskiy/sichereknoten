@@ -1819,6 +1819,14 @@ button.map-service-link {
   background: #ffffff;
 }
 
+.intersection-feature-table-municipality-rate .intersection-feature-row {
+  grid-template-columns:
+    minmax(150px, 1.1fr)
+    repeat(5, minmax(132px, 1fr))
+    minmax(90px, 0.65fr);
+  min-width: 1000px;
+}
+
 .intersection-feature-row:last-child {
   border-bottom: 0;
 }
@@ -1901,6 +1909,10 @@ button.map-service-link {
 
 .intersection-feature-meter-serious {
   background: #bf8f2f;
+}
+
+.intersection-feature-meter-municipality-rate {
+  background: #425b70;
 }
 
 .intersection-feature-total {
