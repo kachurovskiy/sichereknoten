@@ -50,6 +50,7 @@ interface SimilarIntersectionBucket {
   signature: RoadClassSignature;
   clusterCount: number;
   clusters: IntersectionCluster[];
+  featureGroupClusterCounts: Record<SimilarIntersectionFeatureGroupKey, number>;
   comparison: SimilarIntersectionComparison | null;
 }
 
@@ -76,7 +77,7 @@ export interface SimilarViewDependencies {
 }
 
 const SIMILAR_INTERSECTION_PREVIEW_LIMIT = 8;
-const SIMILAR_INTERSECTION_MIN_COMPARISON_CLUSTER_COUNT = 10;
+const SIMILAR_INTERSECTION_MIN_FEATURE_GROUP_CLUSTER_COUNT = 30;
 const SIMILAR_INTERSECTION_FEATURE_GROUPS = [
   { id: "plain", labelKey: "similar.group.plain", sortOrder: 0 },
   { id: "roundabout", labelKey: "similar.group.roundabout", sortOrder: 1 },
@@ -122,7 +123,7 @@ export class SimilarView {
         "no-road-classes",
         () =>
           `<p class="population-rate-empty">${escapeHtml(
-            trf("similar.noRoadClasses", { count: formatInteger(SIMILAR_INTERSECTION_MIN_COMPARISON_CLUSTER_COUNT) })
+            trf("similar.noRoadClasses", { count: formatInteger(SIMILAR_INTERSECTION_MIN_FEATURE_GROUP_CLUSTER_COUNT) })
           )}</p>`
       );
       return;
@@ -245,7 +246,7 @@ export class SimilarView {
 
   private finalizeSimilarIntersectionGroups(accumulators: SimilarIntersectionGroupAccumulator[]): SimilarIntersectionGroupRow[] {
     return accumulators
-      .filter((group) => group.clusterCount >= SIMILAR_INTERSECTION_MIN_COMPARISON_CLUSTER_COUNT)
+      .filter((group) => group.clusterCount >= SIMILAR_INTERSECTION_MIN_FEATURE_GROUP_CLUSTER_COUNT)
       .map((group) => ({
         ...group,
         severityPercent: group.accidentCount > 0 ? group.weightedSeverityPercent / group.accidentCount : 0,
@@ -289,7 +290,7 @@ export class SimilarView {
 
   private renderMinimumGroupEmptyState(): string {
     return `<p class="population-rate-empty">${escapeHtml(
-      trf("similar.noLargeGroups", { count: formatInteger(SIMILAR_INTERSECTION_MIN_COMPARISON_CLUSTER_COUNT) })
+      trf("similar.noLargeGroups", { count: formatInteger(SIMILAR_INTERSECTION_MIN_FEATURE_GROUP_CLUSTER_COUNT) })
     )}</p>`;
   }
 
@@ -382,18 +383,30 @@ export class SimilarView {
       if (!signature) {
         continue;
       }
+      const group = this.similarIntersectionFeatureGroup(cluster);
       const current = buckets.get(signature.key);
       if (current) {
         current.clusterCount += 1;
         current.clusters.push(cluster);
+        if (group) {
+          current.featureGroupClusterCounts[group] += 1;
+        }
       } else {
-        buckets.set(signature.key, { signature, clusterCount: 1, clusters: [cluster], comparison: null });
+        const featureGroupClusterCounts = this.createFeatureGroupClusterCounts();
+        if (group) {
+          featureGroupClusterCounts[group] += 1;
+        }
+        buckets.set(signature.key, {
+          signature,
+          clusterCount: 1,
+          clusters: [cluster],
+          featureGroupClusterCounts,
+          comparison: null
+        });
       }
     }
 
-    const eligibleBuckets = Array.from(buckets.values()).filter(
-      (bucket) => bucket.clusterCount >= SIMILAR_INTERSECTION_MIN_COMPARISON_CLUSTER_COUNT
-    );
+    const eligibleBuckets = Array.from(buckets.values()).filter((bucket) => this.isRoadClassBucketEligible(bucket));
     const bucketsByRoadClassKey = new Map<string, SimilarIntersectionBucket>(
       eligibleBuckets.map((bucket) => [bucket.signature.key, bucket])
     );
@@ -410,6 +423,20 @@ export class SimilarView {
       bucket.comparison = this.buildSimilarIntersectionComparison(bucket);
     }
     return bucket.comparison;
+  }
+
+  private createFeatureGroupClusterCounts(): Record<SimilarIntersectionFeatureGroupKey, number> {
+    return {
+      plain: 0,
+      roundabout: 0,
+      trafficSignal: 0
+    };
+  }
+
+  private isRoadClassBucketEligible(bucket: SimilarIntersectionBucket): boolean {
+    return SIMILAR_INTERSECTION_FEATURE_GROUPS.every(
+      (group) => bucket.featureGroupClusterCounts[group.id] >= SIMILAR_INTERSECTION_MIN_FEATURE_GROUP_CLUSTER_COUNT
+    );
   }
 
   private renderHtmlIfChanged(result: AnalysisResult | null, stateKey: string, html: () => string): void {

@@ -9,13 +9,9 @@ test("similar view renders road-class choices without requiring an intersection 
   const { SimilarView } = await similarModule;
   const container = fakeContainer();
   const clusters = [
-    ...Array.from({ length: 10 }, (_value, index) =>
-      sampleCluster({ id: `a-road-${index}`, streetNames: ["A 1"], osmRoundabout: false, osmTrafficSignal: false })
-    ),
-    ...Array.from({ length: 10 }, (_value, index) =>
-      sampleCluster({ id: `b-road-${index}`, streetNames: ["B 7"], osmRoundabout: false, osmTrafficSignal: true })
-    ),
-    sampleCluster({ id: "k-road", streetNames: ["K 3"], osmRoundabout: false, osmTrafficSignal: false })
+    ...comparableRoadClassClusters("A 1", "a-road"),
+    ...comparableRoadClassClusters("B 7", "b-road"),
+    ...comparableRoadClassClusters("K 3", "k-road", { plain: 30, roundabout: 30, trafficSignal: 29 })
   ];
   const view = new SimilarView({
     container,
@@ -30,26 +26,23 @@ test("similar view renders road-class choices without requiring an intersection 
 
   assert.match(container.innerHTML, /<select id="similarRoadClassSelect"/);
   assert.match(container.innerHTML, /similar\.class:<\/span>/);
-  assert.match(container.innerHTML, /A \(10\)/);
-  assert.match(container.innerHTML, /B \(10\)/);
-  assert.doesNotMatch(container.innerHTML, /K \(1\)/);
+  assert.match(container.innerHTML, /A \(90\)/);
+  assert.match(container.innerHTML, /B \(90\)/);
+  assert.doesNotMatch(container.innerHTML, /K \(89\)/);
   assert.doesNotMatch(container.innerHTML, /similar\.selectedFeatures/);
   assert.doesNotMatch(container.innerHTML, /similar\.noSelection/);
   assert.doesNotMatch(container.innerHTML, /similar\.matches/);
   assert.match(container.innerHTML, /<h3>similar\.group\.plain<\/h3>/);
+  assert.match(container.innerHTML, /<h3>similar\.group\.roundabout<\/h3>/);
+  assert.match(container.innerHTML, /<h3>similar\.group\.trafficSignal<\/h3>/);
 });
 
 test("similar view auto-picks the selected intersection road class when selection changes", async () => {
   const { SimilarView } = await similarModule;
   const container = fakeContainer();
-  const clusters = [
-    ...Array.from({ length: 10 }, (_value, index) =>
-      sampleCluster({ id: `a-road-${index}`, streetNames: ["A 1"], osmRoundabout: false, osmTrafficSignal: false })
-    ),
-    ...Array.from({ length: 10 }, (_value, index) =>
-      sampleCluster({ id: `b-road-${index}`, streetNames: ["B 7"], osmRoundabout: false, osmTrafficSignal: true })
-    )
-  ];
+  const aClusters = comparableRoadClassClusters("A 1", "a-road");
+  const bClusters = comparableRoadClassClusters("B 7", "b-road");
+  const clusters = [...aClusters, ...bClusters];
   let selected = null;
   let selectedSignature = null;
   const view = new SimilarView({
@@ -62,22 +55,20 @@ test("similar view auto-picks the selected intersection road class when selectio
   });
 
   view.render();
-  assert.match(container.innerHTML, /<option value="a" selected>A \(10\)<\/option>/);
+  assert.match(container.innerHTML, /<option value="a" selected>A \(90\)<\/option>/);
 
-  selected = clusters[10];
-  selectedSignature = view.roadClassSignatureForStreetNames(clusters[10].streetNames);
+  selected = bClusters[0];
+  selectedSignature = view.roadClassSignatureForStreetNames(selected.streetNames);
   view.render();
 
-  assert.match(container.innerHTML, /<option value="b" selected>B \(10\)<\/option>/);
+  assert.match(container.innerHTML, /<option value="b" selected>B \(90\)<\/option>/);
   assert.doesNotMatch(container.innerHTML, /similar\.matches/);
 });
 
 test("similar view reuses rendered output when the result and road class are unchanged", async () => {
   const { SimilarView } = await similarModule;
   const container = fakeContainer();
-  const clusters = Array.from({ length: 10 }, (_value, index) =>
-    sampleCluster({ id: `a-road-${index}`, streetNames: ["A 1"], osmRoundabout: false, osmTrafficSignal: false })
-  );
+  const clusters = comparableRoadClassClusters("A 1", "a-road");
   const result = sampleResult(clusters);
   const view = new SimilarView({
     container,
@@ -98,14 +89,12 @@ test("similar view reuses rendered output when the result and road class are unc
   assert.equal(container.innerHTMLWriteCount(), writeCount);
 });
 
-test("similar view hides road classes with fewer than ten intersections", async () => {
+test("similar view hides road classes unless every feature group has at least thirty intersections", async () => {
   const { SimilarView } = await similarModule;
   const container = fakeContainer();
   const clusters = [
-    ...Array.from({ length: 9 }, (_value, index) =>
-      sampleCluster({ id: `a-road-${index}`, streetNames: ["A 1"], osmRoundabout: false, osmTrafficSignal: false })
-    ),
-    sampleCluster({ id: "b-road", streetNames: ["B 7"], osmRoundabout: false, osmTrafficSignal: true })
+    ...comparableRoadClassClusters("A 1", "a-road", { plain: 30, roundabout: 30, trafficSignal: 29 }),
+    ...comparableRoadClassClusters("B 7", "b-road", { plain: 90, roundabout: 0, trafficSignal: 0 })
   ];
   const view = new SimilarView({
     container,
@@ -127,9 +116,9 @@ test("similar view includes the selected intersection in comparison groups", asy
   const container = fakeContainer();
   const clusters = [
     sampleCluster({ id: "selected-signal", streetNames: ["B 7"], osmRoundabout: false, osmTrafficSignal: true }),
-    ...Array.from({ length: 9 }, (_value, index) =>
-      sampleCluster({ id: `signal-${index}`, streetNames: ["B 7"], osmRoundabout: false, osmTrafficSignal: true })
-    )
+    ...similarGroupClusters("B 7", "trafficSignal", 29, "signal"),
+    ...similarGroupClusters("B 7", "plain", 30, "plain"),
+    ...similarGroupClusters("B 7", "roundabout", 30, "roundabout")
   ];
   let selected = clusters[0];
   const view = new SimilarView({
@@ -144,19 +133,16 @@ test("similar view includes the selected intersection in comparison groups", asy
   view.render();
 
   assert.match(container.innerHTML, /<h3>similar\.group\.trafficSignal<\/h3>/);
-  assert.match(container.innerHTML, /10 intersectionfeature\.intersections/);
+  assert.match(container.innerHTML, /30 intersectionfeature\.intersections/);
 });
 
-test("similar view omits feature groups with fewer than ten intersections", async () => {
+test("similar view does not offer partially comparable road classes", async () => {
   const { SimilarView } = await similarModule;
   const container = fakeContainer();
   const clusters = [
-    ...Array.from({ length: 9 }, (_value, index) =>
-      sampleCluster({ id: `plain-${index}`, streetNames: ["A 1"], osmRoundabout: false, osmTrafficSignal: false })
-    ),
-    ...Array.from({ length: 10 }, (_value, index) =>
-      sampleCluster({ id: `signal-${index}`, streetNames: ["A 1"], osmRoundabout: false, osmTrafficSignal: true })
-    )
+    ...comparableRoadClassClusters("A 1", "a-road", { plain: 29, roundabout: 60, trafficSignal: 60 }),
+    ...comparableRoadClassClusters("B 7", "b-road", { plain: 60, roundabout: 29, trafficSignal: 60 }),
+    ...comparableRoadClassClusters("K 3", "k-road", { plain: 60, roundabout: 60, trafficSignal: 29 })
   ];
   const view = new SimilarView({
     container,
@@ -169,9 +155,8 @@ test("similar view omits feature groups with fewer than ten intersections", asyn
 
   view.render();
 
-  assert.doesNotMatch(container.innerHTML, /<h3>similar\.group\.plain<\/h3>/);
-  assert.match(container.innerHTML, /<h3>similar\.group\.trafficSignal<\/h3>/);
-  assert.match(container.innerHTML, /10 intersectionfeature\.intersections/);
+  assert.doesNotMatch(container.innerHTML, /<select id="similarRoadClassSelect"/);
+  assert.match(container.innerHTML, /similar\.noRoadClasses/);
 });
 
 async function loadSimilarModule() {
@@ -217,6 +202,25 @@ function sampleResult(clusters) {
     filteredAccidentCount: clusters.reduce((total, cluster) => total + cluster.accidentCount, 0),
     years: [2025]
   };
+}
+
+function comparableRoadClassClusters(streetName, idPrefix, counts = { plain: 30, roundabout: 30, trafficSignal: 30 }) {
+  return [
+    ...similarGroupClusters(streetName, "plain", counts.plain, `${idPrefix}-plain`),
+    ...similarGroupClusters(streetName, "roundabout", counts.roundabout, `${idPrefix}-roundabout`),
+    ...similarGroupClusters(streetName, "trafficSignal", counts.trafficSignal, `${idPrefix}-traffic-signal`)
+  ];
+}
+
+function similarGroupClusters(streetName, group, count, idPrefix) {
+  const featureFlags = {
+    plain: { osmRoundabout: false, osmTrafficSignal: false },
+    roundabout: { osmRoundabout: true, osmTrafficSignal: false },
+    trafficSignal: { osmRoundabout: false, osmTrafficSignal: true }
+  }[group];
+  return Array.from({ length: count }, (_value, index) =>
+    sampleCluster({ id: `${idPrefix}-${index}`, streetNames: [streetName], ...featureFlags })
+  );
 }
 
 function sampleCluster(overrides = {}) {
