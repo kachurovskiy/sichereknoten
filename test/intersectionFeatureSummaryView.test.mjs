@@ -39,11 +39,13 @@ test("area population rows compute accidents per unique municipality population"
   assert.equal(rows[0].municipalityAccidentRate, 500);
 });
 
-test("area population renderer shows municipality rate only when enabled", async () => {
+test("area population renderer separates per-intersection and population-rate tables", async () => {
   const { populationIntersectionFeatureRows, renderIntersectionFeatureSection } = await intersectionFeatureModule;
   const rows = populationIntersectionFeatureRows([
     sampleCluster({
       accidentCount: 10,
+      fatalCount: 1,
+      seriousCount: 2,
       municipalityCode: "05315000",
       municipalityPopulation: 20_000,
       administrativeRegionCode: "053",
@@ -51,12 +53,47 @@ test("area population renderer shows municipality rate only when enabled", async
     })
   ]);
 
-  assert.doesNotMatch(renderIntersectionFeatureSection(rows), /intersectionFeature\.municipalityAccidentRate/);
+  const perIntersectionHtml = renderIntersectionFeatureSection(rows);
+  assert.match(perIntersectionHtml, /intersectionFeature\.fatalPer100/);
+  assert.match(perIntersectionHtml, /intersectionFeature\.seriousPer100/);
+  assert.match(perIntersectionHtml, /intersectionFeature\.totalPerIntersection/);
+  assert.doesNotMatch(perIntersectionHtml, /intersectionFeature\.totalPer100kPopulation/);
+  assert.match(perIntersectionHtml, /<strong>100<\/strong>/);
 
-  const html = renderIntersectionFeatureSection(rows, { showMunicipalityAccidentRate: true });
-  assert.match(html, /intersectionFeature\.municipalityAccidentRate/);
-  assert.match(html, /intersection-feature-meter-municipality-rate/);
-  assert.match(html, /<strong>50<\/strong>/);
+  const populationHtml = renderIntersectionFeatureSection(rows, { rateBasis: "population" });
+  assert.match(populationHtml, /intersectionFeature\.fatalPer100kPopulation/);
+  assert.match(populationHtml, /intersectionFeature\.seriousPer100kPopulation/);
+  assert.match(populationHtml, /intersectionFeature\.totalPer100kPopulation/);
+  assert.doesNotMatch(populationHtml, /intersectionFeature\.totalPerIntersection/);
+  assert.match(populationHtml, /<strong>5<\/strong>/);
+  assert.match(populationHtml, /<strong>10<\/strong>/);
+  assert.match(populationHtml, /<strong>50<\/strong>/);
+});
+
+test("intersection feature summary view renders both area-population tables", async () => {
+  const { IntersectionFeatureSummaryView } = await intersectionFeatureModule;
+  const container = fakeContainer();
+  const view = new IntersectionFeatureSummaryView({
+    container,
+    getResult: () =>
+      sampleResult([
+        sampleCluster({
+          accidentCount: 10,
+          fatalCount: 1,
+          seriousCount: 2,
+          municipalityCode: "05315000",
+          municipalityPopulation: 20_000
+        })
+      ])
+  });
+
+  view.render();
+
+  assert.match(container.innerHTML, /intersectionFeature\.perIntersection/);
+  assert.match(container.innerHTML, /intersectionFeature\.perPopulation/);
+  assert.match(container.innerHTML, /intersectionFeature\.totalPerIntersection/);
+  assert.match(container.innerHTML, /intersectionFeature\.totalPer100kPopulation/);
+  assert.equal([...container.innerHTML.matchAll(/class="intersection-feature-table"/g)].length, 2);
 });
 
 async function loadIntersectionFeatureModule() {
@@ -73,6 +110,29 @@ async function loadIntersectionFeatureModule() {
   const code = result.outputFiles[0].text;
   const moduleUrl = `data:text/javascript;base64,${Buffer.from(code).toString("base64")}`;
   return import(moduleUrl);
+}
+
+function fakeContainer() {
+  let innerHTML = "";
+  return {
+    get innerHTML() {
+      return innerHTML;
+    },
+    set innerHTML(value) {
+      innerHTML = value;
+    }
+  };
+}
+
+function sampleResult(clusters) {
+  return {
+    clusters,
+    stateSummaries: [],
+    stateAccidentSummaries: [],
+    regionAccidentSummaries: [],
+    filteredAccidentCount: clusters.reduce((total, cluster) => total + cluster.accidentCount, 0),
+    years: [2025]
+  };
 }
 
 function sampleCluster(overrides = {}) {

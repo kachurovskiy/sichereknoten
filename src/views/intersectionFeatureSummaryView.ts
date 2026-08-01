@@ -29,6 +29,9 @@ interface IntersectionFeatureAccumulator {
   sortOrder: number;
 }
 
+type IntersectionFeatureRateBasis = "intersection" | "population";
+type IntersectionFeatureMetricKey = "fatal" | "serious" | "total";
+
 export interface IntersectionFeatureSummaryViewDependencies {
   container: HTMLElement;
   getResult: () => AnalysisResult | null;
@@ -75,7 +78,7 @@ export class IntersectionFeatureSummaryView {
       return;
     }
 
-    this.deps.container.innerHTML = renderIntersectionFeatureSection(rows, { showMunicipalityAccidentRate: true });
+    this.deps.container.innerHTML = renderIntersectionFeatureTables(rows);
   }
 }
 
@@ -97,32 +100,39 @@ export function populationIntersectionFeatureRows(clusters: IntersectionCluster[
 }
 
 interface IntersectionFeatureRenderOptions {
-  showMunicipalityAccidentRate?: boolean;
+  rateBasis?: IntersectionFeatureRateBasis;
+}
+
+function renderIntersectionFeatureTables(rows: readonly IntersectionFeatureSummaryRow[]): string {
+  return `
+    <section class="intersection-feature-table-section">
+      <h3>${escapeHtml(tr("intersectionFeature.perIntersection"))}</h3>
+      ${renderIntersectionFeatureSection(rows)}
+    </section>
+    <section class="intersection-feature-table-section">
+      <h3>${escapeHtml(tr("intersectionFeature.perPopulation"))}</h3>
+      ${renderIntersectionFeatureSection(rows, { rateBasis: "population" })}
+    </section>
+  `;
 }
 
 export function renderIntersectionFeatureSection(
   rows: readonly IntersectionFeatureSummaryRow[],
   options: IntersectionFeatureRenderOptions = {}
 ): string {
-  const showMunicipalityAccidentRate = options.showMunicipalityAccidentRate === true;
+  const rateBasis = options.rateBasis ?? "intersection";
   const maxSeverityPercent = Math.max(0.1, ...rows.map((row) => intersectionFeatureSeverityPercent(row)));
-  const maxTotalPerIntersection = Math.max(1, ...rows.map((row) => intersectionFeatureTotalPerIntersection(row)));
-  const maxFatalPer100 = Math.max(1, ...rows.map((row) => intersectionFeatureFatalPer100(row)));
-  const maxSeriousPer100 = Math.max(1, ...rows.map((row) => intersectionFeatureSeriousPer100(row)));
-  const maxMunicipalityAccidentRate = Math.max(1, ...rows.map((row) => row.municipalityAccidentRate ?? 0));
+  const maxFatal = maxIntersectionFeatureMetric(rows, rateBasis, "fatal");
+  const maxSerious = maxIntersectionFeatureMetric(rows, rateBasis, "serious");
+  const maxTotal = maxIntersectionFeatureMetric(rows, rateBasis, "total");
   return `
-    <div class="intersection-feature-table ${showMunicipalityAccidentRate ? "intersection-feature-table-municipality-rate" : ""}" role="table">
+    <div class="intersection-feature-table" role="table">
       <div class="intersection-feature-row intersection-feature-row-header" role="row">
         <div role="columnheader">${escapeHtml(tr("intersectionFeature.group"))}</div>
         <div role="columnheader">${escapeHtml(tr("intersectionFeature.severity"))}</div>
-        <div role="columnheader">${escapeHtml(tr("intersectionFeature.fatalPer100"))}</div>
-        <div role="columnheader">${escapeHtml(tr("intersectionFeature.seriousPer100"))}</div>
-        <div role="columnheader">${escapeHtml(tr("intersectionFeature.totalPerIntersection"))}</div>
-        ${
-          showMunicipalityAccidentRate
-            ? `<div role="columnheader">${escapeHtml(tr("intersectionFeature.municipalityAccidentRate"))}</div>`
-            : ""
-        }
+        <div role="columnheader">${escapeHtml(tr(intersectionFeatureMetricLabelKey(rateBasis, "fatal")))}</div>
+        <div role="columnheader">${escapeHtml(tr(intersectionFeatureMetricLabelKey(rateBasis, "serious")))}</div>
+        <div role="columnheader">${escapeHtml(tr(intersectionFeatureMetricLabelKey(rateBasis, "total")))}</div>
         <div role="columnheader">${escapeHtml(tr("intersectionFeature.total"))}</div>
       </div>
       ${rows
@@ -130,11 +140,10 @@ export function renderIntersectionFeatureSection(
           renderIntersectionFeatureRow(
             row,
             maxSeverityPercent,
-            maxTotalPerIntersection,
-            maxFatalPer100,
-            maxSeriousPer100,
-            maxMunicipalityAccidentRate,
-            showMunicipalityAccidentRate
+            maxFatal,
+            maxSerious,
+            maxTotal,
+            rateBasis
           )
         )
         .join("")}
@@ -205,27 +214,23 @@ function finalizeIntersectionFeatureRows(accumulators: IntersectionFeatureAccumu
 function renderIntersectionFeatureRow(
   row: IntersectionFeatureSummaryRow,
   maxSeverityPercent: number,
-  maxTotalPerIntersection: number,
-  maxFatalPer100: number,
-  maxSeriousPer100: number,
-  maxMunicipalityAccidentRate: number,
-  showMunicipalityAccidentRate: boolean
+  maxFatal: number,
+  maxSerious: number,
+  maxTotal: number,
+  rateBasis: IntersectionFeatureRateBasis
 ): string {
   const severityPercent = intersectionFeatureSeverityPercent(row);
   const severityLabel = formatIntersectionFeatureSeverityPercent(row);
-  const fatalPer100 = intersectionFeatureFatalPer100(row);
-  const seriousPer100 = intersectionFeatureSeriousPer100(row);
-  const totalPerIntersection = intersectionFeatureTotalPerIntersection(row);
-  const municipalityAccidentRate = row.municipalityAccidentRate ?? null;
-  const municipalityAccidentRateTitle =
-    showMunicipalityAccidentRate && municipalityAccidentRate !== null
-      ? `, ${tr("intersectionFeature.municipalityAccidentRate")} ${formatRate(municipalityAccidentRate)}`
-      : "";
+  const fatalValue = intersectionFeatureMetricValue(row, rateBasis, "fatal");
+  const seriousValue = intersectionFeatureMetricValue(row, rateBasis, "serious");
+  const totalValue = intersectionFeatureMetricValue(row, rateBasis, "total");
   const title = `${row.label}: ${tr("intersectionFeature.severity")} ${severityLabel}, ${tr(
-    "intersectionFeature.fatalPer100"
-  )} ${formatRate(fatalPer100)}, ${tr("intersectionFeature.seriousPer100")} ${formatRate(
-    seriousPer100
-  )}, ${tr("intersectionFeature.totalPerIntersection")} ${formatRate(totalPerIntersection)}${municipalityAccidentRateTitle}`;
+    intersectionFeatureMetricLabelKey(rateBasis, "fatal")
+  )} ${formatIntersectionFeatureMetricValue(fatalValue)}, ${tr(
+    intersectionFeatureMetricLabelKey(rateBasis, "serious")
+  )} ${formatIntersectionFeatureMetricValue(seriousValue)}, ${tr(
+    intersectionFeatureMetricLabelKey(rateBasis, "total")
+  )} ${formatIntersectionFeatureMetricValue(totalValue)}`;
   return `
     <div class="intersection-feature-row" role="row" title="${escapeHtml(title)}">
       <div class="intersection-feature-group" role="cell">
@@ -233,24 +238,18 @@ function renderIntersectionFeatureRow(
         <span>${formatInteger(row.clusterCount)} ${escapeHtml(tr("intersectionFeature.intersections").toLowerCase())}</span>
       </div>
       <div role="cell">${renderIntersectionFeatureMetric(severityLabel, severityPercent, maxSeverityPercent, "severity")}</div>
-      <div role="cell">${renderIntersectionFeatureMetric(formatRate(fatalPer100), fatalPer100, maxFatalPer100, "fatal")}</div>
-      <div role="cell">${renderIntersectionFeatureMetric(formatRate(seriousPer100), seriousPer100, maxSeriousPer100, "serious")}</div>
-      <div role="cell">${renderIntersectionFeatureMetric(formatRate(totalPerIntersection), totalPerIntersection, maxTotalPerIntersection, "total")}</div>
-      ${
-        showMunicipalityAccidentRate
-          ? `<div role="cell">${renderIntersectionFeatureMunicipalityAccidentRate(row, maxMunicipalityAccidentRate)}</div>`
-          : ""
-      }
+      <div role="cell">${renderIntersectionFeatureNullableMetric(fatalValue, maxFatal, "fatal")}</div>
+      <div role="cell">${renderIntersectionFeatureNullableMetric(seriousValue, maxSerious, "serious")}</div>
+      <div role="cell">${renderIntersectionFeatureNullableMetric(totalValue, maxTotal, "total")}</div>
       <div class="intersection-feature-number intersection-feature-total" role="cell">${formatInteger(row.accidentCount)}</div>
     </div>
   `;
 }
 
-function renderIntersectionFeatureMunicipalityAccidentRate(row: IntersectionFeatureSummaryRow, maxMunicipalityAccidentRate: number): string {
-  const rate = row.municipalityAccidentRate ?? null;
-  return rate === null
+function renderIntersectionFeatureNullableMetric(value: number | null, maxValue: number, kind: string): string {
+  return value === null
     ? `<span class="intersection-feature-number">-</span>`
-    : renderIntersectionFeatureMetric(formatRate(rate), rate, maxMunicipalityAccidentRate, "municipality-rate");
+    : renderIntersectionFeatureMetric(formatRate(value), value, maxValue, kind);
 }
 
 function renderIntersectionFeatureMetric(label: string, value: number, maxValue: number, kind: string): string {
@@ -283,6 +282,62 @@ function intersectionFeatureSeriousPer100(row: IntersectionFeatureSummaryRow): n
 
 function intersectionFeatureTotalPerIntersection(row: IntersectionFeatureSummaryRow): number {
   return row.clusterCount > 0 ? row.accidentCount / row.clusterCount : 0;
+}
+
+function intersectionFeatureMetricValue(
+  row: IntersectionFeatureSummaryRow,
+  rateBasis: IntersectionFeatureRateBasis,
+  metric: IntersectionFeatureMetricKey
+): number | null {
+  if (rateBasis === "population") {
+    const count = metric === "fatal" ? row.fatalCount : metric === "serious" ? row.seriousCount : row.accidentCount;
+    return intersectionFeatureMunicipalityAccidentRate(row, count);
+  }
+  if (metric === "fatal") {
+    return intersectionFeatureFatalPer100(row);
+  }
+  if (metric === "serious") {
+    return intersectionFeatureSeriousPer100(row);
+  }
+  return intersectionFeatureTotalPerIntersection(row);
+}
+
+function intersectionFeatureMetricLabelKey(rateBasis: IntersectionFeatureRateBasis, metric: IntersectionFeatureMetricKey): string {
+  if (rateBasis === "population") {
+    if (metric === "fatal") {
+      return "intersectionFeature.fatalPer100kPopulation";
+    }
+    if (metric === "serious") {
+      return "intersectionFeature.seriousPer100kPopulation";
+    }
+    return "intersectionFeature.totalPer100kPopulation";
+  }
+  if (metric === "fatal") {
+    return "intersectionFeature.fatalPer100";
+  }
+  if (metric === "serious") {
+    return "intersectionFeature.seriousPer100";
+  }
+  return "intersectionFeature.totalPerIntersection";
+}
+
+function intersectionFeatureMunicipalityAccidentRate(row: IntersectionFeatureSummaryRow, count: number): number | null {
+  const population = row.municipalityPopulation;
+  return typeof population === "number" && population > 0
+    ? (count / population) * INTERSECTION_FEATURE_POPULATION_RATE_DENOMINATOR
+    : null;
+}
+
+function maxIntersectionFeatureMetric(
+  rows: readonly IntersectionFeatureSummaryRow[],
+  rateBasis: IntersectionFeatureRateBasis,
+  metric: IntersectionFeatureMetricKey
+): number {
+  return Math.max(1, ...rows.map((row) => intersectionFeatureMetricValue(row, rateBasis, metric) ?? 0));
+}
+
+function formatIntersectionFeatureMetricValue(value: number | null): string {
+  return value === null ? "-" : formatRate(value);
 }
 
 function intersectionFeatureMunicipalityPopulationKey(cluster: IntersectionCluster): string | null {

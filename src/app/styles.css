@@ -631,6 +631,15 @@ select {
   align-items: start;
   min-height: 0;
   overflow: auto;
+  padding-right: 16px;
+}
+
+#tableView.active .table-shell {
+  overflow: visible;
+}
+
+#tableView.active .compact-table-shell {
+  max-height: none;
 }
 
 .settings-view.active {
@@ -1798,6 +1807,21 @@ button.map-service-link {
   gap: 12px;
   width: 100%;
   min-width: 0;
+  overflow-x: auto;
+  padding-bottom: 10px;
+}
+
+.intersection-feature-table-section {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.intersection-feature-table-section h3 {
+  margin: 0;
+  color: #38454b;
+  font-size: 0.88rem;
+  font-weight: 700;
 }
 
 .intersection-feature-table {
@@ -1806,6 +1830,15 @@ button.map-service-link {
   overflow-x: auto;
   border: 1px solid #e1e5df;
   border-radius: 7px;
+}
+
+.intersection-feature-grid .intersection-feature-table-section,
+.intersection-feature-grid .intersection-feature-table {
+  width: max(100%, 850px);
+}
+
+.intersection-feature-grid .intersection-feature-table {
+  overflow-x: visible;
 }
 
 .intersection-feature-row {
@@ -1817,14 +1850,6 @@ button.map-service-link {
   min-width: 850px;
   border-bottom: 1px solid #e5e9e4;
   background: #ffffff;
-}
-
-.intersection-feature-table-municipality-rate .intersection-feature-row {
-  grid-template-columns:
-    minmax(150px, 1.1fr)
-    repeat(5, minmax(132px, 1fr))
-    minmax(90px, 0.65fr);
-  min-width: 1000px;
 }
 
 .intersection-feature-row:last-child {
@@ -1909,10 +1934,6 @@ button.map-service-link {
 
 .intersection-feature-meter-serious {
   background: #bf8f2f;
-}
-
-.intersection-feature-meter-municipality-rate {
-  background: #425b70;
 }
 
 .intersection-feature-total {
