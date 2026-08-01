@@ -1,4 +1,4 @@
-import { cleanAreaNameForDisplay } from "../clusterDisplay";
+import { cleanAreaNameForDisplay } from "../domain/clusterDisplay";
 import {
   formatCompactPopulation,
   formatCorrelation,
@@ -6,13 +6,13 @@ import {
   formatRate,
   formatSeverityPercent,
   type SeverityPercentSource
-} from "../formatting";
-import { escapeHtml } from "../html";
-import { tr, trf } from "../i18n";
-import { clampNumber, linePath, round, uniqueNumbers } from "../math";
-import { STATE_NAMES } from "../states";
-import type { RegionSummary } from "../browseIndex";
-import type { AnalysisResult, IntersectionCluster, PopulationAccidentSummary } from "../types";
+} from "../shared/formatting";
+import { escapeHtml } from "../shared/html";
+import { tr, trf } from "../shared/i18n";
+import { clampNumber, linePath, round, uniqueNumbers } from "../shared/math";
+import { STATE_NAMES } from "../domain/states";
+import type { RegionSummary } from "../browse/browseIndex";
+import type { AnalysisResult, IntersectionCluster, PopulationAccidentSummary } from "../domain/types";
 
 const POPULATION_RATE_DENOMINATOR = 100_000;
 const STATE_RANK_CHART_MAX_RANK = 1000;

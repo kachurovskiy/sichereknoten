@@ -4,7 +4,7 @@ import { unzipSync } from "fflate";
 
 const root = process.cwd();
 const workbookPath = path.join(root, "data/AuszugGV2QAktuell.xlsx");
-const outputPath = path.join(root, "src/municipalities.ts");
+const outputPath = path.join(root, "src/data/municipalities.ts");
 const textDecoder = new TextDecoder();
 const BERLIN_DISTRICT_NAMES = new Map([
   ["01", "Mitte"],

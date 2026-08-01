@@ -98,7 +98,7 @@ test("cluster selection coordinator measures work without an active selection", 
 
 async function loadCoordinatorModule() {
   const result = await build({
-    entryPoints: [path.join(process.cwd(), "src/clusterSelectionCoordinator.ts")],
+    entryPoints: [path.join(process.cwd(), "src/selection/clusterSelectionCoordinator.ts")],
     bundle: true,
     write: false,
     format: "esm",

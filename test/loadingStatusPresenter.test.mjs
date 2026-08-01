@@ -58,7 +58,7 @@ test("loading status presenter owns splash busy state", async () => {
 
 async function loadPresenterModule() {
   const result = await build({
-    entryPoints: [path.join(process.cwd(), "src/loadingStatusPresenter.ts")],
+    entryPoints: [path.join(process.cwd(), "src/app/loadingStatusPresenter.ts")],
     bundle: true,
     write: false,
     format: "esm",

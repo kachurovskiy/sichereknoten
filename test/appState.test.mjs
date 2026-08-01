@@ -54,7 +54,7 @@ test("app state tracks loaded accidents and derives filter options", async () =>
 
 async function loadAppStateModule() {
   const result = await build({
-    entryPoints: [path.join(process.cwd(), "src/appState.ts")],
+    entryPoints: [path.join(process.cwd(), "src/app/appState.ts")],
     bundle: true,
     write: false,
     format: "esm",

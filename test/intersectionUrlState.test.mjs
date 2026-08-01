@@ -51,7 +51,7 @@ test("intersection URL href returns null when selection params are unchanged", a
 
 async function loadUrlStateModule() {
   const result = await build({
-    entryPoints: [path.join(process.cwd(), "src/intersectionUrlState.ts")],
+    entryPoints: [path.join(process.cwd(), "src/selection/intersectionUrlState.ts")],
     bundle: true,
     write: false,
     format: "esm",

@@ -3,8 +3,8 @@ import test from "node:test";
 import { build } from "esbuild";
 import path from "node:path";
 
-const translationsModule = loadTsModule("src/translations.ts");
-const loadingFactsModule = loadTsModule("src/loadingFacts.ts");
+const translationsModule = loadTsModule("src/shared/translations.ts");
+const loadingFactsModule = loadTsModule("src/app/loadingFacts.ts");
 
 test("English and German translation keys match", async () => {
   const { TRANSLATIONS } = await translationsModule;

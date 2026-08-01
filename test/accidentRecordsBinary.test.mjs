@@ -30,7 +30,7 @@ test("accident records binary decoder rejects trailing bytes", async () => {
 
 async function loadCodecModule() {
   const result = await build({
-    entryPoints: [path.join(process.cwd(), "src/accidentRecordsBinary.ts")],
+    entryPoints: [path.join(process.cwd(), "src/data/accidentRecordsBinary.ts")],
     bundle: true,
     write: false,
     format: "esm",

@@ -3,28 +3,28 @@ import {
   accidentSeverity,
   accidentSeverityLabel,
   accidentTimeLabel
-} from "../accidentRecordDisplay";
+} from "../domain/accidentRecordDisplay";
 import {
   clusterAreaText,
   clusterStreetLabel,
   formatClusterStreetNames,
   formatOsmBoolean,
   normalizedAreaNameKey
-} from "../clusterDisplay";
-import { formatInteger, formatSharePercent, formatSignedPercent } from "../formatting";
-import { escapeHtml } from "../html";
-import { tr, trf } from "../i18n";
-import { round, uniqueNumbers } from "../math";
-import { ROAD_USER_DEFINITIONS, type RoadUserDefinition } from "../roadUsers";
+} from "../domain/clusterDisplay";
+import { formatInteger, formatSharePercent, formatSignedPercent } from "../shared/formatting";
+import { escapeHtml } from "../shared/html";
+import { tr, trf } from "../shared/i18n";
+import { round, uniqueNumbers } from "../shared/math";
+import { ROAD_USER_DEFINITIONS, type RoadUserDefinition } from "../domain/roadUsers";
 import {
   clusterYearSeverityCounts,
   TREND_SEVERITY_STACK_ORDER,
   trendSeverityCount,
   type TrendSeverityCounts,
   type TrendSeverityKey
-} from "../trendSeries";
-import type { AccidentRecord, AccidentTrendDirection, ClusterYearStat, IntersectionCluster, RoadUserKey } from "../types";
-import { pressSearchUrlForAccident } from "../urlBuilders";
+} from "../selection/trendSeries";
+import type { AccidentRecord, AccidentTrendDirection, ClusterYearStat, IntersectionCluster, RoadUserKey } from "../domain/types";
+import { pressSearchUrlForAccident } from "../selection/urlBuilders";
 
 export interface SelectedIntersectionPanelUrls {
   openStreetMapUrl: string;

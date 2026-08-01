@@ -1,7 +1,7 @@
-import { AccidentRecord } from "../types";
-import { administrativeRegionNameFor, districtNameFor, municipalityNameFor } from "../municipalities";
-import { normalizeStateCode, stateNameFor } from "../states";
-import { osmRoadMetadataForAccident, streetNamesForAccident } from "../streetLookup";
+import { AccidentRecord } from "../domain/types";
+import { administrativeRegionNameFor, districtNameFor, municipalityNameFor } from "../data/municipalities";
+import { normalizeStateCode, stateNameFor } from "../domain/states";
+import { osmRoadMetadataForAccident, streetNamesForAccident } from "../data/streetLookup";
 
 export function parseNumber(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) {

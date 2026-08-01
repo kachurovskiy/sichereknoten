@@ -1,4 +1,4 @@
-import { tr } from "../i18n";
+import { tr } from "../shared/i18n";
 import {
   loadOsmTile,
   localMeterOffset,
@@ -6,8 +6,8 @@ import {
   OSM_TILE_SIZE,
   osmWorldPixel,
   wrapOsmTileX
-} from "../osmTiles";
-import type { IntersectionCluster } from "../types";
+} from "../map/osmTiles";
+import type { IntersectionCluster } from "../domain/types";
 
 const SELECTED_PREVIEW_MAP_FALLBACK_WIDTH = 640;
 const SELECTED_PREVIEW_MAP_FALLBACK_HEIGHT = 360;

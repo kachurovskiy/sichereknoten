@@ -3,8 +3,8 @@ import test from "node:test";
 import { build } from "esbuild";
 import path from "node:path";
 
-const analysisOptionsModule = loadTsModule("src/analysisOptions.ts");
-const defaultsModule = loadTsModule("src/defaults.ts");
+const analysisOptionsModule = loadTsModule("src/analysis/analysisOptions.ts");
+const defaultsModule = loadTsModule("src/analysis/defaults.ts");
 
 test("analysis option bundle serialization is stable", async () => {
   const { serializeAnalysisOptionsForBundle, analysisOptionsMetadataMatches } = await analysisOptionsModule;

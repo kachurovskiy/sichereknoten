@@ -101,10 +101,10 @@ async function loadSupportModule() {
   const result = await build({
     stdin: {
       contents: `
-        export * from "./src/accidentRecordDisplay.ts";
-        export * from "./src/clusterAccidentRecords.ts";
-        export { configureI18n } from "./src/i18n.ts";
-        export { TRANSLATIONS } from "./src/translations.ts";
+        export * from "./src/domain/accidentRecordDisplay.ts";
+        export * from "./src/analysis/clusterAccidentRecords.ts";
+        export { configureI18n } from "./src/shared/i18n.ts";
+        export { TRANSLATIONS } from "./src/shared/translations.ts";
       `,
       resolveDir: process.cwd(),
       sourcefile: "accidentRecordSupport.test-entry.ts",

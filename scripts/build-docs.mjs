@@ -21,7 +21,7 @@ async function buildDocs() {
   await writeDataBundle(normalizedDataCsvFileList, streetLookupBundle, analysisCacheVersion);
 
   await build({
-    entryPoints: [path.join(root, "src/main.ts")],
+    entryPoints: [path.join(root, "src/app/main.ts")],
     bundle: true,
     outfile: path.join(assetsDir, "app.js"),
     format: "iife",
@@ -38,7 +38,7 @@ async function buildDocs() {
   });
 
   await build({
-    entryPoints: [path.join(root, "src/analysisWorker.ts")],
+    entryPoints: [path.join(root, "src/analysis/analysisWorker.ts")],
     bundle: true,
     outfile: path.join(assetsDir, "analysis-worker.js"),
     format: "iife",
@@ -49,7 +49,7 @@ async function buildDocs() {
   });
 
   await build({
-    entryPoints: [path.join(root, "src/browseFilterWorker.ts")],
+    entryPoints: [path.join(root, "src/browse/browseFilterWorker.ts")],
     bundle: true,
     outfile: path.join(assetsDir, "browse-filter-worker.js"),
     format: "iife",
@@ -63,7 +63,7 @@ async function buildDocs() {
   const docsHtml = sourceHtml
     .replace("  </head>", `    <link rel="stylesheet" href="./assets/app.css?v=${appVersion}" />\n  </head>`)
     .replace(
-      '    <script type="module" src="/src/main.ts"></script>',
+      '    <script type="module" src="/src/app/main.ts"></script>',
       `    <script src="./assets/app.js?v=${appVersion}"></script>`
     );
 
@@ -348,7 +348,7 @@ async function loadCsvParser() {
 
 async function loadAnalysisModule() {
   const result = await build({
-    entryPoints: [path.join(root, "src/analysis.ts")],
+    entryPoints: [path.join(root, "src/analysis/analysis.ts")],
     bundle: true,
     write: false,
     format: "esm",
@@ -364,15 +364,15 @@ async function loadAnalysisModule() {
 }
 
 async function loadDefaultAnalysisBinaryModule() {
-  return loadBundledTsModule("src/defaultAnalysisBinary.ts");
+  return loadBundledTsModule("src/data/defaultAnalysisBinary.ts");
 }
 
 async function loadAccidentRecordsBinaryModule() {
-  return loadBundledTsModule("src/accidentRecordsBinary.ts");
+  return loadBundledTsModule("src/data/accidentRecordsBinary.ts");
 }
 
 async function loadAnalysisOptionsModule() {
-  return loadBundledTsModule("src/analysisOptions.ts");
+  return loadBundledTsModule("src/analysis/analysisOptions.ts");
 }
 
 async function loadBundledTsModule(relativePath) {
@@ -521,20 +521,20 @@ async function hashAppSources() {
 
 async function hashAnalysisSources() {
   const files = [
-    path.join(root, "src/analysis.ts"),
-    path.join(root, "src/analysisOptions.ts"),
-    path.join(root, "src/analysisRunner.ts"),
-    path.join(root, "src/analysisWorker.ts"),
-    path.join(root, "src/analysisWorkerProtocol.ts"),
-    path.join(root, "src/accidentRecordsBinary.ts"),
-    path.join(root, "src/binaryCodec.ts"),
-    path.join(root, "src/cache.ts"),
-    path.join(root, "src/defaultAnalysisBinary.ts"),
-    path.join(root, "src/defaults.ts"),
-    path.join(root, "src/geo.ts"),
-    path.join(root, "src/roadUsers.ts"),
-    path.join(root, "src/states.ts"),
-    path.join(root, "src/types.ts")
+    path.join(root, "src/analysis/analysis.ts"),
+    path.join(root, "src/analysis/analysisOptions.ts"),
+    path.join(root, "src/analysis/analysisRunner.ts"),
+    path.join(root, "src/analysis/analysisWorker.ts"),
+    path.join(root, "src/analysis/analysisWorkerProtocol.ts"),
+    path.join(root, "src/data/accidentRecordsBinary.ts"),
+    path.join(root, "src/data/binaryCodec.ts"),
+    path.join(root, "src/data/cache.ts"),
+    path.join(root, "src/data/defaultAnalysisBinary.ts"),
+    path.join(root, "src/analysis/defaults.ts"),
+    path.join(root, "src/map/geo.ts"),
+    path.join(root, "src/domain/roadUsers.ts"),
+    path.join(root, "src/domain/states.ts"),
+    path.join(root, "src/domain/types.ts")
   ].sort();
   const hash = createHash("sha256");
 
@@ -547,9 +547,9 @@ async function hashAnalysisSources() {
 
 function dataVersionSourceFiles() {
   return [
-    path.join(root, "src/accidentRecordsBinary.ts"),
-    path.join(root, "src/binaryCodec.ts"),
-    path.join(root, "src/states.ts")
+    path.join(root, "src/data/accidentRecordsBinary.ts"),
+    path.join(root, "src/data/binaryCodec.ts"),
+    path.join(root, "src/domain/states.ts")
   ].sort();
 }
 

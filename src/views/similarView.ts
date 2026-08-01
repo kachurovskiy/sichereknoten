@@ -7,11 +7,11 @@ import {
   displayStreetNames,
   formatClusterStreetNames,
   formatStreetNameForDisplay
-} from "../clusterDisplay";
-import { formatInteger, formatSeverityPercent } from "../formatting";
-import { escapeHtml } from "../html";
-import { currentLocale, tr, trf } from "../i18n";
-import type { AnalysisResult, IntersectionCluster } from "../types";
+} from "../domain/clusterDisplay";
+import { formatInteger, formatSeverityPercent } from "../shared/formatting";
+import { escapeHtml } from "../shared/html";
+import { currentLocale, tr, trf } from "../shared/i18n";
+import type { AnalysisResult, IntersectionCluster } from "../domain/types";
 
 export interface RoadClassSignature {
   key: string;

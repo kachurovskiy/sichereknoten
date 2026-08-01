@@ -54,7 +54,7 @@ test("press search URL for accidents includes severity, date, and place", async 
 
 async function loadUrlModule() {
   const result = await build({
-    entryPoints: [path.join(process.cwd(), "src/urlBuilders.ts")],
+    entryPoints: [path.join(process.cwd(), "src/selection/urlBuilders.ts")],
     bundle: true,
     write: false,
     format: "esm",

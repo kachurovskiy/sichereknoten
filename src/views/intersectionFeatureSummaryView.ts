@@ -1,8 +1,8 @@
-import { formatInteger, formatRate, type SeverityPercentSource } from "../formatting";
-import { escapeHtml } from "../html";
-import { tr } from "../i18n";
-import { clampNumber, round } from "../math";
-import type { AnalysisResult, IntersectionCluster } from "../types";
+import { formatInteger, formatRate, type SeverityPercentSource } from "../shared/formatting";
+import { escapeHtml } from "../shared/html";
+import { tr } from "../shared/i18n";
+import { clampNumber, round } from "../shared/math";
+import type { AnalysisResult, IntersectionCluster } from "../domain/types";
 
 export interface IntersectionFeatureSummaryRow extends SeverityPercentSource {
   id: string;

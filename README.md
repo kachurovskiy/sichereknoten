@@ -15,7 +15,7 @@ Serve the built app locally with `npm run dev` or `npm run serve:docs`, or publi
 The app supports:
 
 - accident CSV files from `data/csv`, normalized at build time into `docs/assets/accidents-state-*.bin.gz`
-- municipality source workbook from `data/AuszugGV2QAktuell.xlsx`, generated into `src/municipalities.ts`
+- municipality source workbook from `data/AuszugGV2QAktuell.xlsx`, generated into `src/data/municipalities.ts`
 - map view with local canvas rendering and an OpenStreetMap basemap
 - Bundesland summaries and top intersection tables
 - CSV export of analyzed intersection clusters with Fatal %

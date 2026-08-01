@@ -1,4 +1,4 @@
-import { AccidentRecord, ParseProgress } from "../types";
+import { AccidentRecord, ParseProgress } from "../domain/types";
 import { accidentFromRecord, normalizeFieldName } from "./common";
 
 type ProgressCallback = (progress: ParseProgress) => void;

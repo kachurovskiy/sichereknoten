@@ -79,9 +79,9 @@ async function loadSupportModule() {
   const result = await build({
     stdin: {
       contents: `
-        export * from "./src/analysisCoordinator.ts";
-        export { configureI18n } from "./src/i18n.ts";
-        export { TRANSLATIONS } from "./src/translations.ts";
+        export * from "./src/analysis/analysisCoordinator.ts";
+        export { configureI18n } from "./src/shared/i18n.ts";
+        export { TRANSLATIONS } from "./src/shared/translations.ts";
       `,
       resolveDir: process.cwd(),
       sourcefile: "analysisCoordinator.test-entry.ts",

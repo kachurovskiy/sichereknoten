@@ -38,7 +38,7 @@ test("app router pushes view entries and restores views on browser back", async 
 
 async function loadRouterModule() {
   const result = await build({
-    entryPoints: [path.join(process.cwd(), "src/appRouter.ts")],
+    entryPoints: [path.join(process.cwd(), "src/app/appRouter.ts")],
     bundle: true,
     write: false,
     format: "esm",

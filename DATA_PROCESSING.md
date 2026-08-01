@@ -7,7 +7,7 @@ This project is a static browser app. There is no backend processing step at run
 Build-time source inputs live under `data`:
 
 - `data/csv/*.csv`: accident records bundled into the app.
-- `data/AuszugGV2QAktuell.xlsx`: Destatis municipality directory extract used to generate `src/municipalities.ts`.
+- `data/AuszugGV2QAktuell.xlsx`: Destatis municipality directory extract used to generate `src/data/municipalities.ts`.
 - `data/germany-260721.osm.pbf`: local OpenStreetMap PBF used at build time to derive nearest street names for accident records. The PBF is ignored by Git.
 
 `scripts/build-docs.mjs` discovers CSV source files in `data/csv` and writes compressed normalized accident state shards into `docs/assets`. Existing shard files are reused when the generated data version still matches and all referenced shard files exist.
@@ -33,7 +33,7 @@ tsc --noEmit && node scripts/build-docs.mjs
 `scripts/build-docs.mjs` does three things:
 
 1. Removes known generated non-data files from `docs/assets`.
-2. Builds `src/main.ts` into `docs/assets/app.js` with esbuild as a classic IIFE script for GitHub Pages and the local docs server.
+2. Builds `src/app/main.ts` into `docs/assets/app.js` with esbuild as a classic IIFE script for GitHub Pages and the local docs server.
 3. Creates or reuses offline data assets:
    - `docs/assets/data-manifest.json`
    - `docs/assets/accidents-state-01-*.bin.gz`, `accidents-state-02-*.bin.gz`, etc.
@@ -53,15 +53,15 @@ The build script also computes a SHA-256 based data version from the raw CSV fil
 
 ## Runtime Loading
 
-On startup, `src/main.ts` calls `loadBundledData()`.
+On startup, `src/app/main.ts` calls `loadBundledData()`.
 
-The app first fetches `docs/assets/data-manifest.json`, then attempts to load the default analysis from `analysis-default-*.bin.gz` when the current controls match the bundled defaults. When a non-default analysis needs accident records, `readBundledAccidents()` starts fetching the listed `accidents-state-*.bin.gz` files in parallel, then decodes them in manifest order. Each shard is decompressed with `fflate.gunzipSync` and decoded by `src/accidentRecordsBinary.ts` into `AccidentRecord` objects.
+The app first fetches `docs/assets/data-manifest.json`, then attempts to load the default analysis from `analysis-default-*.bin.gz` when the current controls match the bundled defaults. When a non-default analysis needs accident records, `readBundledAccidents()` starts fetching the listed `accidents-state-*.bin.gz` files in parallel, then decodes them in manifest order. Each shard is decompressed with `fflate.gunzipSync` and decoded by `src/data/accidentRecordsBinary.ts` into `AccidentRecord` objects.
 
 There is no runtime CSV fallback. If the generated manifest or accident state shards are missing, run `npm run build`.
 
 ## Browser Caches
 
-Implemented in `src/cache.ts`.
+Implemented in `src/data/cache.ts`.
 
 After the first successful parse, the app stores parsed `AccidentRecord[]` in IndexedDB:
 
@@ -130,7 +130,7 @@ Injury outcomes from `UKATEGORIE`:
 
 ## Intersection Inference
 
-Implemented in `src/analysis.ts`.
+Implemented in `src/analysis/analysis.ts`.
 
 The app does not derive real road-topology intersections from a road network. It infers dangerous intersections as spatial clusters of accident points.
 

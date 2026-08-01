@@ -46,7 +46,7 @@ test("selected intersection history clear does not push a replacement map entry"
 
 async function loadControllerModule() {
   const result = await build({
-    entryPoints: [path.join(process.cwd(), "src/selectedIntersectionController.ts")],
+    entryPoints: [path.join(process.cwd(), "src/selection/selectedIntersectionController.ts")],
     bundle: true,
     write: false,
     format: "esm",

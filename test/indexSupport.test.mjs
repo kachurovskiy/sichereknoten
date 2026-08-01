@@ -181,8 +181,8 @@ async function loadSupportModule() {
   const result = await build({
     stdin: {
       contents: `
-        export * from "./src/browseIndex.ts";
-        export * from "./src/severityRankIndex.ts";
+        export * from "./src/browse/browseIndex.ts";
+        export * from "./src/analysis/severityRankIndex.ts";
       `,
       resolveDir: process.cwd(),
       sourcefile: "indexSupport.test-entry.ts",

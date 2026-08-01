@@ -38,7 +38,7 @@ test("cluster CSV export leaves missing fields empty and unknown OSM metadata ex
 
 async function loadCsvModule() {
   const result = await build({
-    entryPoints: [path.join(process.cwd(), "src/clusterCsvExport.ts")],
+    entryPoints: [path.join(process.cwd(), "src/analysis/clusterCsvExport.ts")],
     bundle: true,
     write: false,
     format: "esm",

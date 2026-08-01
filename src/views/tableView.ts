@@ -1,8 +1,8 @@
-﻿import { clusterLocation, clusterLocationText, compareClusterCoreMetric, renderOsmBooleanBadge } from "../clusterDisplay";
-import { formatInteger, formatSeverityPercent } from "../formatting";
-import { escapeHtml } from "../html";
-import { tr, trf } from "../i18n";
-import type { AnalysisResult, IntersectionCluster } from "../types";
+﻿import { clusterLocation, clusterLocationText, compareClusterCoreMetric, renderOsmBooleanBadge } from "../domain/clusterDisplay";
+import { formatInteger, formatSeverityPercent } from "../shared/formatting";
+import { escapeHtml } from "../shared/html";
+import { tr, trf } from "../shared/i18n";
+import type { AnalysisResult, IntersectionCluster } from "../domain/types";
 
 type ClusterSortKey =
   | "state"

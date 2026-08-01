@@ -1,17 +1,17 @@
-﻿import { clusterLocationText, compareClusterCoreMetric } from "../clusterDisplay";
-import { formatDistance, formatInteger, formatSeverityPercent } from "../formatting";
-import { distanceMeters } from "../geo";
-import { escapeHtml } from "../html";
-import { tr, trf } from "../i18n";
+﻿import { clusterLocationText, compareClusterCoreMetric } from "../domain/clusterDisplay";
+import { formatDistance, formatInteger, formatSeverityPercent } from "../shared/formatting";
+import { distanceMeters } from "../map/geo";
+import { escapeHtml } from "../shared/html";
+import { tr, trf } from "../shared/i18n";
 import {
   browseFiltersActive,
   clusterBrowseRegionKey,
   filterBrowseClusters,
   type BrowseClusterFilters,
   type BrowseIndex
-} from "../browseIndex";
-import type { BrowseFilterProgress } from "../browseFilterWorkerClient";
-import type { AnalysisResult, IntersectionCluster } from "../types";
+} from "../browse/browseIndex";
+import type { BrowseFilterProgress } from "../browse/browseFilterWorkerClient";
+import type { AnalysisResult, IntersectionCluster } from "../domain/types";
 
 interface LatLon {
   lat: number;

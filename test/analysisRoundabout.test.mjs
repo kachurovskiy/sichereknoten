@@ -47,7 +47,7 @@ test("analysis suppresses roundabout metadata when the geometry-centered group i
 
 async function loadAnalysisModule() {
   const result = await build({
-    entryPoints: [path.join(process.cwd(), "src/analysis.ts")],
+    entryPoints: [path.join(process.cwd(), "src/analysis/analysis.ts")],
     bundle: true,
     write: false,
     format: "esm",
