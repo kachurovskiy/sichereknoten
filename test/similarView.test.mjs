@@ -26,6 +26,7 @@ test("similar view renders road-class choices without requiring an intersection 
 
   assert.match(container.innerHTML, /<select id="similarRoadClassSelect"/);
   assert.match(container.innerHTML, /similar\.class:<\/span>/);
+  assert.match(container.innerHTML, /<option value="all" selected>similar\.classAll \(269\)<\/option>/);
   assert.match(container.innerHTML, /A \(90\)/);
   assert.match(container.innerHTML, /B \(90\)/);
   assert.doesNotMatch(container.innerHTML, /K \(89\)/);
@@ -55,7 +56,7 @@ test("similar view auto-picks the selected intersection road class when selectio
   });
 
   view.render();
-  assert.match(container.innerHTML, /<option value="a" selected>A \(90\)<\/option>/);
+  assert.match(container.innerHTML, /<option value="all" selected>similar\.classAll \(180\)<\/option>/);
 
   selected = bClusters[0];
   selectedSignature = view.roadClassSignatureForStreetNames(selected.streetNames);
@@ -136,7 +137,7 @@ test("similar view includes the selected intersection in comparison groups", asy
   assert.match(container.innerHTML, /30 intersectionfeature\.intersections/);
 });
 
-test("similar view does not offer partially comparable road classes", async () => {
+test("similar view offers the aggregate baseline without partially comparable road classes", async () => {
   const { SimilarView } = await similarModule;
   const container = fakeContainer();
   const clusters = [
@@ -155,8 +156,11 @@ test("similar view does not offer partially comparable road classes", async () =
 
   view.render();
 
-  assert.doesNotMatch(container.innerHTML, /<select id="similarRoadClassSelect"/);
-  assert.match(container.innerHTML, /similar\.noRoadClasses/);
+  assert.match(container.innerHTML, /<select id="similarRoadClassSelect"/);
+  assert.match(container.innerHTML, /<option value="all" selected>similar\.classAll \(447\)<\/option>/);
+  assert.doesNotMatch(container.innerHTML, /A \(149\)/);
+  assert.doesNotMatch(container.innerHTML, /B \(149\)/);
+  assert.doesNotMatch(container.innerHTML, /K \(149\)/);
 });
 
 async function loadSimilarModule() {

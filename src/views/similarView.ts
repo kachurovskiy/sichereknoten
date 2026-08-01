@@ -83,6 +83,7 @@ const SIMILAR_INTERSECTION_FEATURE_GROUPS = [
   { id: "roundabout", labelKey: "similar.group.roundabout", sortOrder: 1 },
   { id: "trafficSignal", labelKey: "similar.group.trafficSignal", sortOrder: 2 }
 ] as const;
+const ALL_ROAD_CLASSES_KEY = "all";
 const STREET_NAME_SEPARATOR = " \u00d7 ";
 
 export class SimilarView {
@@ -378,31 +379,24 @@ export class SimilarView {
     }
 
     const buckets = new Map<string, SimilarIntersectionBucket>();
+    const allBucket = this.createSimilarIntersectionBucket({
+      key: ALL_ROAD_CLASSES_KEY,
+      label: tr("similar.classAll")
+    });
     for (const cluster of result.clusters) {
       const signature = this.roadClassSignatureForCluster(cluster);
       if (!signature) {
         continue;
       }
       const group = this.similarIntersectionFeatureGroup(cluster);
+      this.addClusterToSimilarIntersectionBucket(allBucket, cluster, group);
       const current = buckets.get(signature.key);
       if (current) {
-        current.clusterCount += 1;
-        current.clusters.push(cluster);
-        if (group) {
-          current.featureGroupClusterCounts[group] += 1;
-        }
+        this.addClusterToSimilarIntersectionBucket(current, cluster, group);
       } else {
-        const featureGroupClusterCounts = this.createFeatureGroupClusterCounts();
-        if (group) {
-          featureGroupClusterCounts[group] += 1;
-        }
-        buckets.set(signature.key, {
-          signature,
-          clusterCount: 1,
-          clusters: [cluster],
-          featureGroupClusterCounts,
-          comparison: null
-        });
+        const bucket = this.createSimilarIntersectionBucket(signature);
+        this.addClusterToSimilarIntersectionBucket(bucket, cluster, group);
+        buckets.set(signature.key, bucket);
       }
     }
 
@@ -410,9 +404,13 @@ export class SimilarView {
     const bucketsByRoadClassKey = new Map<string, SimilarIntersectionBucket>(
       eligibleBuckets.map((bucket) => [bucket.signature.key, bucket])
     );
-    const roadClassOptions = eligibleBuckets
+    const roadClassOptions: RoadClassOption[] = eligibleBuckets
       .map((bucket) => ({ ...bucket.signature, clusterCount: bucket.clusterCount }))
       .sort((a, b) => this.compareRoadClassSignatures(a, b));
+    if (this.isRoadClassBucketEligible(allBucket)) {
+      bucketsByRoadClassKey.set(allBucket.signature.key, allBucket);
+      roadClassOptions.unshift({ ...allBucket.signature, clusterCount: allBucket.clusterCount });
+    }
     this.cachedIndex = { result, locale, roadClassOptions, bucketsByRoadClassKey };
     this.renderedState = null;
     return this.cachedIndex;
@@ -431,6 +429,28 @@ export class SimilarView {
       roundabout: 0,
       trafficSignal: 0
     };
+  }
+
+  private createSimilarIntersectionBucket(signature: RoadClassSignature): SimilarIntersectionBucket {
+    return {
+      signature,
+      clusterCount: 0,
+      clusters: [],
+      featureGroupClusterCounts: this.createFeatureGroupClusterCounts(),
+      comparison: null
+    };
+  }
+
+  private addClusterToSimilarIntersectionBucket(
+    bucket: SimilarIntersectionBucket,
+    cluster: IntersectionCluster,
+    group: SimilarIntersectionFeatureGroupKey | null
+  ): void {
+    bucket.clusterCount += 1;
+    bucket.clusters.push(cluster);
+    if (group) {
+      bucket.featureGroupClusterCounts[group] += 1;
+    }
   }
 
   private isRoadClassBucketEligible(bucket: SimilarIntersectionBucket): boolean {
